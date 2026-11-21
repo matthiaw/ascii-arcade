@@ -29,6 +29,10 @@ GAMES = [
          info=["The arena is sealed and the combat bots keep", "coming in waves: drones, sentinels, brutes.",
                "Textured 3D, lit floors, pixel-art robots."],
          keys="W/S move   A/D strafe   arrows turn   Space fire", size=(60, 18)),
+    dict(file="deepcall.py", name="DEEPCALL", tag="a submarine alone in the dark",
+         info=["Only your sonar shows the trench - and every", "ping can be heard. Find air, salvage and the",
+               "Source at the bottom. Keep the deep quiet."],
+         keys="arrows steer   Space ping   F focus   L lamp   E flare", size=(60, 20), score="deepcall"),
     dict(file="stackfall.py", name="STACKFALL", tag="falling blocks, ten wide, twenty deep",
          info=["Turn and drop seven kinds of pieces, fill rows", "to melt them away. Marathon, Sprint (40 rows)",
                "and Rising, where rubble pushes up from below."],
@@ -155,7 +159,37 @@ def thumb_block(cv, x, y, w, h, t):
             cv.px[y + yy][x:x + w] = buf[yy][:max(0, min(w, cv.W - x))]
 
 
-THUMBS = {"hoverdrift.py": thumb_hover, "emberfall.py": thumb_ember, "stackfall.py": thumb_stack,
+_DC = []
+
+
+def thumb_deep(cv, x, y, w, h, t):
+    """DEEPCALL's title cave, pinged every few seconds, squeezed into the preview box."""
+    if not _DC:
+        import deepcall
+        _DC.append(deepcall.TitleDemo())
+        _DC.append(t)
+    demo = _DC[0]
+    dt = min(0.1, max(0.0, t - _DC[1]))
+    _DC[1] = t
+    import deepcall
+    d = demo.d
+    if d.t - demo.last > 3.0:
+        demo.last = d.t
+        d.power = 100
+        d.ping(False)
+    saved = (d.x, d.y, d.oxygen, d.hull)
+    d.update(dt)
+    d.x, d.y, d.oxygen, d.hull = saved
+    d.vx = d.vy = d.noise = 0.0
+    d.over = False
+    d.msgs = []
+    sub = deepcall.render(d, w, (h + 1) // 2, title_mode=True)
+    for yy in range(h):
+        if 0 <= y + yy < cv.H:
+            cv.px[y + yy][x:x + w] = sub.px[yy][:max(0, min(w, cv.W - x))]
+
+
+THUMBS = {"deepcall.py": thumb_deep, "hoverdrift.py": thumb_hover, "emberfall.py": thumb_ember, "stackfall.py": thumb_stack,
           "depthwell.py": thumb_depth, "blockfire.py": thumb_block}
 
 
@@ -193,14 +227,18 @@ def render(cols, rows, sel, t, note, help_=False):
     lx = max(2, (cols - lw - tw2 - 4) // 2)
     rx = lx + lw + 4
     ly = top + 3
+    # tighter list on small windows: names with taglines and gaps, then without gaps, then names only
+    step = next((k for k in (3, 2) if ly + k * len(GAMES) < rows - 1), 1)
     for i, g in enumerate(GAMES):
-        r = ly + i * 3
+        r = ly + i * step
         if i == sel:
             cv.put(lx, r, (" > %s" % g["name"]).ljust(lw), (14, 14, 20), ACCENT[(i * 2 + 2) % len(ACCENT)])
-            cv.put(lx, r + 1, ("   " + g["tag"]).ljust(lw)[:lw], (230, 230, 240), (30, 26, 52))
+            if step > 1:
+                cv.put(lx, r + 1, ("   " + g["tag"]).ljust(lw)[:lw], (230, 230, 240), (30, 26, 52))
         else:
             cv.put(lx, r, ("   %s" % g["name"]).ljust(lw), (220, 220, 232), (20, 18, 36))
-            cv.put(lx, r + 1, ("   " + g["tag"]).ljust(lw)[:lw], (140, 140, 166), (20, 18, 36))
+            if step > 1:
+                cv.put(lx, r + 1, ("   " + g["tag"]).ljust(lw)[:lw], (140, 140, 166), (20, 18, 36))
     g = GAMES[sel]
     th = max(8, min(2 * (rows - ly - 9), 30))
     if tw2 >= 20:
@@ -248,7 +286,7 @@ def menu(sel, note):
                     sel = (sel - 1) % len(GAMES)
                 elif k in ("down", "s", "j", "tab"):
                     sel = (sel + 1) % len(GAMES)
-                elif k in ("1", "2", "3", "4", "5"):
+                elif k in ("1", "2", "3", "4", "5", "6"):
                     sel = min(len(GAMES) - 1, int(k) - 1)
                 elif k in ("enter", " "):
                     return sel

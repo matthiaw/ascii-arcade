@@ -32,8 +32,25 @@ kitty, Ghostty); 256 colours work too. Bigger windows give bigger pictures.
 | **HOVERDRIFT** | Glide over endless voxel landscapes. Four vehicles (hovercraft, jet, hover tank, saucer), six worlds (meadows, ice, desert, volcano planet, Planet Xeno, crystal moon), six weapons. | 40x12+ |
 | **EMBERFALL** | A party role-playing adventure: create a hero, recruit companions, fight turn by turn with d20 rules, descend beneath the Ashpeaks. | 100x30+ |
 | **BLOCKFIRE** | A first-person arena shooter: raycast 3D with textured walls, lit floors and pixel-art robots that come in waves. | 60x18+ |
+| **DEEPCALL** | A submarine alone in the dark: only the sonar shows the trench, and every ping can be heard. Find air vents and salvage, keep the noise down, reach the Source at the bottom. | 60x20+ |
 | **STACKFALL** | Falling blocks in a well ten wide and twenty deep. Modes: Marathon, Sprint (40 rows), Rising (rubble pushes up from below). | 40x20+ |
 | **DEPTHWELL** | Falling blocks in three dimensions: look down into a well, turn cube pieces about all three axes, fill whole layers. Four well sizes, three piece sets. | 70x24+ |
+
+## DEEPCALL keys
+
+| Key | |
+|---|---|
+| Arrows / WASD | steer the sub (it drifts: plan ahead) |
+| Space | sonar ping all around: lights up the trench, loud |
+| `F` | focused ping ahead: reaches further, quieter |
+| `L` | lamp on / off: a short cone of light, drains power, can be seen |
+| `E` | drop a flare: lights its surroundings and lures hunters to itself |
+| Esc / `P` | pause menu (`Q` there: back to the menu) |
+| `?` | help |
+
+Rising bubbles mark air vents. Gold glints are salvage; blue, green and orange ones are oxygen, batteries and
+flares. Jellyfish glow and sting; lurkers carry a blinking lure and swim towards every sound; in the deep zones a
+leviathan listens, and the NOISE bar shows how loud you have been.
 
 ## STACKFALL keys
 
@@ -77,5 +94,5 @@ High scores of STACKFALL and DEPTHWELL are kept in `~/.ascii_arcade_scores.json`
 |---|---|
 | `arcade.py` | the launcher |
 | `arcadekit.py` | shared toolkit: raw terminal input, half-block pixel canvas, block font, high scores |
-| `stackfall.py`, `depthwell.py` | the falling-block games (use `arcadekit.py`) |
+| `stackfall.py`, `depthwell.py`, `deepcall.py` | the games written for the arcade (use `arcadekit.py`) |
 | `hoverdrift.py`, `emberfall.py`, `blockfire.py` | standalone copies of the HOVERDRIFT, EMBERFALL and BLOCKFIRE repositories |
