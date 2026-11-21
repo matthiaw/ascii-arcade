@@ -115,7 +115,7 @@ DIRS8 = [(0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1)]
 # Colours: (256-colour value, 8-colour fallback)
 # =============================================================================
 K = curses
-BLACK = (16, K.COLOR_BLACK)
+BLACK = (232, K.COLOR_BLACK)   # not 16-21: base16 colour schemes repaint those
 WHITE = (231, K.COLOR_WHITE)
 LIGHT = (252, K.COLOR_WHITE)
 GRAY = (246, K.COLOR_WHITE)
@@ -148,7 +148,7 @@ PALE = (159, K.COLOR_CYAN)
 ICE = (195, K.COLOR_CYAN)
 BLUE = (33, K.COLOR_BLUE)
 DBLUE = (24, K.COLOR_BLUE)
-NAVY = (17, K.COLOR_BLUE)
+NAVY = (24, K.COLOR_BLUE)
 PURPLE = (129, K.COLOR_MAGENTA)
 MAGENTA = (201, K.COLOR_MAGENTA)
 PLUM = (53, K.COLOR_MAGENTA)
@@ -5988,6 +5988,11 @@ def pic_for(key):
     return p if p and p["h"] <= PIC_MAXH else None
 
 
+# Palette slots 16-21 are repainted by base16 colour schemes (WezTerm's Catppuccin, Gruvbox ...),
+# so 256-colour output swaps them for the nearest colours outside that range.
+SAFE256 = {16: 232, 17: 234, 18: 24, 19: 25, 20: 26, 21: 27}
+
+
 def pic_escapes(p, y, x, true=True):
     """ANSI sequence painting picture p with its top-left at screen cell (y, x)."""
     pal, fb = p["pal"], p["fb"]
@@ -5996,8 +6001,8 @@ def pic_escapes(p, y, x, true=True):
         i = PIC_CODE[code]
         if true:
             return "%d;2;%d;%d;%d" % (((48 if bg else 38),) + tuple(pal[i]))
-        return "%d;5;%d" % (48 if bg else 38, fb[i])
-    black = "48;2;0;0;0" if true else "48;5;16"
+        return "%d;5;%d" % (48 if bg else 38, SAFE256.get(fb[i], fb[i]))
+    black = "48;2;0;0;0" if true else "48;5;232"
     out = []
     for j, (g, f, b) in enumerate(p["rows"]):
         out.append("\x1b[%d;%dH" % (y + j + 1, x + 1))
@@ -7624,6 +7629,10 @@ class UI:
             g.try_move(dx, dy)
             return
         c = chr(k) if 0 <= k < 256 else ""
+        if k in ESC or c in ("q", "Q"):   # the game menu - Esc works the same in every ASCII ARCADE game
+            if not self.bot:
+                self.game_menu(g)
+            return
         if c in ".5" or (c == " " and g.combat):
             if g.combat:
                 if g.needs_input():
@@ -7678,12 +7687,18 @@ class UI:
                     g.msg("Difficulty is now %s. Save with S to keep it." % g.D["name"], CYAN)
                 else:
                     g.msg("Difficulty stays %s." % g.D["name"], GRAY)
-        elif c == "Q":
-            if self.menu("Quit to the title screen?", [("Keep playing", False, True), ("Save and quit", "save", True),
-                                                       ("Quit without saving", "quit", True)]) in ("save", "quit"):
-                if not g.combat and not self.bot:
-                    g.save(self.save_path)
-                raise BackToTitle()
+
+    def game_menu(self, g):
+        """Esc / Q: keep playing, read the help, or leave for the title screen."""
+        save = "Save and quit" if not g.combat else "Quit (no saving during a fight)"
+        v = self.menu("Game menu", [("Keep playing", False, True), ("How to play", "help", True),
+                                    (save, "save", True), ("Quit without saving", "quit", True)])
+        if v == "help":
+            self.help()
+        elif v in ("save", "quit"):
+            if v == "save" and not g.combat:
+                g.save(self.save_path)
+            raise BackToTitle()
 
     def actor_for_command(self, g):
         if g.combat:
@@ -8241,7 +8256,8 @@ class UI:
             ("OTHER KEYS", YELLOW),
             ("i inventory   c character sheet (equipment, AI, dismiss)   j journal   m message log", LIGHT),
             ("r rest (restores HP and spells; might be interrupted)   Tab select party member", LIGHT),
-            ("S save   L load   Q quit to title   v map view (narrow/square/pixel/large/huge)   ? this help", LIGHT),
+            ("S save   L load   v map view (narrow/square/pixel/large/huge)", LIGHT),
+            ("Esc / Q game menu: keep playing, help, save and quit   ? this help", LIGHT),
             ("d difficulty: Easy / Normal / Hard (any time outside combat)", LIGHT),
             ("", LIGHT),
             ("Rules after the D&D 5e System Reference Document 5.1 (CC-BY-4.0, Wizards of the Coast).", DGRAY),
@@ -8335,7 +8351,7 @@ class UI:
             for i, (lab, v) in enumerate(opts):
                 s = ("  > %s <  " if i == sel else "    %s    ") % lab
                 self.put(y + i, (W - len(s)) // 2, s, self.C(BLACK, GOLD) if i == sel else self.C(LIGHT))
-            foot = "A party-based ASCII role-playing game.  Rules after the D&D 5e SRD 5.1 (CC-BY-4.0)."
+            foot = "Up/Down choose  Enter start  ? help  Esc quit   -   Rules after the D&D 5e SRD 5.1 (CC-BY-4.0)."
             self.put(H - 1, max(0, (W - len(foot)) // 2), foot, self.C(DGRAY))
             self.refresh()
             k = self.key()
@@ -8349,7 +8365,9 @@ class UI:
                     self.help()
                 else:
                     return v
-            elif k in (ord('q'), ord('Q')):
+            elif k == ord('?'):
+                self.help()
+            elif k in ESC or k in (ord('q'), ord('Q')):
                 return "quit"
 
     def create(self):

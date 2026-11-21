@@ -13,6 +13,7 @@ Benchmark:  python3 blockfire.py --bench     (renders frames headless and prints
 import math
 import os
 import random
+import re
 import select
 import sys
 import termios
@@ -20,12 +21,15 @@ import time
 import tty
 from collections import deque
 
-FPS = 30
+FPS = 60
 FOV_PLANE = 0.66          # camera plane length -> ~66 degree field of view
 MOVE_SPEED = 3.6          # units per second
 TURN_SPEED = 2.7          # radians per second
-HOLD_MOVE = 0.20          # terminals have no key-up events: a key press "holds" for this long
+HOLD_MOVE = 0.20          # most terminals have no key-up events: a key press "holds" for this long
 HOLD_TURN = 0.15
+EASE = 14.0               # how fast movement and turning follow the keys (smooths out key-repeat gaps)
+BRIDGE_TURN = 0.4         # share of turn speed while waiting for the keyboard's auto-repeat to start
+BRIDGE_MOVE = 0.85        # the same for walking and strafing
 PLAYER_R = 0.22
 BOT_R = 0.25
 BEST_FILE = os.path.expanduser("~/.blockfire_best")
@@ -158,6 +162,7 @@ class Game:
         self.over = False
         self.t = 0.0
         self.hold = {"f": 0.0, "b": 0.0, "l": 0.0, "r": 0.0, "tl": 0.0, "tr": 0.0}
+        self.bridge = dict(self.hold)   # a fresh key press keeps going (a bit slower) until auto-repeat starts
         self.fire_cd = 0.0
         self.muzzle = 0.0
         self.hitmark = 0.0
@@ -165,6 +170,7 @@ class Game:
         self.hurt_ang = 0.0
         self.hurt_t = 0.0
         self.moving = False
+        self.smv = self.sst = self.str = 0.0   # eased move / strafe / turn
         self.bob = 0.0
         self.msgs = []
         self.fx = []              # events for the renderer: hits, kills, enemy shots
@@ -290,6 +296,7 @@ class Game:
         opposite = {"f": "b", "b": "f", "l": "r", "r": "l", "tl": "tr", "tr": "tl"}
         if action in self.hold:
             self.hold[opposite[action]] = 0.0
+            self.bridge[opposite[action]] = 0.0
             self.hold[action] = HOLD_TURN if action in ("tl", "tr") else HOLD_MOVE
         elif action == "fire":
             self.fire()
@@ -367,20 +374,33 @@ class Game:
             self.save_best()
 
     def update_player(self, dt):
-        h = self.hold
-        mv = (h["f"] > 0) - (h["b"] > 0)
-        st = (h["r"] > 0) - (h["l"] > 0)
-        tr = (h["tr"] > 0) - (h["tl"] > 0)
+        h, br = self.hold, self.bridge
+
+        def on(a):
+            return 1.0 if h[a] > 0 else (BRIDGE_TURN if a in ("tl", "tr") else BRIDGE_MOVE) if br[a] > 0 else 0.0
+        mv = on("f") - on("b")
+        st = on("r") - on("l")
+        tr = on("tr") - on("tl")
         for k in h:
             h[k] = max(0.0, h[k] - dt)
+            br[k] = max(0.0, br[k] - dt)
+        e = min(1.0, dt * EASE)
+        self.smv += (mv - self.smv) * e
+        self.sst += (st - self.sst) * e
+        self.str += (tr - self.str) * e
+        for name in ("smv", "sst", "str"):
+            if abs(getattr(self, name)) < 0.02:
+                setattr(self, name, 0.0)
+        mv, st, tr = self.smv, self.sst, self.str
         self.a = (self.a + tr * TURN_SPEED * dt) % (2 * math.pi)
         ca, sa = math.cos(self.a), math.sin(self.a)
         vx = ca * mv - sa * st
         vy = sa * mv + ca * st
         n = math.hypot(vx, vy)
-        self.moving = n > 0
+        self.moving = n > 0.05
         if n > 0:
-            vx, vy = vx / n * MOVE_SPEED * dt, vy / n * MOVE_SPEED * dt
+            k = min(1.0, n) / n
+            vx, vy = vx * k * MOVE_SPEED * dt, vy * k * MOVE_SPEED * dt
             self.bob += dt * 9
             nx = self.px + vx
             if not self.blocked(nx, self.py, PLAYER_R) and not self.bot_near(nx, self.py, 0.55):
@@ -942,7 +962,15 @@ KEYS = {"\x1b[A": "up", "\x1b[B": "down", "\x1b[C": "right", "\x1b[D": "left",
         "\x1bOA": "up", "\x1bOB": "down", "\x1bOC": "right", "\x1bOD": "left"}
 
 
+KITTY_RE = re.compile(r"\x1b\[([0-9:;]*)([uABCDHF~])")
+KITTY_NAMES = {13: "enter", 27: "esc", 32: " ", 9: "tab", 127: "backspace"}
+ARROWS = {"A": "up", "B": "down", "C": "right", "D": "left"}
+
+
 class Terminal:
+    """Raw keys. Where the terminal supports the kitty keyboard protocol (kitty, WezTerm, Ghostty,
+    foot, recent iTerm2) it also reports key releases, so held keys work exactly."""
+
     def __enter__(self):
         if not sys.stdout.isatty():
             raise SystemExit("BLOCKFIRE needs a terminal.")
@@ -950,12 +978,29 @@ class Terminal:
         self.old = termios.tcgetattr(self.fd)
         tty.setcbreak(self.fd)
         self.write("\x1b[?1049h\x1b[?25l\x1b[2J\x1b[H")
+        self.releases = []
+        self.kitty = self.detect_kitty()
+        if self.kitty:
+            self.write("\x1b[>11u")   # disambiguate + event types + all keys as escape codes
         return self
 
     def __exit__(self, *exc):
+        if self.kitty:
+            self.write("\x1b[<u")
         termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old)
         self.write("\x1b[0m\x1b[?25h\x1b[?1049l")
         return exc[0] is KeyboardInterrupt
+
+    def detect_kitty(self):
+        """Ask for the keyboard protocol flags, with a device-attributes query as the fallback answer."""
+        if os.environ.get("BLOCKFIRE_LEGACY_KEYS"):
+            return False
+        self.write("\x1b[?u\x1b[c")
+        data, end = "", time.time() + 0.5
+        while time.time() < end and "c" not in data.split("\x1b[?")[-1]:
+            if select.select([self.fd], [], [], 0.05)[0]:
+                data += os.read(self.fd, 1024).decode("utf-8", "ignore")
+        return re.search(r"\x1b\[\?\d*u", data) is not None
 
     @staticmethod
     def write(s):
@@ -963,6 +1008,7 @@ class Terminal:
         sys.stdout.flush()
 
     def keys(self, timeout=0.0):
+        """Keys pressed (or auto-repeated) since the last call; releases are collected in self.releases."""
         out = []
         wait = timeout
         while select.select([self.fd], [], [], wait)[0]:
@@ -972,6 +1018,27 @@ class Terminal:
                 break
             i = 0
             while i < len(data):
+                m = KITTY_RE.match(data, i) if self.kitty else None
+                if m:
+                    i = m.end()
+                    params, final = m.group(1), m.group(2)
+                    fields = params.split(";")
+                    code = fields[0].split(":")[0]
+                    event = fields[1].split(":")[1] if len(fields) > 1 and ":" in fields[1] else "1"
+                    if final in ARROWS:
+                        name = ARROWS[final]
+                    elif final == "u" and code.isdigit():
+                        c = int(code)
+                        name = KITTY_NAMES.get(c) or (chr(c).lower() if 32 < c < 0x110000 else None)
+                    else:
+                        name = None
+                    if name is None:
+                        continue
+                    if event == "3":
+                        self.releases.append(name)
+                    else:
+                        out.append(name)
+                    continue
                 if data[i] == "\x1b":
                     for seq, name in KEYS.items():
                         if data.startswith(seq, i):
@@ -989,12 +1056,26 @@ class Terminal:
         return out
 
 
+CUBE = (0, 95, 135, 175, 215, 255)
+SAFE256 = {16: 232, 17: 234, 18: 24, 19: 25, 20: 26, 21: 27}
+
+
 def x256(c):
+    """Nearest xterm-256 colour: (index, its RGB)."""
     r, g, b = c
-    if abs(r - g) < 10 and abs(g - b) < 10:
-        return 232 + min(23, r * 24 // 256)
-    q = lambda v: 0 if v < 48 else 1 if v < 115 else (v - 35) // 40
-    return 16 + 36 * q(r) + 6 * q(g) + q(b)
+    q = [0 if v < 48 else 1 if v < 115 else min(5, (v - 35) // 40) for v in (r, g, b)]
+    cr, cg, cb = CUBE[q[0]], CUBE[q[1]], CUBE[q[2]]
+    gi = clamp((r + g + b) // 3 - 3, 0, 237) // 10
+    gv = 8 + 10 * gi
+    dc = (r - cr) ** 2 + (g - cg) ** 2 + (b - cb) ** 2
+    dg = (r - gv) ** 2 + (g - gv) ** 2 + (b - gv) ** 2
+    if dg < dc:
+        return 232 + gi, (gv, gv, gv)
+    i = 16 + 36 * q[0] + 6 * q[1] + q[2]
+    if i in SAFE256:          # base16 colour schemes repaint 16-21
+        i = SAFE256[i]
+        cr, cg, cb = (8, 8, 8) if i == 232 else (28, 28, 28) if i == 234 else (0, 95, (i - 24) * 40 + 135)
+    return i, (cr, cg, cb)
 
 
 # =============================================================================
@@ -1011,9 +1092,11 @@ class Renderer:
         self.sprites = SpriteBank()
         self.true = os.environ.get("COLORTERM", "").lower() in ("truecolor", "24bit")
         self.fgc, self.bgc = {}, {}
+        self.pal256 = {}         # RGB -> the palette RGB it is shown as (256-colour terminals)
         self.parts = []          # [x, y, z, vx, vy, vz, age, life, colour]
         self.tracers = []        # [screen-space start getter (bot), hit, until]
         self.t = 0.0
+        self.help = False        # the help box instead of the pause menu
         self.prep_map()
 
     def prep_map(self):
@@ -1034,13 +1117,13 @@ class Renderer:
     def fg(self, c):
         s = self.fgc.get(c)
         if s is None:
-            s = self.fgc[c] = ("\x1b[38;2;%d;%d;%dm" % c) if self.true else "\x1b[38;5;%dm" % x256(c)
+            s = self.fgc[c] = ("\x1b[38;2;%d;%d;%dm" % c) if self.true else "\x1b[38;5;%dm" % x256(c)[0]
         return s
 
     def bg(self, c):
         s = self.bgc.get(c)
         if s is None:
-            s = self.bgc[c] = ("\x1b[48;2;%d;%d;%dm" % c) if self.true else "\x1b[48;5;%dm" % x256(c)
+            s = self.bgc[c] = ("\x1b[48;2;%d;%d;%dm" % c) if self.true else "\x1b[48;5;%dm" % x256(c)[0]
         return s
 
     # --- effects --------------------------------------------------------------------------------------
@@ -1356,8 +1439,12 @@ class Renderer:
         text = text or {}
         sfg, sbg = self.fg, self.bg
         out = ["\x1b[?2026h\x1b[H"]
+        q = None if self.true else self.pal256
         for j in range(prow):
             top, bot = buf[2 * j], buf[2 * j + 1]
+            if q is not None:  # snap to the palette first, so equal-looking neighbours share one code
+                top = [q.get(c) or q.setdefault(c, x256(c)[1]) for c in top]
+                bot = [q.get(c) or q.setdefault(c, x256(c)[1]) for c in bot]
             lt = lb = None
             line = []
             for i in range(cols):
@@ -1422,7 +1509,7 @@ class Renderer:
         if g.msgs:
             s, f = " " + g.msgs[-1][0], (240, 200, 70)
         else:
-            s, f = " W/S move  A/D strafe  Left/Right turn  Space fire  M map  P pause  Q quit", (130, 132, 150)
+            s, f = " W/S move  A/D strafe  Left/Right turn  Space fire  M map  Esc menu  ? help", (130, 132, 150)
         out.append(self.fg(f) + self.bg((10, 10, 18)) + s.ljust(cols)[:cols] + "\x1b[0m")
         return "".join(out)
 
@@ -1438,10 +1525,10 @@ class Renderer:
             lines = ["", "Y O U   W E R E   S C R A P P E D", "",
                      "Wave %d   Kills %d   Score %d" % (g.wave, g.kills, g.score),
                      "NEW BEST SCORE!" if g.new_best else "Best %d" % g.best, "",
-                     "R restart     Q quit", ""]
+                     "R restart     Esc / Q quit", ""]
             self.box(text, cols, prow, lines, (255, 255, 255), (110, 20, 20))
         elif g.paused:
-            self.box(text, cols, prow, ["", "P A U S E D", "P resume", ""], (255, 255, 255), (24, 24, 40))
+            self.box(text, cols, prow, [""] + (HELP if self.help else PAUSE) + [""], (255, 255, 255), (24, 24, 40))
         elif g.inter > 0 and not any(b.alive for b in g.bots):
             self.box(text, cols, prow, ["", "W A V E   %d" % (g.wave + 1), "starts in %d" % (int(g.inter) + 1), ""],
                      (255, 220, 90), (24, 24, 40))
@@ -1473,7 +1560,22 @@ BIGFONT = {
 }
 
 
-def title_frame(r, cols, rows, t):
+HELP = [
+    "B L O C K F I R E  -  keys",
+    "",
+    "W / S  (Up / Down)       move forward / back",
+    "A / D                    strafe left / right",
+    "Left / Right  (J / L)    turn",
+    "Space / F / Enter        fire",
+    "M                        minimap on / off",
+    "",
+    "Esc / P                  pause menu (Q there: quit)",
+    "?                        this help",
+]
+PAUSE = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "Q                 quit"]
+
+
+def title_frame(r, cols, rows, t, help_=False):
     PH = rows * 2
     buf = r.scene(cols, PH, cam=(8.0 - math.cos(t * 0.06) * 6, 19.5, math.sin(t * 0.2) * 0.16))   # down the open hall
     for y in range(PH):
@@ -1496,13 +1598,13 @@ def title_frame(r, cols, rows, t):
         "The arena is sealed. The bots keep coming. How many waves can you last?",
         "",
         "W / S  move      A / D  strafe      Left / Right  turn      Space  fire",
-        "M  map      P  pause      Q  quit",
+        "M  map      Esc  pause menu      ?  help",
         "",
         "Bots:  green drone (fast)    orange sentinel (accurate)    red brute (tough)",
         "Pickups:  white crate with red cross = health    yellow shells = ammo",
         "Tip: keep moving - moving targets are harder to hit.",
         "",
-        "[ Space or Enter to start ]",
+        "[ Space or Enter to start     Esc quit ]",
     ]
     row0 = (y0 + 5 * k) // 2 + 3
     for i, s in enumerate(lines):
@@ -1511,6 +1613,8 @@ def title_frame(r, cols, rows, t):
         for j, ch in enumerate(s[:cols]):
             if row0 + i < rows:
                 text[(x + j, row0 + i)] = (ch, f, None)
+    if help_:
+        Renderer.box(text, cols, rows, [""] + HELP + [""], (255, 255, 255), (24, 24, 40))
     out = r.emit(buf, cols, rows, text)
     out[-1] = "\x1b[0m"
     out.append("\x1b[?2026l")
@@ -1526,37 +1630,93 @@ def run(term):
     g = Game()
     r = Renderer(g)
     t0 = time.time()
+    help_ = False
     while True:  # title
         cols, rows = os.get_terminal_size()
         if cols < 60 or rows < 18:
             term.write("\x1b[0m\x1b[2J\x1b[HPlease make the window larger (60x18).")
             term.keys(0.3)
             continue
-        term.write(title_frame(r, cols, rows, time.time() - t0))
-        ks = term.keys(1 / 20)
-        if any(k in ("q", "esc") for k in ks):
-            return g
-        if any(k in (" ", "enter") for k in ks):
+        term.write(title_frame(r, cols, rows, time.time() - t0, help_))
+        start = False
+        for k in term.keys(1 / 20):
+            if help_:              # any key closes the help
+                help_ = False
+            elif k == "?":
+                help_ = True
+            elif k in ("q", "esc"):
+                return g
+            elif k in (" ", "enter"):
+                start = True
+        if start:
             break
-    last = time.time()
-    quit_t = 0.0
+    last = time.perf_counter()
+    held = set()           # actions whose keys are down (only known with the kitty protocol)
+    rep_last, rep_seq, rep_first = {}, {}, {}
+    rep_t = {"delay": 0.35, "rate": 0.09}   # learned auto-repeat timing (macOS-like defaults)
     while True:
-        now = time.time()
+        now = time.perf_counter()
         dt = now - last
         last = now
-        quit_t -= dt
-        for k in term.keys(0):
-            if k in ("q", "esc"):
-                if g.over or quit_t > 0:
+        keys = term.keys(0)
+        for k in term.releases:
+            a = KEYMAP.get(k)
+            if a:
+                held.discard(a)
+                if a in g.hold:
+                    g.hold[a] = 0.0
+        term.releases.clear()
+        if term.kitty:
+            held.update(KEYMAP[k] for k in keys if k in KEYMAP)
+            for a in held:
+                if a in g.hold:
+                    g.hold[a] = max(g.hold[a], 0.25)
+                elif a == "fire":
+                    g.press("fire")       # hold to keep firing
+        for k in keys:
+            # the keys every ASCII ARCADE game shares: Esc / P pause menu, Q quits from it, ? help
+            if g.over:
+                if k in ("q", "esc"):
                     return g
-                quit_t = 2.0
-                g.msg("Press Q again to quit.", 2.0)
-            elif k == "p" and not g.over:
-                g.paused = not g.paused
-            elif k == "m":
+                if k == "r":
+                    g.reset()
+                continue
+            if g.paused:
+                if k in ("esc", "p", "enter", " "):
+                    g.paused = r.help = False
+                    held.clear()
+                elif k == "q":
+                    return g
+                elif k == "?":
+                    r.help = not r.help
+                continue
+            if k in ("esc", "p", "q", "?"):
+                g.paused, r.help = True, k == "?"
+                for h in g.hold:
+                    g.hold[h] = g.bridge[h] = 0.0
+                continue
+            a = KEYMAP.get(k)
+            if a in g.hold and not term.kitty:
+                gap = now - rep_last.get(a, -9.0)
+                rep_last[a] = now
+                if gap < 0.8:      # an auto-repeat (or a quick second tap)
+                    n = rep_seq[a] = rep_seq.get(a, 0) + 1
+                    if n == 1:
+                        rep_first[a] = gap
+                    else:          # a steady run of repeats: now we know this keyboard's timing
+                        if n == 2:
+                            rep_t["delay"] = clamp(0.5 * rep_t["delay"] + 0.5 * rep_first[a], 0.1, 0.8)
+                        rep_t["rate"] = clamp(0.5 * rep_t["rate"] + 0.5 * gap, 0.02, 0.3)
+                    g.press(a)
+                    g.hold[a] = max(g.hold[a], rep_t["rate"] + 0.07)
+                    g.bridge[a] = 0.0
+                else:              # a fresh press: keep going until the repeats should arrive
+                    rep_seq[a] = 0
+                    g.press(a)
+                    g.bridge[a] = rep_t["delay"] + 0.05
+                continue
+            if k == "m":
                 g.show_map = not g.show_map
-            elif k == "r" and g.over:
-                g.reset()
             elif k in KEYMAP:
                 g.press(KEYMAP[k])
         g.update(dt)
@@ -1567,7 +1727,7 @@ def run(term):
             time.sleep(0.2)
             continue
         term.write(r.frame(cols, rows))
-        rest = 1.0 / FPS - (time.time() - now)
+        rest = 1.0 / FPS - (time.perf_counter() - now)
         if rest > 0:
             time.sleep(rest)
 

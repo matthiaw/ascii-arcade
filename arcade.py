@@ -12,7 +12,7 @@ import sys
 import time
 
 import depthwell
-from arcadekit import Canvas, Terminal, draw_title, load_scores, mix, shade, title_width
+from arcadekit import Canvas, Terminal, draw_title, load_scores, mix, overlay, shade, title_width
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -37,6 +37,19 @@ GAMES = [
          info=["Look down into a well and sink cube pieces.", "Turn them about all three axes, fill whole",
                "floor layers. Four well sizes, three piece sets."],
          keys="arrows move   Q/A W/S E/D turn   Space drop", size=(70, 24), score="depthwell"),
+]
+HELP = [
+    "ASCII ARCADE - keys",
+    "",
+    "Up / Down            choose a game",
+    "Enter / Space        play",
+    "Esc / Q              quit",
+    "",
+    "The same in every game:",
+    "Esc / P              pause / game menu (Q there: quit)",
+    "?                    help with all of the game's keys",
+    "Enter / Space        confirm",
+    "Arrows / WASD        move, choose",
 ]
 ACCENT = [(236, 84, 84), (244, 150, 56), (236, 212, 70), (130, 214, 76), (56, 200, 160), (60, 170, 236),
           (100, 110, 240), (170, 96, 236), (226, 90, 200)]
@@ -158,7 +171,7 @@ def record_line(g):
     return "best: " + ",  ".join(parts[:3])
 
 
-def render(cols, rows, sel, t, note):
+def render(cols, rows, sel, t, note, help_=False):
     cv = Canvas(cols, rows)
     cv.vgradient((8, 6, 18), (24, 10, 30))
     rnd = random.Random(11)
@@ -205,23 +218,31 @@ def render(cols, rows, sel, t, note):
             cv.put(rx, r + 7, ("needs a %dx%d window (now %dx%d)" % (mc, mr, cols, rows))[:tw2], (255, 120, 100))
     if note:
         cv.center(rows - 3, " %s " % note, (14, 14, 20), (255, 150, 100))
-    cv.put(0, rows - 1, " Up/Down choose   Enter play   Q quit ".ljust(cols)[:cols], (150, 154, 184), (12, 10, 22))
+    cv.put(0, rows - 1, " Up/Down choose   Enter play   ? help   Esc quit ".ljust(cols)[:cols], (150, 154, 184), (12, 10, 22))
+    if help_:
+        overlay(cv, HELP)
     return cv
 
 
 def menu(sel, note):
     with Terminal() as term:
         t0 = time.time()
+        help_ = False
         while True:
             cols, rows = term.size()
             if cols < 60 or rows < 20:
                 term.write("\x1b[0m\x1b[2J\x1b[HPlease make the window larger (60x20).")
                 term.keys(0.3)
                 continue
-            term.write(render(cols, rows, sel, time.time() - t0, note).emit())
+            term.write(render(cols, rows, sel, time.time() - t0, note, help_).emit())
             for k in term.keys(1 / 20):
                 note = ""
-                if k in ("q", "esc"):
+                if help_:            # any key closes the help
+                    help_ = False
+                    continue
+                if k == "?":
+                    help_ = True
+                elif k in ("q", "esc"):
                     return None
                 if k in ("up", "w", "k"):
                     sel = (sel - 1) % len(GAMES)

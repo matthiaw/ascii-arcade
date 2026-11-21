@@ -11,7 +11,8 @@ import random
 import sys
 import time
 
-from arcadekit import Canvas, Terminal, clamp, draw_title, mix, shade, submit, load_scores, title_width
+from arcadekit import (PAUSE_LINES, Canvas, Terminal, clamp, draw_title, load_scores, mix, overlay, shade,
+                       shared_key, submit, title_width)
 
 W, H = 10, 20
 HID = 2                  # spawn rows above the visible well
@@ -41,6 +42,19 @@ MODES = [
     ("Rising", "the floor keeps pushing up rubble rows"),
 ]
 LINE_SCORE = [0, 100, 300, 500, 800]
+HELP = [
+    "STACKFALL - keys",
+    "",
+    "Left / Right  (A / D)    move",
+    "Up, X  (W)               turn clockwise",
+    "Z  (Y)                   turn back",
+    "Down  (S)                drop faster",
+    "Space                    slam down",
+    "C / Tab                  hold the piece for later",
+    "",
+    "Esc / P                  pause menu (Q there: quit)",
+    "?                        this help",
+]
 
 
 class Stack:
@@ -61,7 +75,7 @@ class Stack:
         self.clearing = None
         self.trails = []
         self.over = self.won = False
-        self.paused = False
+        self.paused = self.help = False
         self.rise_t = 0.0
         self.pops = []          # floating texts: [text, t_end, colour]
         self.spawn()
@@ -244,12 +258,7 @@ class Stack:
             self.lock_at = None
 
     def key(self, k):
-        if self.over:
-            return
-        if k == "p":
-            self.paused = not self.paused
-            return
-        if self.paused or self.clearing:
+        if self.over or self.paused or self.clearing:
             return
         if k in ("left", "a"):
             self.move(-1)
@@ -367,9 +376,8 @@ def render(g, cols, rows):
         r = by // 2 + H * K // 4 - 2 + i * 2 - int((1 - (until - g.t)) * 2)
         cv.center(r, " %s " % txt, (14, 14, 20), c, bx, bw)
     if g.paused:
-        cv.center(by // 2 + H * K // 4, "  PAUSED  ", (14, 14, 20), (236, 192, 64), bx, bw)
-        cv.center(by // 2 + H * K // 4 + 2, " P to go on ", (230, 230, 236), (30, 30, 50), bx, bw)
-    cv.put(0, rows - 1, " <- -> move  Up/X turn  Z turn back  Down drop  Space slam  C hold  P pause  Q menu "
+        overlay(cv, HELP if g.help else PAUSE_LINES)
+    cv.put(0, rows - 1, " <- -> move  Up/X turn  Z turn back  Down drop  Space slam  C hold  Esc menu  ? help "
            [:cols], (140, 144, 170), (12, 12, 22))
     return cv
 
@@ -383,13 +391,13 @@ def render_over(g, cv, record):
     lines.append("rows  %d   level %d" % (g.lines, g.level))
     if record:
         lines += ["", "** NEW RECORD **"]
-    lines += ["", "Enter: again   Q: menu"]
+    lines += ["", "Enter: again   Esc / Q: menu"]
     w = max(len(l) for l in lines) + 4
     cv.box(max(0, (cv.cols - w) // 2), max(0, cv.rows // 2 - len(lines) // 2 - 1), [l.center(w - 4) for l in lines],
            (240, 240, 246), (24, 22, 44))
 
 
-def render_menu(cols, rows, sel, level, t):
+def render_menu(cols, rows, sel, level, t, help_=False):
     cv = Canvas(cols, rows)
     cv.vgradient((10, 10, 22), (26, 14, 34))
     rnd = random.Random(7)
@@ -414,24 +422,32 @@ def render_menu(cols, rows, sel, level, t):
         else:
             cv.center(row + 3 + i * 2, s, (220, 220, 232), (22, 22, 40))
     cv.center(row + 10, "  start level:  < %2d >  " % level, (220, 220, 232), (22, 22, 40))
-    cv.center(row + 13, "Up/Down choose   Left/Right level   Enter start   Q quit", (150, 154, 184))
-    cv.center(row + 15, "in game:  arrows move  Up turn  Z turn back  Space slam  C hold  P pause",
+    cv.center(row + 13, "Up/Down choose   Left/Right level   Enter start   ? help   Esc quit", (150, 154, 184))
+    cv.center(row + 15, "in game:  arrows move  Up turn  Z turn back  Space slam  C hold  Esc pause",
               (120, 124, 150))
+    if help_:
+        overlay(cv, HELP)
     return cv
 
 
 def main():
     with Terminal() as term:
         sel, level = 0, 1
+        help_ = False
         while True:
             # menu
             t0 = time.time()
             go = False
             while not go:
                 cols, rows = term.size()
-                term.write(render_menu(cols, rows, sel, level, time.time() - t0).emit())
+                term.write(render_menu(cols, rows, sel, level, time.time() - t0, help_).emit())
                 for k in term.keys(1 / 20):
-                    if k in ("q", "esc"):
+                    if help_:            # any key closes the help
+                        help_ = False
+                        continue
+                    if k == "?":
+                        help_ = True
+                    elif k in ("q", "esc"):
                         return
                     if k in ("up", "w"):
                         sel = (sel - 1) % len(MODES)
@@ -454,11 +470,23 @@ def main():
                     g.update(min(0.1, now - last))
                     last = now
                     for k in term.keys(0):
-                        if k in ("q", "esc"):
+                        if g.over:
+                            if k in ("q", "esc"):
+                                back = True
+                            elif record is not None and k in ("enter", " "):
+                                again = True
+                            continue
+                        a = shared_key(k, g.paused)
+                        if a == "pause":
+                            g.paused = True
+                        elif a == "resume":
+                            g.paused = g.help = False
+                        elif a == "quit":
                             back = True
-                        elif g.over and record is not None and k in ("enter", " "):
-                            again = True
-                        else:
+                        elif a == "help":
+                            g.help = not g.help
+                            g.paused = True
+                        elif a is None:
                             g.key(k)
                     if back or again:
                         break

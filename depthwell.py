@@ -10,7 +10,8 @@ import math
 import random
 import time
 
-from arcadekit import Canvas, Terminal, clamp, draw_title, load_scores, mix, shade, submit, title_width
+from arcadekit import (PAUSE_LINES, Canvas, Terminal, clamp, draw_title, load_scores, mix, overlay, shade,
+                       shared_key, submit, title_width)
 
 GAME = "depthwell"
 
@@ -45,6 +46,20 @@ LAYER = [(236, 84, 84), (244, 150, 56), (236, 212, 70), (130, 214, 76), (56, 200
          (100, 110, 240), (170, 96, 236), (226, 90, 200), (200, 200, 210), (140, 120, 100), (90, 150, 130),
          (180, 140, 220), (120, 120, 140)]
 CLEAR_SCORE = [0, 200, 600, 1200, 2000, 3000]
+HELP = [
+    "DEPTHWELL - keys",
+    "",
+    "Arrows  (I J K L)        move the piece across the well",
+    "Q / A                    turn about the x axis",
+    "W / S                    turn about the y axis",
+    "E / D                    turn about the z axis (flat spin)",
+    "Space                    drop to the bottom",
+    "Enter  (Z)               sink one layer",
+    "G                        ghost on / off",
+    "",
+    "Esc / P                  pause menu (Q there: quit)",
+    "?                        this help",
+]
 
 
 def rot(c, axis, n):
@@ -70,7 +85,7 @@ class Well:
         self.fall = 0.0
         self.lock_at = None
         self.clearing = None
-        self.over = self.paused = False
+        self.over = self.paused = self.help = False
         self.pops = []
         self.next = self.pick()
         self.spawn()
@@ -225,12 +240,7 @@ class Well:
             self.lock_at = None
 
     def key(self, k):
-        if self.over:
-            return
-        if k == "p":
-            self.paused = not self.paused
-            return
-        if self.paused or self.clearing:
+        if self.over or self.paused or self.clearing:
             return
         moves = {"left": (-1, 0), "right": (1, 0), "up": (0, -1), "down": (0, 1),
                  "j": (-1, 0), "l": (1, 0), "i": (0, -1), "k": (0, 1)}
@@ -389,13 +399,13 @@ def render(g, cols, rows, ghost=True):
     k = 3
     iso(cv, g.offsets(g.next), px + 12, (row + 16) * 2 + 4, k, (200, 210, 240))
     help_ = ["arrows  move", "Q / A   turn (x)", "W / S   turn (y)", "E / D   turn (z)", "Space   drop",
-             "Enter   sink one", "G       ghost", "P pause  Esc menu"]
+             "Enter   sink one", "G       ghost", "Esc     pause", "?       help"]
     for i, h in enumerate(help_):
         cv.put(px, row + 24 + i, h, (120, 124, 150))
     for i, (txt, until, c) in enumerate(reversed(g.pops[-2:])):
         cv.center(int(cy / 2) - 2 + i * 2, " %s " % txt, (14, 14, 20), c, int(cx - size / 2), int(size))
     if g.paused:
-        cv.center(int(cy / 2), "  PAUSED - P to go on  ", (14, 14, 20), (236, 212, 70), int(cx - size / 2), int(size))
+        overlay(cv, HELP if g.help else PAUSE_LINES)
     return cv
 
 
@@ -403,7 +413,7 @@ def render_over(g, cv, record):
     lines = ["THE WELL IS FULL", "", "score  %d" % g.score, "layers %d   cubes %d" % (g.layers, g.cubes)]
     if record:
         lines += ["", "** NEW RECORD **"]
-    lines += ["", "Enter: again   Esc: menu"]
+    lines += ["", "Enter: again   Esc / Q: menu"]
     w = max(len(l) for l in lines) + 4
     cv.box(max(0, (cv.cols - w) // 2), max(0, cv.rows // 2 - len(lines) // 2 - 1), [l.center(w - 4) for l in lines],
            (240, 240, 246), (24, 22, 44))
@@ -413,7 +423,7 @@ def mode_key(pit, si):
     return "%dx%dx%d %s" % (pit + (SETS[si][0],))
 
 
-def render_menu(cols, rows, sel, opts, t):
+def render_menu(cols, rows, sel, opts, t, help_=False):
     cv = Canvas(cols, rows)
     cv.vgradient((6, 6, 14), (18, 8, 26))
     # a slowly turning demo well in the background
@@ -445,22 +455,30 @@ def render_menu(cols, rows, sel, opts, t):
             cv.center(row + 3 + i * 2, s, (220, 220, 232), (22, 22, 40))
     rec = load_scores().get(GAME, {}).get(mode_key(PITS[pit], si))
     cv.center(row + 12, "best for this well: %s" % (rec if rec is not None else "-"), (170, 176, 210))
-    cv.center(row + 15, "Up/Down choose   Left/Right change   Enter start   Esc quit", (150, 154, 184))
-    cv.center(row + 17, "in game: arrows move   Q/A W/S E/D turn   Space drop   P pause", (120, 124, 150))
+    cv.center(row + 15, "Up/Down choose   Left/Right change   Enter start   ? help   Esc quit", (150, 154, 184))
+    cv.center(row + 17, "in game: arrows move   Q/A W/S E/D turn   Space drop   Esc pause", (120, 124, 150))
+    if help_:
+        overlay(cv, HELP)
     return cv
 
 
 def main():
     with Terminal() as term:
         sel, opts = 3, [1, 1, 1]
+        help_ = False
         while True:
             t0 = time.time()
             go = False
             while not go:
                 cols, rows = term.size()
-                term.write(render_menu(cols, rows, sel, opts, time.time() - t0).emit())
+                term.write(render_menu(cols, rows, sel, opts, time.time() - t0, help_).emit())
                 for k in term.keys(1 / 15):
-                    if k in ("q", "esc"):
+                    if help_:            # any key closes the help
+                        help_ = False
+                        continue
+                    if k == "?":
+                        help_ = True
+                    elif k in ("q", "esc"):
                         return
                     if k in ("up", "w"):
                         sel = (sel - 1) % 4
@@ -484,14 +502,27 @@ def main():
                     g.update(min(0.1, now - last))
                     last = now
                     for k in term.keys(0):
-                        if k == "esc":
+                        if g.over:
+                            if k in ("q", "esc"):
+                                back = True
+                            elif record is not None and k in ("enter", " "):
+                                again = True
+                            continue
+                        a = shared_key(k, g.paused, pause_keys=("esc", "p"))   # Q turns pieces here
+                        if a == "pause":
+                            g.paused = True
+                        elif a == "resume":
+                            g.paused = g.help = False
+                        elif a == "quit":
                             back = True
-                        elif g.over and record is not None and k in ("enter", " "):
-                            again = True
-                        elif k == "g":
-                            ghost = not ghost
-                        else:
-                            g.key(k)
+                        elif a == "help":
+                            g.help = not g.help
+                            g.paused = True
+                        elif a is None:
+                            if k == "g":
+                                ghost = not ghost
+                            else:
+                                g.key(k)
                     if g.over and record is None:
                         record = submit(GAME, mode_key(pit, si), g.score)
                     cols, rows = term.size()

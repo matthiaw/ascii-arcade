@@ -533,6 +533,8 @@ class Game:
         self.drift = False
         self.hud = True
         self.help = True       # shown at the start until the first key
+        self.paused = False
+        self.quit = False
         self.msg, self.msg_t = "", 0.0
         self.fps = 0.0
         self.amb_acc = 0.0
@@ -572,8 +574,21 @@ class Game:
 
     # --- controls ------------------------------------------------------------------------------
     def key(self, k):
+        # the keys every ASCII ARCADE game shares: Esc / P pause menu, Q quits from it, ? help
+        if self.paused:
+            if k in ("esc", "p", "enter", " "):
+                self.paused = False
+            elif k == "q":
+                self.quit = True
+            elif k == "?":
+                self.help = not self.help
+            return
         if k == "?":
             self.help = not self.help
+            return
+        if k in ("esc", "p", "q"):
+            self.paused = True
+            self.help = False
             return
         self.help = False
         V = self.veh
@@ -636,6 +651,8 @@ class Game:
         return -math.sin(self.heading + a), -math.cos(self.heading + a)
 
     def update(self, dt):
+        if self.paused:
+            return
         self.t += dt
         W, V = self.world, self.veh
         if self.drift:
@@ -911,12 +928,16 @@ class Screen:
         return s
 
 
+SAFE256 = {16: 232, 17: 234, 18: 24, 19: 25, 20: 26, 21: 27}  # base16 schemes repaint 16-21
+
+
 def x256(c):
     r, g, b = c
     if abs(r - g) < 10 and abs(g - b) < 10:
         return 232 + min(23, r * 24 // 256)
     q = lambda v: 0 if v < 48 else 1 if v < 115 else (v - 35) // 40
-    return 16 + 36 * q(r) + 6 * q(g) + q(b)
+    i = 16 + 36 * q(r) + 6 * q(g) + q(b)
+    return SAFE256.get(i, i)
 
 
 def status_lines(g):
@@ -1160,7 +1181,7 @@ def render(g, scr, cols, rows):
     # emit the frame
     out = ["\x1b[?2026h\x1b[H"]
     sfg, sbg = scr.fg, scr.bg
-    overlay = help_lines(cols, prow) if g.help else {}
+    overlay = box_lines(HELP, cols, prow) if g.help else box_lines(PAUSE, cols, prow) if g.paused else {}
     hstyle = sfg((235, 235, 240)) + sbg((20, 24, 40))
     for j in range(prow):
         y0, y1 = 2 * j, 2 * j + 1
@@ -1252,7 +1273,7 @@ def hud(g, cols, rows):
     s = "".join(parts) if g.hud else ""
     if g.msg and g.t < g.msg_t:
         s = (s + "   " + g.msg) if g.hud else " " + g.msg
-    right = "? help  q quit "
+    right = "? help  Esc menu "
     s = s[:max(0, cols - len(right))]
     out.append(s + " " * max(0, cols - len(s) - len(right)) + (right if len(s) + len(right) <= cols else ""))
     out.append("\x1b[0m")
@@ -1275,16 +1296,25 @@ HELP = [
     "1-6  or  Tab               laser, twin, spread, plasma, rockets, bombs",
     "X                          weapons off / on",
     "H                          hide the status lines",
-    "? show / hide this help     Q / Esc quit",
+    "",
+    "Esc / P                    pause menu (Q there: quit)",
+    "?                          show / hide this help",
+]
+PAUSE = [
+    "P A U S E D",
+    "",
+    "Esc / P / Enter   continue",
+    "?                 help",
+    "Q                 quit",
 ]
 
 
-def help_lines(cols, rows):
-    """The help box as {screen row: (column, text)}, merged into the picture while it is drawn."""
-    w = min(cols, max(len(l) for l in HELP) + 4)
+def box_lines(lines, cols, rows):
+    """A text box as {screen row: (column, text)}, merged into the picture while it is drawn."""
+    w = min(cols, max(len(l) for l in lines) + 4)
     x = max(0, (cols - w) // 2)
     out = {}
-    for j, l in enumerate([""] + HELP + [""]):
+    for j, l in enumerate([""] + lines + [""]):
         if 1 + j >= rows:
             break
         out[1 + j] = (x, ("  " + l).ljust(w)[:w])
@@ -1367,13 +1397,9 @@ def main():
             now = time.time()
             dt = min(0.1, now - last)
             last = now
-            quit_ = False
             for k in read_keys(fd):
-                if k in ("q", "esc"):
-                    quit_ = True
-                else:
-                    g.key(k)
-            if quit_:
+                g.key(k)
+            if g.quit:
                 break
             g.update(dt)
             cols, rows = os.get_terminal_size()

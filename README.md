@@ -9,6 +9,19 @@ python3 arcade.py
 
 Every game can also be started on its own (`python3 stackfall.py` and so on).
 
+## The same keys in every game
+
+| Key | |
+|---|---|
+| Esc | in a game: pause / game menu - on a title screen: quit (back to the arcade) - in sub-screens: back |
+| P | pause (real-time games; in EMBERFALL P drinks a potion) |
+| Q | in the pause menu: quit - on a title screen: quit (in DEPTHWELL Q also turns pieces) |
+| ? | help with all of the game's keys, also on the title screens |
+| Enter / Space | confirm |
+| Arrows / WASD | move, choose |
+
+The pause menu always reads: Esc / P / Enter continue, ? help, Q quit. No game ends on a single stray key.
+
 No dependencies: Python 3 on macOS or Linux (on Windows use WSL). Best in a truecolor terminal (WezTerm, iTerm2,
 kitty, Ghostty); 256 colours work too. Bigger windows give bigger pictures.
 
@@ -32,8 +45,8 @@ kitty, Ghostty); 256 colours work too. Bigger windows give bigger pictures.
 | Down (`S`) | drop faster |
 | Space | slam down |
 | `C` / Tab | hold the piece for later |
-| `P` | pause |
-| `Q` / Esc | back to the menu |
+| Esc / `P` | pause menu (`Q` there: back to the menu) |
+| `?` | help |
 
 Rows: 100 / 300 / 500 / 800 points times the level for 1-4 rows at once, a bonus for combos and for an empty
 well. The level rises every 10 rows.
@@ -49,8 +62,8 @@ well. The level rises every 10 rows.
 | Space | drop to the bottom |
 | Enter (`Z`) | sink one layer |
 | `G` | ghost (where the piece will land) on / off |
-| `P` | pause |
-| Esc | back to the menu |
+| Esc / `P` | pause menu (`Q` there: back to the menu) |
+| `?` | help |
 
 The falling piece is drawn as a white wire frame. The colour of a settled cube tells its depth, and the gauge
 on the left shows how high the stack has grown. Fill every cell of a layer to clear it; the level rises every

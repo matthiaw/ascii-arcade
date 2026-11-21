@@ -25,12 +25,16 @@ def shade(c, k):
     return (clamp(int(c[0] * k), 0, 255), clamp(int(c[1] * k), 0, 255), clamp(int(c[2] * k), 0, 255))
 
 
+SAFE256 = {16: 232, 17: 234, 18: 24, 19: 25, 20: 26, 21: 27}  # base16 schemes repaint 16-21
+
+
 def x256(c):
     r, g, b = c
     if abs(r - g) < 10 and abs(g - b) < 10:
         return 232 + min(23, r * 24 // 256)
     q = lambda v: 0 if v < 48 else 1 if v < 115 else (v - 35) // 40
-    return 16 + 36 * q(r) + 6 * q(g) + q(b)
+    i = 16 + 36 * q(r) + 6 * q(g) + q(b)
+    return SAFE256.get(i, i)
 
 
 # =============================================================================================
@@ -315,3 +319,33 @@ def submit(game, mode, value, lower_is_better=False):
             pass
         return True
     return False
+
+
+# =============================================================================================
+# The keys every game shares: Esc / P pause menu, Q quits from it, ? help, Enter / Space confirm
+# =============================================================================================
+PAUSE_LINES = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "Q                 quit to the menu"]
+
+
+def shared_key(k, paused, pause_keys=("esc", "p", "q")):
+    """What a key means for the shared in-game controls: 'pause', 'resume', 'quit', 'help',
+    'eaten' (swallowed while paused) or None (the game's own key)."""
+    if paused:
+        if k in ("esc", "p", "enter", " "):
+            return "resume"
+        if k == "q":
+            return "quit"
+        if k == "?":
+            return "help"
+        return "eaten"
+    if k in pause_keys:
+        return "pause"
+    if k == "?":
+        return "help"
+    return None
+
+
+def overlay(cv, lines, fg=(240, 240, 246), bg=(22, 22, 42)):
+    """A centred text box (pause menu, help) on top of a canvas."""
+    w = max(len(l) for l in lines) + 4
+    cv.box(max(0, (cv.cols - w) // 2), max(0, cv.rows // 2 - len(lines) // 2 - 1), list(lines), fg, bg)
