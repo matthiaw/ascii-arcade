@@ -50,6 +50,19 @@ def water_col(y):
     return c
 
 
+HULL = [(dx, 0) for dx in range(-4, 5)] + [(dx, dy) for dy in (-1, 1) for dx in range(-3, 4)]
+
+
+def sub_hits(solid, x, y):
+    """Does the sub's hull (9 pixels wide, 3 rows high) at (x, y) touch rock?
+    The generator's passability check uses exactly the same shape."""
+    ix, iy = int(x), int(y)
+    for dx, dy in HULL:
+        if solid(ix + dx, iy + dy):
+            return True
+    return False
+
+
 def zone_of(y):
     z = 0
     for i, zn in enumerate(ZONES):
@@ -99,6 +112,70 @@ class World:
         self.carve(x, H - 60, 30)
         self.source = (x, H - 60)
         self.objects()
+        self.ensure_passable()
+
+    START = (int(W / 2), 14)
+
+    def free_map(self, margin=0):
+        """free[i] = 1 where the whole hull fits (the HULL shape, via runs of water per row).
+        margin > 0 asks for that many extra pixels of room on every side."""
+        g = self.g
+        runs = []
+        for y in range(H):
+            row, r, n = g[y * W:(y + 1) * W], [0] * W, 0
+            for x in range(W):
+                n = n + 1 if row[x] == 0 else 0
+                r[x] = n
+            runs.append(r)
+        free = bytearray(W * H)
+        m = margin
+        rows = [(dy, (4 if dy == 0 else 3) + m) for dy in range(-1 - m, 2 + m)]   # (row offset, half width)
+        for y in range(2 + m, H - 2 - m):
+            base = y * W
+            need = [(runs[y + dy], hw) for dy, hw in rows]
+            for x in range(5 + m, W - 5 - m):
+                for r, hw in need:
+                    if r[x + hw] < 2 * hw + 1:
+                        break
+                else:
+                    free[base + x] = 1
+        return free
+
+    def sub_reach(self, margin=0):
+        """Every position the sub's hull fits into, flood-filled from the start."""
+        free = self.free_map(margin)
+        seen = bytearray(W * H)
+        sx, sy = self.START
+        seen[sy * W + sx] = 1
+        q = deque([sy * W + sx])
+        while q:
+            i = q.popleft()
+            for j in (i + 1, i - 1, i + W, i - W):
+                if free[j] and not seen[j]:
+                    seen[j] = 1
+                    q.append(j)
+        return seen
+
+    def reached(self, seen, x, y, rx, ry):
+        return any(seen[int(y + j) * W + int(x + i)] for i in range(-rx, rx + 1) for j in range(-ry, ry + 1)
+                   if 0 <= int(x + i) < W and 0 <= int(y + j) < H)
+
+    def ensure_passable(self):
+        """The trench must be finishable by the sub, not just by a pixel: if not, open a corridor down the shaft."""
+        seen = self.sub_reach(margin=1)      # with room to spare: no pixel-perfect squeezes
+        sx, sy = self.source
+        if not self.reached(seen, sx, sy, 10, 10):
+            g = self.g
+            for px, py, r in self.path:
+                rr = max(9.0, min(r, 11.0))
+                for yy in range(int(py - rr), int(py + rr) + 1):
+                    for xx in range(int(px - rr), int(px + rr) + 1):
+                        if 1 <= xx < W - 1 and 1 <= yy < H - 1 and (xx - px) ** 2 + (yy - py) ** 2 <= rr * rr:
+                            g[yy * W + xx] = 0
+            seen = self.sub_reach(margin=1)
+        self.passable = self.reached(seen, sx, sy, 10, 10)
+        self.loot = [it for it in self.loot if self.reached(seen, it["x"], it["y"], 5, 3)]
+        self.vents = [v for v in self.vents if self.reached(seen, v[0], v[1], 12, 12)]
 
     def carve(self, cx, cy, r, solid=0):
         """A rough-edged hole: one big circle and a few smaller ones around its rim."""
@@ -171,7 +248,8 @@ class World:
         self.wrecks, self.loot, self.vents, self.creatures = [], [], [], []
         # wrecks with salvage in the chambers and caverns
         for cx, cy, r, kind in self.chambers:
-            if kind == "chamber" and rnd.random() < 0.55:
+            on_shaft = any(abs(px - cx) < r + 14 and abs(py - cy) < r + 14 for px, py, _ in self.path[::4])
+            if kind == "chamber" and not on_shaft and rnd.random() < 0.55:
                 ox, oy = int(cx - 10), int(cy + r * 0.25)
                 for j, row in enumerate(self.WRECK):
                     for i, ch in enumerate(row):
@@ -420,16 +498,7 @@ class Dive:
         sp = math.hypot(self.vx, self.vy)
         if sp > 34:
             self.vx, self.vy = self.vx / sp * 34, self.vy / sp * 34
-        nx, ny = self.x + self.vx * dt, self.y + self.vy * dt
-        if self.hits(nx, self.y):
-            self.bump(abs(self.vx))
-            self.vx *= -0.3
-            nx = self.x
-        if self.hits(nx, ny):
-            self.bump(abs(self.vy))
-            self.vy *= -0.3
-            ny = self.y
-        self.x, self.y = nx, max(4.0, ny)
+        self.move(self.vx * dt, self.vy * dt)
         # depth, zones
         self.max_depth = max(self.max_depth, self.depth_m())
         z = zone_of(self.y)
@@ -547,9 +616,45 @@ class Dive:
                 del self.echo[i]
         self.msgs = [m for m in self.msgs if m[1] > self.t]
 
+    def move(self, mx, my):
+        """Move with wall sliding: along a slope or over a small bump the hull glides instead of sticking."""
+        x, y = self.x, self.y
+        if mx:
+            if not self.hits(x + mx, y):
+                x += mx
+            else:
+                slid = False
+                vs = 1 if self.vy > 0 else -1
+                steps = (0.7, 1.4, 2.1) if abs(self.vy) > 2 else (0.7, -0.7, 1.4, -1.4, 2.1, -2.1)
+                for oy in (k * vs for k in steps):     # step around the bump - never against the climb / dive
+                    if not self.hits(x + mx, y + oy):
+                        x, y, slid = x + mx, y + oy, True
+                        break
+                if not slid:
+                    self.bump(abs(self.vx))
+                    self.vx *= -0.3
+                else:
+                    self.vx *= 0.9
+        if my:
+            if not self.hits(x, y + my):
+                y += my
+            else:
+                slid = False
+                side = 1 if self.vx > 0 else -1
+                steps = (0.7, -0.7, 1.4, -1.4, 2.1, -2.1, 2.8, -2.8)
+                for ox in (k * side for k in steps):   # slide along the slope
+                    if not self.hits(x + ox, y + my):
+                        x, y, slid = x + ox, y + my, True
+                        break
+                if not slid:
+                    self.bump(abs(self.vy))
+                    self.vy *= -0.3
+                else:
+                    self.vy *= 0.9
+        self.x, self.y = x, max(4.0, y)
+
     def hits(self, x, y):
-        s = self.w.solid
-        return s(x - 4, y) or s(x + 4, y) or s(x, y - 1) or s(x, y + 1) or s(x - 2, y + 1) or s(x + 2, y - 1)
+        return sub_hits(self.w.solid, x, y)
 
     def bump(self, speed):
         if speed > 19:
@@ -1073,13 +1178,49 @@ def reachable(w):
     return seen[int(sy) * W + int(sx)] == 1
 
 
+def autopilot(seed, limit=400):
+    """Dive down the main shaft without creatures, the way a careful player would. Returns the Dive."""
+    d = Dive(seed)
+    d.w.creatures = []
+    path = d.w.path
+    i = 0
+    best_y, last_progress = d.y, 0.0
+    while not d.over and d.t < limit and d.t - last_progress < 60:
+        i = min(range(max(0, i - 5), min(len(path), i + 30)), key=lambda k: math.hypot(path[k][0] - d.x, path[k][1] - d.y))
+        tx, ty = path[min(i + 3, len(path) - 1)][:2]
+        if i >= len(path) - 4:
+            tx, ty = d.w.source
+        if d.oxygen < 35:
+            v = min(d.w.vents, key=lambda v: math.hypot(v[0] - d.x, v[1] - d.y))
+            if math.hypot(v[0] - d.x, v[1] - d.y) < 160:
+                tx, ty = v[0], v[1] - 5
+        dx, dy = tx - d.x, ty - d.y
+        dl = math.hypot(dx, dy) or 1
+        if abs(dx) > 1.5 and d.vx * (dx / dl) < 14 * abs(dx / dl):
+            d.key("right" if dx > 0 else "left")
+        if abs(dy) > 1.5 and d.vy * (dy / dl) < 14 * abs(dy / dl):
+            d.key("down" if dy > 0 else "up")
+        for _ in range(4):
+            d.update(1 / 40)
+            if d.over:
+                break
+        if d.y > best_y + 5:
+            best_y, last_progress = d.y, d.t
+    return d
+
+
 def selftest():
     t0 = time.time()
     rnd = random.Random(5)
+    for seed in range(40):          # every trench must be finishable by the sub itself
+        w = World(seed)
+        assert w.passable and w.reached(w.sub_reach(margin=1), w.source[0], w.source[1], 10, 10), \
+            "seed %d: the sub cannot reach the Source" % seed
     for seed in range(8):
         d = Dive(seed)
         w = d.w
         assert reachable(w), "seed %d: the Source cannot be reached" % seed
+        assert w.passable, "seed %d: the sub does not fit through to the Source" % seed
         assert len(w.vents) >= 5 and len(w.loot) >= 10, "seed %d: too few vents or finds" % seed
         kinds = {c.kind for c in w.creatures}
         assert {"jelly", "lurker", "leviathan"} <= kinds, "seed %d: creatures missing" % seed
@@ -1092,7 +1233,11 @@ def selftest():
             if d.over:
                 break
         render(d, 120, 40)
-    print("Self-test ok: 8 trenches reachable and played, %.1fs" % (time.time() - t0))
+    for seed in range(100, 110):    # a careful pilot must be able to dive all the way down
+        d = autopilot(seed)
+        assert d.won, "seed %d: the pilot could not finish (%d m, %s)" % (seed, d.depth_m(), d.cause or "stuck")
+    print("Self-test ok: 40 trenches passable for the sub, 8 played at random, 10 dived to the Source, %.1fs"
+          % (time.time() - t0))
 
 
 def bench():
