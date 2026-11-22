@@ -25,31 +25,41 @@ from collections import deque
 import json
 
 
-def _solid_pixels():
-    """Pixel style: "fine" draws two pixels per cell with the half-block character; "solid" draws one
-    pixel per cell from background colour only, for terminals whose fonts leave gaps in half-blocks
-    (macOS Terminal.app). ARCADE_PIXELS=solid|fine overrides the setting kept in ~/.ascii_arcade_settings.json
-    (switched with G in the ASCII ARCADE launcher)."""
+def _pixel_mode():
+    """Pixel style: "fine" draws two pixels per cell with the half-block character; "smart" does that only
+    where the two pixels differ clearly and fills near-equal pairs (gradients) with one background colour;
+    "solid" draws one pixel per cell from background colour only. smart and solid are for terminals whose
+    fonts leave gaps in half-blocks (macOS Terminal.app). ARCADE_PIXELS=fine|smart|solid overrides the setting
+    kept in ~/.ascii_arcade_settings.json (switched with G in the ASCII ARCADE launcher)."""
     env = os.environ.get("ARCADE_PIXELS", "").strip().lower()
-    if env in ("solid", "fine"):
-        return env == "solid"
+    if env in ("fine", "smart", "solid"):
+        return env
     try:
         with open(os.path.expanduser("~/.ascii_arcade_settings.json")) as f:
-            return json.load(f).get("pixels") == "solid"
+            mode = json.load(f).get("pixels")
+        return mode if mode in ("fine", "smart", "solid") else "fine"
     except (OSError, ValueError, AttributeError):
-        return False
+        return "fine"
 
 
-SOLID_PIXELS = _solid_pixels()
+PIXEL_MODE = _pixel_mode()
+SOLID_PIXELS = PIXEL_MODE != "fine"   # some cells are filled with one colour instead of a half-block
 
 
 def solid_cell(t, b):
-    """One colour for a cell in solid-pixel mode: the brighter pixel where they differ a lot, else their mean
-    (palette indices: the top one)."""
-    if t == b or not isinstance(t, tuple):
+    """One colour for a cell whose two pixels are t (top) and b (bottom), or None to keep the half-block.
+    solid: the brighter pixel where they differ a lot (text, stars, outlines of light), else their mean.
+    smart: their mean where they are nearly equal (no visible loss, no seam), else None."""
+    if t == b:
         return t
+    if not isinstance(t, tuple):      # palette indices (256 colours)
+        return None if PIXEL_MODE == "smart" else t
     lt, lb = t[0] * 3 + t[1] * 6 + t[2], b[0] * 3 + b[1] * 6 + b[2]
-    if abs(lt - lb) > 600:          # strong contrast: keep the bright detail (text, stars, outlines of light)
+    d = abs(lt - lb)
+    if PIXEL_MODE == "smart":
+        if d > 260:
+            return None
+    elif d > 600:
         return t if lt > lb else b
     return ((t[0] + b[0]) >> 1, (t[1] + b[1]) >> 1, (t[2] + b[2]) >> 1)
 
@@ -1600,7 +1610,9 @@ class Renderer:
                     line.append(ch)
                     continue
                 if SOLID_PIXELS and t != b:
-                    t = b = solid_cell(t, b)
+                    c = solid_cell(t, b)
+                    if c is not None:
+                        t = b = c
                 if t == b:
                     if b != lb:
                         line.append(sbg(b))
