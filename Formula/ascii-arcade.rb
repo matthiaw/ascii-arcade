@@ -8,7 +8,7 @@
 class AsciiArcade < Formula
   desc "Eleven games for the terminal, drawn in truecolor half-block pixels"
   homepage "https://github.com/matthiaw/ascii-arcade"
-  url "https://github.com/matthiaw/ascii-arcade.git", tag: "v1.3.0"
+  url "https://github.com/matthiaw/ascii-arcade.git", tag: "v1.4.0"
   license "MIT"
   head "https://github.com/matthiaw/ascii-arcade.git", branch: "main"
 
