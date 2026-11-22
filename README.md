@@ -36,12 +36,21 @@ Homebrew brings its own Python (3.14); the games need nothing else.
 |---|---|
 | Esc | in a game: pause / game menu - on a title screen: quit (back to the arcade) - in sub-screens: back |
 | P | pause (real-time games; in EMBERFALL P drinks a potion) |
+| M | in the pause menu and in the launcher: sound on / off (remembered for every game) |
 | Q | in the pause menu: quit - on a title screen: quit (in DEPTHWELL Q also turns pieces) |
 | ? | help with all of the game's keys, also on the title screens |
 | Enter / Space | confirm |
 | Arrows / WASD | move, choose |
 
-The pause menu always reads: Esc / P / Enter continue, ? help, Q quit. No game ends on a single stray key.
+The pause menu always reads: Esc / P / Enter continue, ? help, M sound on / off, Q quit. No game ends on a single stray key.
+
+## Sound
+
+Every game has its own little chiptune sound effects, synthesized in Python the first time they are needed
+(cached in `~/Library/Caches/ascii-arcade`, on Linux `~/.cache/ascii-arcade`) and played with `afplay` on macOS
+or `pw-play` / `paplay` / `aplay` on Linux. Press M in the launcher or in any pause menu to switch sound off or on;
+the choice is kept in `~/.ascii_arcade_settings.json`. `ARCADE_SOUND=0 arcade` starts without sound.
+`python3 arcadesound.py` plays a short demo.
 
 No dependencies: Python 3 on macOS or Linux (on Windows use WSL). Best in a truecolor terminal (WezTerm, iTerm2,
 kitty, Ghostty); 256 colours work too. Bigger windows give bigger pictures.
@@ -211,6 +220,7 @@ change and share the games freely, as long as the copyright notice stays in.
 |---|---|
 | `arcade.py` | the launcher |
 | `arcadekit.py` | shared toolkit: raw terminal input, half-block pixel canvas, block font, high scores |
+| `arcadesound.py` | the sound engine: synthesized effects, played without waiting |
 | `stackfall.py`, `depthwell.py`, `deepcall.py`, `lightkeeper.py`, `skyshot.py`, `nightdrive.py`, `orbital.py` | the games written for the arcade (use `arcadekit.py`) |
 | `hoverdrift.py`, `emberfall.py`, `blockfire.py` | HOVERDRIFT, EMBERFALL and BLOCKFIRE (they run on their own and do not need `arcadekit.py`) |
 | `extras/emberfall-art/` | the source images and tools behind EMBERFALL's pictures (not in the Homebrew package) |

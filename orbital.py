@@ -19,6 +19,7 @@ import sys
 import time
 
 from arcadekit import Canvas, Terminal, clamp, load_scores, mix, overlay, shade, shared_key, submit, title_screen
+from arcadesound import Sound
 
 GAME = "orbital"
 LEVELS_KEY = "orbital-levels"       # stars per level live here, totals under "orbital"
@@ -38,6 +39,36 @@ BEACON_R = 0.032
 HOLE_R = 0.032
 NUDGE_STEPS = 50                    # a nudge burns for 0.25 s ...
 NUDGE_ACC = 0.7                     # ... along the direction of flight: +0.175 speed
+
+# Sounds: calm and soft, sine and triangle bells. Aim ticks are nearly silent and never machine-gun (gap).
+_C = [523.25, 659.25, 783.99, 1046.5, 1318.5]     # C major, for chimes that rise in order
+SND = Sound(GAME, {
+    "tick": [dict(w="tri", f=1500, d=0.012, v=0.08)],
+    "tick_up": [dict(w="sine", f=900, f2=1000, d=0.015, v=0.09)],
+    "tick_down": [dict(w="sine", f=800, f2=720, d=0.015, v=0.09)],
+    "launch": [dict(w="noise", f=2600, f2=700, d=0.4, v=0.2, a=0.06, r="lin"),
+               dict(w="sine", f=220, f2=440, d=0.3, v=0.12, a=0.04, at=0)],
+    "nudge": [dict(w="noise", f=1800, f2=600, d=0.18, v=0.18, a=0.01), dict(w="sine", f=330, f2=380, d=0.12, v=0.1, at=0)],
+    "empty": [dict(w="tri", f=300, d=0.03, v=0.12)],
+    "wormhole": [dict(w="sine", f=300, f2=1200, d=0.45, v=0.22, vib=(14, 1.5), a=0.03),
+                 dict(w="tri", f=1200, f2=500, d=0.3, v=0.12, vib=(9, 1.0))],
+    "beacon1": [dict(w="sine", f=_C[1], d=0.25, v=0.24), dict(w="sine", f=_C[1] * 2, d=0.15, v=0.06, at=0)],
+    "beacon2": [dict(w="sine", f=_C[2], d=0.25, v=0.24), dict(w="sine", f=_C[2] * 2, d=0.15, v=0.06, at=0)],
+    "beacon3": [dict(w="sine", f=_C[3], d=0.25, v=0.24), dict(w="sine", f=_C[3] * 2, d=0.15, v=0.06, at=0)],
+    "dock1": [dict(w="tri", f=_C[0], d=0.12, v=0.26), dict(w="tri", f=_C[2], d=0.14, v=0.26),
+              dict(w="sine", f=_C[3], d=0.6, v=0.24, at=0.4)],
+    "dock2": [dict(w="tri", f=_C[0], d=0.12, v=0.26), dict(w="tri", f=_C[2], d=0.14, v=0.26),
+              dict(w="sine", f=_C[3], d=0.3, v=0.24, at=0.4), dict(w="sine", f=_C[4], d=0.6, v=0.24, at=0.6)],
+    "dock3": [dict(w="tri", f=_C[0], d=0.12, v=0.26), dict(w="tri", f=_C[2], d=0.14, v=0.26),
+              dict(w="sine", f=_C[3], d=0.3, v=0.24, at=0.4), dict(w="sine", f=_C[4], d=0.3, v=0.24, at=0.6),
+              dict(w="sine", f=1567.98, d=0.42, v=0.22, at=0.8, vib=(5, 0.1))],
+    "crash": [dict(w="sine", f=120, f2=45, d=0.35, v=0.4), dict(w="noise", f=700, f2=120, d=0.25, v=0.18, at=0)],
+    "lost": [dict(w="sine", f=660, f2=330, d=0.9, v=0.18, r="lin", vib=(3, 0.2))],
+    "abort": [dict(w="tri", f=440, f2=330, d=0.1, v=0.14)],
+    "level": [dict(w="sine", f=_C[0], d=0.12, v=0.2), dict(w="sine", f=_C[1], d=0.12, v=0.2),
+              dict(w="sine", f=_C[2], d=0.3, v=0.2)],
+    "sound_on": [dict(w="sine", f=660, d=0.07, v=0.26), dict(w="sine", f=990, d=0.14, v=0.24)],
+})
 ANGLE_STEP, POWER_STEP = 0.5, 0.5   # one tap on the arrow keys
 POWER_MIN, POWER_MAX = 10.0, 100.0
 
@@ -962,28 +993,34 @@ class Game:
         if k in ("n", "]"):
             if self.num + 1 <= self.unlocked():
                 self.load(self.num + 1)
+                SND.play("level")
             else:
                 self.say("Dock here first to unlock level %d." % (self.num + 1))
             return
         if k in ("b", "["):
             if self.num > 1:
                 self.load(self.num - 1)
+                SND.play("level")
             return
         if self.state == "done":
             if k in ("enter", " "):
                 self.load(self.num + 1)
+                SND.play("level")
             elif k == "r":
                 self.load(self.num)
+                SND.play("level")
             return
         if self.state == "aim":
             if k in ("left", "right", "a", "d"):
                 m = self.repeat("lr" + k, now)
                 d = ANGLE_STEP * m * (1 if k in ("left", "a") else -1)
                 self.angle = snap((self.angle + d) % 360, ANGLE_STEP) % 360
+                SND.play("tick", gap=0.07)
             elif k in ("up", "down", "w", "s"):
                 m = self.repeat("ud" + k, now)
                 d = POWER_STEP * m * (1 if k in ("up", "w") else -1)
                 self.power = clamp(snap(self.power + d, POWER_STEP), POWER_MIN, POWER_MAX)
+                SND.play("tick_up" if d > 0 else "tick_down", gap=0.07)
             elif k in ("enter", " "):
                 self.launch()
             return
@@ -991,8 +1028,10 @@ class Game:
             if k == " ":
                 if self.L.fuel:
                     if self.flight.nudge():
+                        SND.play("nudge")
                         self.say("Nudge!", 1.2)
                     elif self.flight.fuel <= 0:
+                        SND.play("empty", gap=0.2)
                         self.say("No fuel left for this launch.", 1.5)
                 else:
                     self.fast = not self.fast
@@ -1008,6 +1047,7 @@ class Game:
         self.attempts += 1
         self.flight = Flight(self.L, self.angle, self.power)
         self.state = "fly"
+        SND.play("launch")
         self.acc = 0.0
         self.fast = False
         self.msg_t = 0
@@ -1030,7 +1070,12 @@ class Game:
             self.acc += dt * SPEED * (3 if self.fast else 1)
             n = int(self.acc / DT)
             self.acc -= n * DT
+            n0, nb0 = len(f.path), f.nb
             f.run(n)
+            if None in f.path[n0:]:
+                SND.play("wormhole", gap=0.3)
+            if f.nb > nb0 and f.outcome != "dock":         # a waypoint beacon: chimes rise in order
+                SND.play("beacon%d" % min(3, f.nb))
             if f.outcome:
                 self.end_flight(f.outcome)
         elif self.state == "after":
@@ -1053,6 +1098,7 @@ class Game:
             self.banner = (stars, self.attempts, stars > old and old > 0, total)
             self.banner_t = self.t
             self.state = "done"
+            SND.play("dock%d" % clamp(stars, 1, 3))
             rnd = random.Random(self.num)
             for _ in range(40):
                 a, v = rnd.uniform(0, TAU), rnd.uniform(0.05, 0.35)
@@ -1065,6 +1111,7 @@ class Game:
                 a, v = rnd.uniform(0, TAU), rnd.uniform(0.04, 0.22)
                 self.parts.append([f.x, f.y, math.cos(a) * v, math.sin(a) * v, rnd.uniform(0.3, 1.0),
                                    rnd.choice([(255, 210, 120), (255, 140, 60), (255, 250, 230), (200, 80, 50)])])
+        SND.play("crash" if outcome in ("planet", "moon", "rock") else "abort" if outcome == "abort" else "lost")
         self.say(OUTCOME_TEXT.get(outcome, "") + "  Adjust and launch again.", 3.0)
         self.state = "after"
         self.timer = 1.1 if outcome != "abort" else 0.2
@@ -1147,7 +1194,7 @@ def render(g, painter, cols, rows):
     if g.state == "done":
         render_banner(cv, g)
     if g.paused:
-        overlay(cv, HELP if g.help else PAUSE)
+        overlay(cv, HELP if g.help else PAUSE + ["", SND.label()])
     return cv
 
 
@@ -1236,10 +1283,11 @@ HELP = [
     "Reach the gold dock ring (pass numbered beacons first).",
     "1 launch = 3 stars, 2-3 launches = 2 stars, more = 1 star.",
     "",
-    "Esc / P             pause menu (Q there: quit)",
+    "Esc / P             pause menu (Q there: quit, M: sound on / off)",
     "?                   this help",
 ]
-PAUSE = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "Q                 quit to the menu"]
+PAUSE = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "M                 sound on / off",
+         "Q                 quit to the menu"]
 
 
 # =============================================================================================
@@ -1360,6 +1408,9 @@ def main():
                         g.paused = g.help = False
                     elif a == "quit":
                         back = True
+                    elif a == "sound":
+                        if SND.toggle():
+                            SND.play("sound_on")
                     elif a == "help":
                         g.help = not g.help
                         g.paused = True

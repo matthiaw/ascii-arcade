@@ -16,6 +16,7 @@ import time
 
 from arcadekit import (PAUSE_LINES, Canvas, Terminal, clamp, draw_title, load_scores, mix, overlay, shade,
                        shared_key, submit, title_screen, title_width)
+from arcadesound import Sound
 
 W, H = 10, 20
 HID = 2                  # spawn rows above the visible well
@@ -45,6 +46,44 @@ MODES = [
     ("Rising", "the floor keeps pushing up rubble rows"),
 ]
 LINE_SCORE = [0, 100, 300, 500, 800]
+SND = Sound(GAME, {
+    # small and soft: these happen all the time
+    "move": [dict(w="square", f=392, d=0.022, v=0.14, duty=0.25, r="lin")],
+    "turn": [dict(w="tri", f=587, f2=740, d=0.03, v=0.24)],
+    "soft": [dict(w="tri", f=262, d=0.018, v=0.12)],
+    "hold": [dict(w="tri", f=494, d=0.03, v=0.22), dict(w="tri", f=740, d=0.04, v=0.2)],
+    "lock": [dict(w="noise", f=700, f2=200, d=0.05, v=0.2), dict(w="tri", f=147, f2=110, d=0.06, v=0.28, at=0)],
+    "slam": [dict(w="noise", f=2400, f2=150, d=0.14, v=0.36),
+             dict(w="square", f=165, f2=55, d=0.14, v=0.26, duty=0.3, at=0)],
+    # rows melting away: bigger the more rows go at once
+    "clear1": [dict(w="tri", f=659, d=0.07, v=0.45), dict(w="tri", f=880, d=0.16, v=0.42)],
+    "clear2": [dict(w="tri", f=659, d=0.06, v=0.45), dict(w="tri", f=784, d=0.06, v=0.45),
+               dict(w="tri", f=988, d=0.2, v=0.42)],
+    "clear3": [dict(w="square", f=523, d=0.06, v=0.32, duty=0.25), dict(w="square", f=659, d=0.06, v=0.32, duty=0.25),
+               dict(w="square", f=784, d=0.06, v=0.32, duty=0.25), dict(w="tri", f=1047, d=0.26, v=0.45, vib=(7, 0.2)),
+               dict(w="noise", f=6000, d=0.18, v=0.08, at=0.18)],
+    "clear4": [dict(w="square", f=392, d=0.07, v=0.3, duty=0.25), dict(w="square", f=523, d=0.07, v=0.3, duty=0.25),
+               dict(w="square", f=659, d=0.07, v=0.3, duty=0.25), dict(w="square", f=784, d=0.07, v=0.3, duty=0.25),
+               dict(w="tri", f=1047, d=0.5, v=0.45, vib=(6, 0.25), r="lin"),
+               dict(w="tri", f=659, d=0.5, v=0.3, at=0.28, r="lin"), dict(w="tri", f=784, d=0.5, v=0.25, at=0.28, r="lin"),
+               dict(w="noise", f=7000, f2=3000, d=0.4, v=0.07, at=0.28)],
+    "allclear": [dict(w="tri", f=f, d=0.05, v=0.36) for f in (784, 988, 1175, 1568, 1319, 1568, 1976)] +
+                [dict(w="square", f=1568, d=0.55, v=0.28, duty=0.125, vib=(8, 0.3), r="lin")],
+    "levelup": [dict(w="square", f=440, d=0.06, v=0.3, duty=0.25), dict(w="square", f=554, d=0.06, v=0.3, duty=0.25),
+                dict(w="square", f=659, d=0.06, v=0.3, duty=0.25), dict(w="tri", f=880, d=0.28, v=0.4, vib=(6, 0.2))],
+    "rise": [dict(w="noise", f=90, d=0.3, v=0.26, r="lin"), dict(w="tri", f=70, f2=52, d=0.3, v=0.3, at=0)],
+    "over": [dict(w="tri", f=392, d=0.16, v=0.4), dict(w="tri", f=349, d=0.16, v=0.4), dict(w="tri", f=311, d=0.16, v=0.4),
+             dict(w="tri", f=262, f2=196, d=0.6, v=0.42, r="lin")],
+    "win": [dict(w="square", f=523, d=0.09, v=0.3, duty=0.25), dict(w="square", f=659, d=0.09, v=0.3, duty=0.25),
+            dict(w="square", f=784, d=0.09, v=0.3, duty=0.25), dict(w="square", f=1047, d=0.18, v=0.3, duty=0.25),
+            dict(w="square", f=784, d=0.09, v=0.3, duty=0.25), dict(w="tri", f=1047, d=0.5, v=0.45, vib=(6, 0.25), r="lin")],
+    # menus
+    "menu": [dict(w="tri", f=660, d=0.025, v=0.2)],
+    "start": [dict(w="square", f=523, d=0.05, v=0.3, duty=0.25), dict(w="square", f=784, d=0.05, v=0.3, duty=0.25),
+              dict(w="square", f=1047, d=0.14, v=0.32, duty=0.25)],
+    "pause": [dict(w="tri", f=523, f2=392, d=0.07, v=0.22)],
+    "sound_on": [dict(w="tri", f=440, d=0.06, v=0.35), dict(w="tri", f=880, d=0.12, v=0.35)],
+})
 HELP = [
     "STACKFALL - keys",
     "",
@@ -58,7 +97,7 @@ HELP = [
     "The outlined piece at the bottom shows where it will land.",
     "The well's frame turns red when the stack nears the top.",
     "",
-    "Esc / P                  pause menu (Q there: quit)",
+    "Esc / P                  pause menu (Q quit, M sound)",
     "?                        this help",
 ]
 
@@ -134,6 +173,7 @@ class Stack:
         if self.fits(self.cells(x=self.x + dx)):
             self.x += dx
             self.touched()
+            SND.play("move", gap=0.03)
             return True
         return False
 
@@ -143,6 +183,7 @@ class Stack:
             if self.fits(self.cells(rot=r, x=self.x + kx, y=self.y + ky)):
                 self.rot, self.x, self.y = r, self.x + kx, self.y + ky
                 self.touched()
+                SND.play("turn", gap=0.03)
                 return True
         return False
 
@@ -151,6 +192,7 @@ class Stack:
             self.y += 1
             self.score += 1
             self.fall = 0.0
+            SND.play("soft", gap=0.05)
 
     def hard(self):
         y0 = self.y
@@ -162,12 +204,13 @@ class Stack:
             for x in cols:
                 top = min(y for cx, y in self.cells() if cx == x)
                 self.trails.append((x, y0, top, SHAPES[self.kind][2], self.t + 0.15))
-        self.lock()
+        self.lock(slam=True)
 
     def do_hold(self):
         if self.held:
             return
         self.held = True
+        SND.play("hold")
         k = self.kind
         if self.hold is None:
             self.hold = k
@@ -176,7 +219,8 @@ class Stack:
             self.hold, nk = k, self.hold
             self.spawn(nk)
 
-    def lock(self):
+    def lock(self, slam=False):
+        SND.play("slam" if slam else "lock")
         col = SHAPES[self.kind][2]
         cells = self.cells()
         for x, y in cells:
@@ -194,6 +238,9 @@ class Stack:
             if all(c is None for y, row in enumerate(self.board) if y not in full for c in row):
                 pts += 1500 * self.level
                 self.pops.append(["ALL CLEAR!", self.t + 1.6, (255, 255, 160)])
+                SND.play("allclear")
+            else:
+                SND.play("clear%d" % min(n, 4))
             self.score += pts
             self.pops.append([["", "", "DOUBLE", "TRIPLE", "QUAD STACK!"][min(n, 4)] or "+%d" % pts,
                               self.t + 1.1, col])
@@ -215,7 +262,10 @@ class Stack:
             self.won = self.over = True
             return
         if self.mode != "Sprint":
+            lv = self.level
             self.level = max(self.level, self.start_level + self.lines // 10)
+            if self.level > lv:
+                SND.play("levelup")
         self.spawn()
 
     def rise(self):
@@ -224,6 +274,7 @@ class Stack:
             self.over = True
             return
         gap = random.randrange(W)
+        SND.play("rise")
         del self.board[0]
         self.board.append([None if x == gap else GARBAGE for x in range(W)])
         if not self.fits(self.cells()):
@@ -248,7 +299,10 @@ class Stack:
                 self.rise()
                 if self.over:
                     return
+            lv = self.level
             self.level = max(self.level, self.start_level + int(self.t // 45))
+            if self.level > lv:
+                SND.play("levelup")
         self.fall += dt
         iv = self.interval()
         while self.fall >= iv and not self.grounded():
@@ -386,7 +440,7 @@ def render(g, cols, rows):
         r = by // 2 + H * K // 4 - 2 + i * 2 - int((1 - (until - g.t)) * 2)
         cv.center(r, " %s " % txt, (14, 14, 20), c, bx, bw)
     if g.paused:
-        overlay(cv, HELP if g.help else PAUSE_LINES)
+        overlay(cv, HELP if g.help else PAUSE_LINES + ["", SND.label()])
     cv.put(0, rows - 1, " <- -> move  Up/X turn  Z turn back  Down drop  Space slam  C hold  Esc menu  ? help "
            [:cols], (140, 144, 170), (12, 12, 22))
     return cv
@@ -424,7 +478,7 @@ def render_menu(cols, rows, sel, level, t, help_=False):
     items = ["%-9s %s" % m for m in MODES]
     title_screen(cv, "STACKFALL", "falling blocks, ten wide, twenty deep", items, sel, best,
                  extra=["", "start level   < %d >" % level],
-                 keys="Up/Down mode   Left/Right level   Enter start   ? help   Esc back",
+                 keys="Up/Down mode   Left/Right level   Enter start   M %s   ? help   Esc back" % SND.label().lower(),
                  help_lines=HELP, show_help=help_)
     return cv
 
@@ -450,13 +504,21 @@ def main():
                         return
                     if k in ("up", "w"):
                         sel = (sel - 1) % len(MODES)
+                        SND.play("menu")
                     elif k in ("down", "s"):
                         sel = (sel + 1) % len(MODES)
+                        SND.play("menu")
                     elif k in ("left", "a"):
                         level = max(1, level - 1)
+                        SND.play("menu")
                     elif k in ("right", "d"):
                         level = min(15, level + 1)
+                        SND.play("menu")
+                    elif k == "m":
+                        if SND.toggle():
+                            SND.play("sound_on")
                     elif k in ("enter", " "):
+                        SND.play("start")
                         go = True
             # play
             while True:
@@ -478,6 +540,7 @@ def main():
                         a = shared_key(k, g.paused)
                         if a == "pause":
                             g.paused = True
+                            SND.play("pause")
                         elif a == "resume":
                             g.paused = g.help = False
                         elif a == "quit":
@@ -485,11 +548,15 @@ def main():
                         elif a == "help":
                             g.help = not g.help
                             g.paused = True
+                        elif a == "sound":
+                            if SND.toggle():
+                                SND.play("sound_on")
                         elif a is None:
                             g.key(k)
                     if back or again:
                         break
                     if g.over and record is None:
+                        SND.play("win" if g.won else "over")
                         if g.mode == "Sprint":
                             record = g.won and submit(GAME, g.mode, round(g.t, 2), lower_is_better=True)
                         else:

@@ -338,12 +338,13 @@ def submit(game, mode, value, lower_is_better=False):
 # =============================================================================================
 # The keys every game shares: Esc / P pause menu, Q quits from it, ? help, Enter / Space confirm
 # =============================================================================================
-PAUSE_LINES = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "Q                 quit to the menu"]
+PAUSE_LINES = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "M                 sound on / off",
+               "Q                 quit to the menu"]
 
 
 def shared_key(k, paused, pause_keys=("esc", "p", "q")):
     """What a key means for the shared in-game controls: 'pause', 'resume', 'quit', 'help',
-    'eaten' (swallowed while paused) or None (the game's own key)."""
+    'sound' (M in the pause menu: sound on / off), 'eaten' (swallowed while paused) or None (the game's own key)."""
     if paused:
         if k in ("esc", "p", "enter", " "):
             return "resume"
@@ -351,6 +352,8 @@ def shared_key(k, paused, pause_keys=("esc", "p", "q")):
             return "quit"
         if k == "?":
             return "help"
+        if k == "m":
+            return "sound"
         return "eaten"
     if k in pause_keys:
         return "pause"

@@ -35,6 +35,111 @@ LOG_H = 8
 VERSION = 1
 
 # =============================================================================
+# Sound effects (optional: arcadesound.py from the ASCII ARCADE, if it is there)
+# =============================================================================
+try:
+    from arcadesound import Sound
+except ImportError:
+    class Sound:
+        available = enabled = False
+
+        def __init__(self, *a, **k): pass
+
+        def play(self, *a, **k): pass
+
+        def toggle(self): return False
+
+        def label(self): return "Sound: none"
+
+        def stop(self): pass
+
+
+def _arp(freqs, step, w="tri", v=0.2, d=None, at=0.0, **k):
+    """A rolled chord / arpeggio: one note per frequency, `step` seconds apart."""
+    return [dict(w=w, f=f, d=d or step * 1.6, v=v, at=at + i * step, **k) for i, f in enumerate(freqs)]
+
+
+# Medieval flavour: lute-like plucked squares (duty 0.25), recorder-like triangles, modal (Dorian) tunes.
+SFX_BANK = {
+    # menus
+    "tick":   [dict(w="tri", f=880, d=0.018, v=0.1)],
+    "select": [dict(w="square", f=784, d=0.018, v=0.16, duty=0.25), dict(w="square", f=1175, d=0.022, v=0.14, duty=0.25)],
+    "begin":  [dict(w="square", f=587, d=0.12, v=0.22, duty=0.25), dict(w="square", f=880, d=0.32, v=0.22, duty=0.25, vib=(5, 0.15)),
+               dict(w="tri", f=294, d=0.44, v=0.2, at=0)],
+    "save":   [dict(w="tri", f=659, d=0.04, v=0.2), dict(w="tri", f=988, d=0.12, v=0.18)],
+    # melee
+    "hit":    [dict(w="noise", f=2600, f2=700, d=0.035, v=0.26), dict(w="square", f=190, f2=95, d=0.035, v=0.16, at=0)],
+    "hurt":   [dict(w="noise", f=1100, f2=300, d=0.04, v=0.26), dict(w="tri", f=150, f2=70, d=0.04, v=0.3, at=0)],
+    "miss":   [dict(w="noise", f=4200, f2=1400, d=0.04, v=0.12, a=0.015, r="lin")],
+    "crit":   [dict(w="noise", f=3200, f2=200, d=0.14, v=0.38), dict(w="square", f=330, f2=110, d=0.12, v=0.26, at=0),
+               dict(w="tri", f=1319, d=0.16, v=0.18, at=0.05), dict(w="tri", f=1976, d=0.14, v=0.1, at=0.05)],
+    "slay":   [dict(w="square", f=392, f2=170, d=0.1, v=0.22, duty=0.25), dict(w="noise", f=900, f2=90, d=0.16, v=0.22, at=0.03)],
+    "down":   [dict(w="tri", f=392, d=0.12, v=0.28), dict(w="tri", f=330, d=0.12, v=0.28),
+               dict(w="tri", f=262, f2=247, d=0.32, v=0.28, r="lin")],
+    "fallen": [dict(w="sine", f=196, d=1.0, v=0.35), dict(w="sine", f=393, d=0.8, v=0.14, at=0),
+               dict(w="tri", f=147, d=1.0, v=0.18, at=0)],
+    "trap":   [dict(w="noise", f=5200, f2=2000, d=0.04, v=0.18), dict(w="noise", f=5200, f2=2000, d=0.04, v=0.16, at=0.06),
+               dict(w="noise", f=5200, f2=2000, d=0.04, v=0.14, at=0.12)],
+    # magic, by school
+    "spell_fire":   [dict(w="saw", f=260, f2=1100, d=0.14, v=0.12)] + _arp([587, 740, 880, 1175], 0.035, w="square", v=0.14, duty=0.25)
+                    + [dict(w="noise", f=1800, f2=400, d=0.18, v=0.14, at=0.1)],
+    "spell_arcane": _arp([1175, 1480, 1760, 2349, 1760], 0.035, w="sine", v=0.17, vib=(12, 0.2)),
+    "spell_holy":   _arp([523, 659, 784, 1047], 0.05, w="tri", v=0.18, d=0.3),
+    "spell_dark":   [dict(w="square", f=220, f2=147, d=0.28, v=0.15, duty=0.125, vib=(7, 0.5)),
+                     dict(w="tri", f=233, f2=156, d=0.28, v=0.16, at=0)],
+    "heal":   [dict(w="sine", f=1047, d=0.08, v=0.2), dict(w="sine", f=1319, d=0.08, v=0.2),
+               dict(w="sine", f=1568, d=0.28, v=0.2, vib=(6, 0.15))],
+    "potion": [dict(w="sine", f=300, f2=520, d=0.05, v=0.24), dict(w="sine", f=320, f2=560, d=0.05, v=0.22),
+               dict(w="sine", f=340, f2=600, d=0.05, v=0.2), dict(w="sine", f=880, d=0.16, v=0.14, at=0.17),
+               dict(w="sine", f=1319, d=0.16, v=0.1, at=0.17)],
+    "breath": [dict(w="noise", f=2400, f2=250, d=0.75, v=0.34, a=0.06, r="lin"), dict(w="saw", f=110, f2=60, d=0.6, v=0.16, at=0)],
+    # loot and coin
+    "coin":   [dict(w="square", f=1319, d=0.025, v=0.18, duty=0.25), dict(w="square", f=1760, d=0.06, v=0.16, duty=0.25)],
+    "loot":   _arp([784, 988, 1175], 0.04, w="tri", v=0.2),
+    "chest":  [dict(w="saw", f=170, f2=250, d=0.14, v=0.1, vib=(28, 0.6)), dict(w="noise", f=700, f2=200, d=0.04, v=0.14)],
+    # places and people
+    "door":   [dict(w="saw", f=140, f2=210, d=0.1, v=0.12, vib=(25, 0.6)), dict(w="noise", f=600, f2=180, d=0.05, v=0.16)],
+    "stairs": [dict(w="tri", f=392, d=0.07, v=0.2), dict(w="tri", f=349, d=0.07, v=0.19), dict(w="tri", f=294, d=0.07, v=0.18),
+               dict(w="tri", f=262, d=0.07, v=0.17), dict(w="tri", f=220, d=0.2, v=0.16, r="lin")],
+    "town":   [dict(w="square", f=587, d=0.13, v=0.18, duty=0.25), dict(w="square", f=440, d=0.13, v=0.18, duty=0.25),
+               dict(w="square", f=587, d=0.13, v=0.18, duty=0.25), dict(w="square", f=659, d=0.13, v=0.18, duty=0.25),
+               dict(w="square", f=698, d=0.13, v=0.18, duty=0.25), dict(w="square", f=659, d=0.13, v=0.18, duty=0.25),
+               dict(w="square", f=587, d=0.3, v=0.18, duty=0.25),
+               dict(w="tri", f=147, d=0.52, v=0.16, at=0), dict(w="tri", f=220, d=0.6, v=0.14, at=0.52)],
+    "forest": _arp([440, 523, 587, 659], 0.09, w="tri", v=0.15, d=0.22),
+    "rest":   [dict(w="tri", f=440, d=0.26, v=0.2, r="lin"), dict(w="tri", f=349, d=0.26, v=0.18, r="lin"),
+               dict(w="tri", f=294, d=0.5, v=0.16, r="lin")],
+    "recruit": [dict(w="square", f=392, d=0.1, v=0.2, duty=0.25), dict(w="square", f=587, d=0.1, v=0.2, duty=0.25),
+                dict(w="square", f=784, d=0.3, v=0.2, duty=0.25), dict(w="tri", f=196, d=0.5, v=0.18, at=0)],
+    "levelup": [dict(w="square", f=523, d=0.09, v=0.2, duty=0.25), dict(w="square", f=523, d=0.09, v=0.2, duty=0.25),
+                dict(w="square", f=523, d=0.09, v=0.2, duty=0.25), dict(w="square", f=784, d=0.5, v=0.22, duty=0.25, vib=(5, 0.2)),
+                dict(w="tri", f=262, d=0.27, v=0.18, at=0), dict(w="tri", f=392, d=0.5, v=0.18, at=0.27),
+                dict(w="tri", f=1047, d=0.4, v=0.1, at=0.37)],
+    # danger and endings
+    "battle": [dict(w="noise", f=420, f2=80, d=0.11, v=0.32), dict(w="noise", f=420, f2=80, d=0.11, v=0.3),
+               dict(w="square", f=220, d=0.3, v=0.16, duty=0.25, vib=(5, 0.2)), dict(w="tri", f=110, d=0.3, v=0.2, at=0.22)],
+    "boss":   [dict(w="saw", f=58, f2=49, d=1.1, v=0.32, vib=(5, 0.3)), dict(w="square", f=110, d=0.9, v=0.12, duty=0.125, at=0.15),
+               dict(w="square", f=117, d=0.9, v=0.1, duty=0.125, at=0.15), dict(w="noise", f=120, f2=60, d=1.1, v=0.2, at=0)],
+    "dragon": [dict(w="noise", f=320, f2=55, d=1.15, v=0.42, a=0.08), dict(w="saw", f=92, f2=44, d=1.15, v=0.28, at=0, vib=(9, 1.0)),
+               dict(w="tri", f=46, d=1.15, v=0.3, at=0)],
+    "seal":   [dict(w="noise", f=6000, f2=900, d=0.5, v=0.22)] + _arp([2093, 2637, 3136, 2349], 0.06, w="sine", v=0.12, d=0.2),
+    "victory": [dict(w="square", f=523, d=0.12, v=0.2, duty=0.25), dict(w="square", f=659, d=0.12, v=0.2, duty=0.25),
+                dict(w="square", f=784, d=0.12, v=0.2, duty=0.25), dict(w="square", f=1047, d=0.3, v=0.22, duty=0.25),
+                dict(w="square", f=880, d=0.12, v=0.2, duty=0.25), dict(w="square", f=1047, d=0.6, v=0.22, duty=0.25, vib=(5, 0.2)),
+                dict(w="tri", f=262, d=0.66, v=0.18, at=0), dict(w="tri", f=349, d=0.12, v=0.16, at=0.66),
+                dict(w="tri", f=392, d=0.6, v=0.18, at=0.78), dict(w="tri", f=523, d=0.6, v=0.12, at=0.78)],
+    "gameover": [dict(w="tri", f=440, d=0.28, v=0.24), dict(w="tri", f=392, d=0.28, v=0.24), dict(w="tri", f=349, d=0.28, v=0.24),
+                 dict(w="tri", f=294, d=0.8, v=0.24, r="lin"), dict(w="sine", f=147, d=1.64, v=0.22, at=0)],
+}
+SND = Sound("emberfall", SFX_BANK)
+SFX_LIVE = False   # True only while a person plays in curses; never in --simulate, --bot or the self-test
+
+
+def sfx(name, vol=1.0, gap=0.04):
+    if SFX_LIVE:
+        SND.play(name, vol, gap)
+
+# =============================================================================
 # Dice and small helpers
 # =============================================================================
 _DICE = re.compile(r"^(\d+)d(\d+)([+-]\d+)?$")
@@ -1896,6 +2001,7 @@ class Game:
                 self.location = loc
         self.update_fov()
         self.msg("You enter %s." % A.name, CYAN)
+        sfx("town" if A.kind == "town" else "forest" if A.kind == "forest" else "stairs")
         first = not self.flags.get("visited_" + aid)
         self.flags["visited_" + aid] = True
         if first and A.scene:
@@ -1927,6 +2033,7 @@ class Game:
             self.place_party(*A.entries["west"])
             self.update_fov()
             self.msg("Your journey is interrupted!", RED)
+            sfx("battle")
             self.pending.append(("scene", "ambush_" + A.encounter))
             self.check_hostiles()
             return
@@ -2009,6 +2116,7 @@ class Game:
         t = A.tile(nx, ny)
         if t == T_DOOR:
             A.set(nx, ny, T_ODOOR)
+            sfx("door", 0.8)
             self.tick()
             return
         if t == T_CHEST:
@@ -2089,6 +2197,7 @@ class Game:
             dmg = roll(tr["dmg"])
             self.msg("A trap! Darts hiss from the wall - %s takes %d damage." % (a.name, dmg), RED)
             self.events.append(("burst", [pos], RED))
+            sfx("trap")
             del A.traps[pos]
             self.damage(a, dmg, "piercing")
         note = A.notes.get(pos)
@@ -2119,9 +2228,11 @@ class Game:
             n = int(it[5:])
             self.gold += n
             self.msg("You pick up %d gold." % n, GOLD)
+            sfx("coin")
             return
         self.bag.append(it)
         self.msg("You pick up: %s." % ITEMS[it]["name"], GOLD)
+        sfx("loot")
         if it == "ledger":
             self.flags["ledger"] = True
             if self.qstate("miners") == "active":
@@ -2169,6 +2280,7 @@ class Game:
                     return
         A.set(x, y, T_OCHEST)
         A.chests.pop((x, y), None)
+        sfx("chest")
         if not ch["items"]:
             self.msg("The chest is empty.", GRAY)
         for it in ch["items"]:
@@ -2182,6 +2294,7 @@ class Game:
                 self.flags["lysa_free"] = True
                 self.bag.remove("cage_key")
                 self.msg("The rusty key turns with a shriek. The cage door swings open.", GREEN)
+                sfx("door")
             return
         rogue = next((p for p in self.able() if p.cls == "rogue"), None)
         if rogue:
@@ -2272,6 +2385,7 @@ class Game:
                 p.rest()
         self.minutes += 8 * 60
         self.msg("You rest for eight hours. Wounds close, spells return.", GREEN)
+        sfx("rest")
         return True
 
     def ambush(self):
@@ -2299,6 +2413,7 @@ class Game:
         h = (self.minutes % 1440)
         self.minutes += (1440 - h) + 7 * 60 if h > 7 * 60 else (7 * 60 - h)
         self.msg("You sleep at the Rusty Lantern. (-10 gold)", GREEN)
+        sfx("rest")
         return True
 
     def buy(self, it):
@@ -2309,6 +2424,7 @@ class Game:
         self.gold -= p
         self.bag.append(it)
         self.msg("Bought %s for %d gold." % (ITEMS[it]["name"], p), GOLD)
+        sfx("coin")
         return True
 
     def sell(self, idx):
@@ -2320,6 +2436,7 @@ class Game:
         self.gold += p
         self.bag.pop(idx)
         self.msg("Sold %s for %d gold." % (ITEMS[it]["name"], p), GOLD)
+        sfx("coin")
         return True
 
     def temple_heal(self):
@@ -2331,6 +2448,7 @@ class Game:
                 p.hp = p.max_hp
                 p.status = {}
         self.msg("Father Aldous lays his hands on each of you. (-20 gold)", GREEN)
+        sfx("heal")
         return True
 
     def temple_raise(self):
@@ -2402,6 +2520,7 @@ class Game:
             self.bag.pop(idx)
             self.heal(target, n)
             self.msg("%s drinks %s and recovers %d HP." % (target.name, d["name"], n), GREEN)
+            sfx("potion")
             return True
         return False
 
@@ -2428,6 +2547,7 @@ class Game:
         p.status, p.ai = {}, False
         self.party.append(p)
         self.msg("%s joins the party." % p.name, GREEN)
+        sfx("recruit")
         self.flags["recruited_" + cid] = True
         return True
 
@@ -2511,6 +2631,8 @@ class Game:
             order.append((ini, random.random(), a))
         order.sort(key=lambda t: (-t[0], t[1]))
         self.combat = {"order": [t[2] for t in order], "idx": 0, "round": 1}
+        tm = {e.tmpl for e in eng}
+        sfx("dragon" if "ashmaw" in tm else "boss" if tm & {"corvane", "snagtooth"} else "battle")
         names = ", ".join(sorted({e.name for e in eng}))
         self.msg("Combat! %s" % names, RED)
         self.msg("Initiative: " + " > ".join("%s %d" % (t[2].name.split()[0], t[0]) for t in order), GRAY)
@@ -2751,6 +2873,7 @@ class Game:
         if not hit:
             self.msg("%s attacks %s with %s: %d%s vs AC %d - miss." % (a.name, t.name, spec["name"], total, tag, t.ac), GRAY)
             self.events.append(("text", t.x, t.y, "miss", GRAY))
+            sfx("miss")
             return False
         if self.incapacitated(t) and not ranged:
             crit = True
@@ -2765,6 +2888,7 @@ class Game:
         self.msg("%s %s %s with %s: %d%s vs AC %d - %s %d%s." % (
             a.name, "CRITS" if crit else "hits", t.name, spec["name"], total, tag, t.ac,
             "for", dmg, extra_txt), YELLOW if crit else col_att)
+        sfx("crit" if crit else "hurt" if t.is_pc else "hit")
         self.damage(t, dmg, spec["dtype"], a, crit)
         ex = spec.get("extra")
         if ex and t.conscious and (not spec.get("extra_vs") or t.has_tag(spec["extra_vs"])):
@@ -2830,6 +2954,7 @@ class Game:
                     t.dsaves = [0, 0]
                     t.status = {}
                     self.msg("%s falls unconscious!" % t.name, RED)
+                    sfx("down")
                     if not self.able():
                         self.game_over()
             return n
@@ -2849,6 +2974,7 @@ class Game:
         p.status = {}
         self.area.decals[(p.x, p.y)] = ("%", 0)
         self.msg("%s has died." % p.name, RED)
+        sfx("fallen")
         if not self.able():
             self.game_over()
         elif p is self.hero:
@@ -2869,6 +2995,7 @@ class Game:
         A.decals[(t.x, t.y)] = ("%", 2 if t.has_tag("undead") else 0)
         self.events.append(("burst", [(t.x, t.y)], RED))
         self.msg("%s is slain!" % t.name, ORANGE)
+        sfx("slay")
         T = t.T
         g = T.get("gold", 0)
         if g:
@@ -2888,6 +3015,7 @@ class Game:
                     if A.tiles[y][x] == T_SEAL:
                         A.tiles[y][x] = T_STONEFL
             self.msg("As Corvane falls, the pale seal shatters like ice. Deep below, something laughs.", MAGENTA)
+            sfx("seal")
             self.events.append(("shake",))
             if self.qstate("miners") == "active":
                 self.quest("miners", "Magister Corvane is dead and his seal is broken. The way down to the dragon "
@@ -2910,6 +3038,7 @@ class Game:
             p.hp = 1
             p.dsaves = [0, 0]
             self.msg("%s rolls a 20 on a death save and rises!" % p.name, GREEN)
+            sfx("heal")
         elif r == 1:
             p.dsaves[1] += 2
             self.msg("%s's death save: 1! Two failures." % p.name, RED)
@@ -2968,6 +3097,7 @@ class Game:
             n = roll("1d10") + a.level
             self.heal(a, n)
             self.msg("%s catches a second wind (+%d HP)." % (a.name, n), GREEN)
+            sfx("heal")
             a.acted = True
             self.auto_end(a)
             return True
@@ -2991,6 +3121,16 @@ class Game:
         k = sp["kind"]
         col = PALE if a.faction == "hostile" else CYAN
         self.msg("%s casts %s%s." % (a.name, sp["name"], (" at " + t.name) if t and t is not a else ""), col)
+        if k in ("heal", "massheal"):
+            sfx("heal")
+        elif a.faction == "hostile":
+            sfx("spell_dark")
+        elif k in ("bless", "turn"):
+            sfx("spell_holy")
+        elif sp.get("dtype") == "fire" or k == "rays":
+            sfx("spell_fire")
+        else:
+            sfx("spell_arcane")
         cdice = 1
         if sp["lvl"] == 0:
             cdice = 2 if (a.is_pc and a.level >= 5) else (a.T.get("cantrip_dice", 1) if a.tmpl else 1)
@@ -3106,6 +3246,7 @@ class Game:
         cells = self.cone(a, tx, ty, 4)
         a.recharge = False
         self.msg("%s breathes a torrent of fire!" % a.name, ORANGE)
+        sfx("breath")
         self.events.append(("burst", cells, ORANGE))
         self.events.append(("shake",))
         for o in self.actors_in(cells):
@@ -3389,6 +3530,7 @@ class Game:
             json.dump(self.to_dict(), f)
         os.replace(tmp, path)
         self.msg("Game saved.", CYAN)
+        sfx("save")
         return True
 
     @classmethod
@@ -7482,10 +7624,13 @@ class UI:
             k = self.wait_key()
             if k in (curses.KEY_UP, ord('8'), ord('k')):
                 sel = (sel - 1) % len(items)
+                sfx("tick")
             elif k in (curses.KEY_DOWN, ord('2'), 9, ord('j')):
                 sel = (sel + 1) % len(items)
+                sfx("tick")
             elif k in ENTER or k == ord(' '):
                 if items[sel][2]:
+                    sfx("select")
                     return items[sel][1]
             elif k in ESC or k == ord('q'):
                 return None
@@ -7557,6 +7702,7 @@ class UI:
         elif kind == "message":
             self.message(p[1], p[2], p[3] if len(p) > 3 else None)
         elif kind == "levelup":
+            sfx("levelup", gap=0.6)
             self.message("Level up!", "%s has reached level %d!\n\n%s" % (p[1], p[2], "\n".join("  * " + x for x in p[3])),
                          "levelup", col=YELLOW)
         elif kind == "world":
@@ -7743,8 +7889,17 @@ class UI:
     def game_menu(self, g):
         """Esc / Q: keep playing, read the help, or leave for the title screen."""
         save = "Save and quit" if not g.combat else "Quit (no saving during a fight)"
-        v = self.menu("Game menu", [("Keep playing", False, True), ("How to play", "help", True),
-                                    (save, "save", True), ("Quit without saving", "quit", True)])
+        sel = 0
+        while True:
+            v = self.menu("Game menu", [("Keep playing", False, True), ("How to play", "help", True),
+                                        (SND.label(), "sound", SND.available),
+                                        (save, "save", True), ("Quit without saving", "quit", True)], sel=sel)
+            if v != "sound":
+                break
+            SND.toggle()
+            sfx("select")
+            g.msg(SND.label() + ".", GRAY)
+            sel = 2
         if v == "help":
             self.help()
         elif v in ("save", "quit"):
@@ -8309,7 +8464,7 @@ class UI:
             ("i inventory   c character sheet (equipment, AI, dismiss)   j journal   m message log", LIGHT),
             ("r rest (restores HP and spells; might be interrupted)   Tab select party member", LIGHT),
             ("S save   L load   v map view (narrow/square/pixel/large/huge)", LIGHT),
-            ("Esc / Q game menu: keep playing, help, save and quit   ? this help", LIGHT),
+            ("Esc / Q game menu: keep playing, help, sound on/off, save and quit   ? this help", LIGHT),
             ("d difficulty: Easy / Normal / Hard (any time outside combat)", LIGHT),
             ("", LIGHT),
             ("Rules after the D&D 5e System Reference Document 5.1 (CC-BY-4.0, Wizards of the Coast).", DGRAY),
@@ -8330,6 +8485,7 @@ class UI:
             self.put(y, (W - len(l)) // 2, l, self.C(LIGHT))
             y += 1
         self.refresh()
+        sfx("gameover")
         time.sleep(0 if self.bot else 0.8)
         self.wait_key()
         raise BackToTitle()
@@ -8353,6 +8509,7 @@ class UI:
             self.put(y, (W - len(l)) // 2, l, self.C(YELLOW))
             y += 1
         self.refresh()
+        sfx("victory")
         time.sleep(0 if self.bot else 1.0)
         self.wait_key()
         try:
@@ -8414,10 +8571,13 @@ class UI:
             k = self.key()
             if k in (curses.KEY_UP, ord('8')):
                 sel = (sel - 1) % len(opts)
+                sfx("tick")
             elif k in (curses.KEY_DOWN, ord('2'), 9):
                 sel = (sel + 1) % len(opts)
+                sfx("tick")
             elif k in ENTER or k == ord(' '):
                 v = opts[sel][1]
+                sfx("begin" if v in ("new", "continue") else "select")
                 if v == "help":
                     self.help()
                 else:
@@ -8575,6 +8735,8 @@ UI.run = ui_run
 
 
 def play(scr, bot=0, save_path=SAVE_PATH, start=None, watch=False):
+    global SFX_LIVE
+    SFX_LIVE = not bot
     ui = UI(scr, bot, save_path)
     ui.g = None
     while True:

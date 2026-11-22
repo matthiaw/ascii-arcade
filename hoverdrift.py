@@ -18,6 +18,17 @@ import termios
 import time
 import tty
 
+try:
+    from arcadesound import Sound
+except ImportError:
+    class Sound:  # sound engine missing: stay silent
+        available = enabled = False
+        def __init__(self, *a, **k): pass
+        def play(self, *a, **k): pass
+        def toggle(self): return False
+        def label(self): return "Sound: none"
+        def stop(self): pass
+
 N = 512            # world size (it wraps around)
 M = N - 1
 MAX_H = 150.0
@@ -499,6 +510,28 @@ WEAPONS = [
     dict(name="Rockets", rate=1.8, speed=60.0, col=(255, 200, 90), kind="rocket", mode="alt", life=5.0, splash=9),
     dict(name="Bombs", rate=1.5, speed=0.0, col=(255, 140, 60), kind="bomb", mode="center", life=9.0, splash=14),
 ]
+# --- sound effects: calm and soft, one per weapon --------------------------------------------------------
+SND = Sound("hoverdrift", {
+    "Laser": [dict(w="sine", f=1400, f2=620, d=0.06, v=0.28)],
+    "Twin laser": [dict(w="tri", f=1100, f2=520, d=0.07, v=0.26), dict(w="tri", f=1650, f2=780, d=0.07, v=0.14, at=0)],
+    "Spread": [dict(w="square", f=900, f2=1350, d=0.05, v=0.18, duty=0.125), dict(w="noise", f=7000, d=0.04, v=0.1, at=0)],
+    "Plasma": [dict(w="sine", f=220, f2=540, d=0.12, v=0.36, vib=(24, 1.0))],
+    "Rockets": [dict(w="noise", f=900, f2=3600, d=0.12, v=0.26, a=0.03, r="lin"),
+                dict(w="saw", f=120, f2=200, d=0.1, v=0.08, at=0)],
+    "Bombs": [dict(w="tri", f=720, f2=320, d=0.12, v=0.24, r="lin")],
+    "pop": [dict(w="noise", f=6000, f2=2000, d=0.05, v=0.36), dict(w="sine", f=900, f2=320, d=0.05, v=0.2, at=0)],
+    "crystal": [dict(w="tri", f=1568, d=0.22, v=0.24), dict(w="tri", f=2093, d=0.22, v=0.16, at=0.035)],
+    "drone": [dict(w="noise", f=2000, f2=150, d=0.4, v=0.4), dict(w="square", f=200, f2=60, d=0.25, v=0.16, duty=0.3, at=0)],
+    "tower": [dict(w="noise", f=1200, f2=50, d=0.7, v=0.48), dict(w="sine", f=82, f2=36, d=0.6, v=0.45, at=0)],
+    "blast": [dict(w="noise", f=900, f2=60, d=0.35, v=0.32), dict(w="sine", f=70, f2=40, d=0.3, v=0.38, at=0)],
+    "switch": [dict(w="tri", f=660, d=0.03, v=0.25), dict(w="tri", f=990, d=0.04, v=0.25)],
+    "blip": [dict(w="sine", f=523, d=0.05, v=0.3), dict(w="sine", f=784, d=0.07, v=0.3)],
+    "tick": [dict(w="sine", f=700, d=0.025, v=0.2)],
+    "start": [dict(w="tri", f=392, d=0.08, v=0.35), dict(w="tri", f=523, d=0.08, v=0.35), dict(w="tri", f=784, d=0.22, v=0.35)],
+    "arrive": [dict(w="sine", f=392, d=0.8, v=0.16, a=0.15, r="lin"), dict(w="sine", f=494, d=0.8, v=0.14, a=0.15, r="lin", at=0),
+               dict(w="sine", f=587, d=0.8, v=0.12, a=0.15, r="lin", at=0)],
+    "bump": [dict(w="sine", f=90, f2=50, d=0.12, v=0.35), dict(w="noise", f=400, d=0.08, v=0.14, at=0)],
+})
 TARGETS = {  # radius, vertical half size, points
     "balloon": (2.4, 2.8, 1), "crystal": (2.0, 3.0, 3), "drone": (2.4, 1.4, 5), "tower": (1.8, 6.0, 4),
 }
@@ -545,6 +578,7 @@ class Game:
         self.fps = 0.0
         self.amb_acc = 0.0
         self.loading = None
+        self.scrape = False    # skimming the ground (the floor holds the craft up)
 
     @property
     def veh(self):
@@ -574,6 +608,7 @@ class Game:
         self.new_world(seed, theme)
         self.alt = self.world.height(self.x, self.y) + self.hover
         self.say("Welcome to: %s" % THEMES[theme]["name"])
+        SND.play("arrive", 0.8)
 
     def say(self, s):
         self.msg, self.msg_t = s, self.t + 3.0
@@ -589,10 +624,14 @@ class Game:
             self.quit = True
         elif k in ("up", "w"):
             self.tsel = (self.tsel - 1) % 3
+            SND.play("tick")
         elif k in ("down", "s", "tab"):
             self.tsel = (self.tsel + 1) % 3
+            SND.play("tick")
         elif k in ("left", "a", "right", "d"):
             d = -1 if k in ("left", "a") else 1
+            if self.tsel:
+                SND.play("blip", 0.8)
             if self.tsel == 1:
                 self.vi = (self.vi + d) % len(VEHICLES)
                 V = self.veh
@@ -603,6 +642,7 @@ class Game:
                 if self.tworld:
                     self.loading = (random.randrange(1 << 30), THEME_ORDER[self.tworld - 1])
         elif k in ("enter", " "):
+            SND.play("start", 0.8)
             self.title = False
             self.drift, self.armed, self.hud, self.help = False, True, True, True
             self.say("")
@@ -619,6 +659,9 @@ class Game:
                 self.quit = True
             elif k == "?":
                 self.help = not self.help
+            elif k == "m":             # sound on / off (only here, so it never clashes with flying)
+                if SND.toggle():
+                    SND.play("blip", 0.8)
             return
         if k == "?":
             self.help = not self.help
@@ -647,11 +690,14 @@ class Game:
             self.throttle = min(self.throttle, V["vmax"])
             self.hover = clamp(self.hover, V["hover"][0], V["hover"][1])
             self.say("Vehicle: %s - %s" % (V["name"], V["desc"]))
+            SND.play("blip", 0.8)
         elif k == "l":
             nxt = THEME_ORDER[(THEME_ORDER.index(self.world.theme) + 1) % len(THEME_ORDER)]
             self.loading = (random.randrange(1 << 30), nxt)
+            SND.play("blip", 0.8)
         elif k == "n":
             self.loading = (random.randrange(1 << 30), self.world.theme)
+            SND.play("blip", 0.8)
         elif k == "x":
             self.armed = not self.armed
             if not self.armed:
@@ -662,10 +708,12 @@ class Game:
             self.weapon = int(k) - 1
             self.armed = True
             self.say(WEAPONS[self.weapon]["name"])
+            SND.play("switch", 0.7)
         elif k in ("tab", "e"):
             self.weapon = (self.weapon + 1) % len(WEAPONS)
             self.armed = True
             self.say(WEAPONS[self.weapon]["name"])
+            SND.play("switch", 0.7)
         elif k == " ":
             self.armed = True
             self.firing = self.t + 0.55  # key repeat keeps it going while held
@@ -716,6 +764,10 @@ class Game:
         rate = 2.2 if want > self.alt else 0.9
         nalt = self.alt + (want - self.alt) * min(1.0, dt * rate)
         nalt += math.sin(self.t * 1.7) * 0.25 * dt * 4  # a lazy bob
+        scrape = nalt < floor - 0.4      # the ground pushes the craft up: a soft bump when it starts
+        if scrape and not self.scrape and self.speed > 15 and not self.title:
+            SND.play("bump", 0.7, 1.0)
+        self.scrape = scrape
         nalt = max(nalt, floor)
         self.vz = (nalt - self.alt) / max(dt, 1e-3)
         self.alt = nalt
@@ -832,6 +884,8 @@ class Game:
                 if s["splash"] and (k != "plasma" or hit or s["z"] < ground):
                     self.boom(s["x"], s["y"], z, hit["col"] if hit else s["col"], big=True,
                               huge=k == "bomb")
+                    if self.wdist(s["x"], s["y"]) < 300:
+                        SND.play("blast", 1.0 if k == "bomb" else 0.7, 0.12)
                     self.blast(s["x"], s["y"], z, s["splash"])
                     if hit:
                         self.pop(hit)
@@ -847,6 +901,7 @@ class Game:
     def fire(self):
         w, V = WEAPONS[self.weapon], self.veh
         self.cool = 1.0 / (w["rate"] * V["rate"])
+        SND.play(w["name"], 0.7, max(self.cool * 0.9, 0.13))   # at most ~8 shot sounds a second
         self.flash = self.t + 0.07
         fx, fy = self.fwd()
         z0 = self.alt + 0.8
@@ -881,6 +936,8 @@ class Game:
             self.targets.remove(tg)
             self.score += tg["pts"]
             self.hits += 1
+            snd = {"balloon": "pop", "crystal": "crystal", "drone": "drone", "tower": "tower"}[tg["kind"]]
+            SND.play(snd, 0.8, 0.06)
             self.boom(tg["x"], tg["y"], tg["z"], tg["col"], big=tg["kind"] in ("drone", "tower"))
 
     def blast(self, x, y, z, r):
@@ -1229,7 +1286,7 @@ def render(g, scr, cols, rows):
     if g.help:
         box_cells(cells, HELP, cols, prow)
     elif g.paused:
-        box_cells(cells, PAUSE, cols, prow)
+        box_cells(cells, PAUSE + ["", SND.label()], cols, prow)
     for j in range(prow):
         y0, y1 = 2 * j, 2 * j + 1
         lt = lb = None
@@ -1343,7 +1400,7 @@ HELP = [
     "X                          weapons off / on",
     "H                          hide the status lines",
     "",
-    "Esc / P                    pause menu (Q there: quit)",
+    "Esc / P                    pause menu (Q there: quit, M: sound on / off)",
     "?                          show / hide this help",
 ]
 PAUSE = [
@@ -1351,6 +1408,7 @@ PAUSE = [
     "",
     "Esc / P / Enter   continue",
     "?                 help",
+    "M                 sound on / off",
     "Q                 quit",
 ]
 

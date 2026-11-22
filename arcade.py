@@ -14,9 +14,18 @@ import sys
 import time
 
 import depthwell
+from arcadesound import Sound
 from arcadekit import COPYRIGHT, VERSION, Canvas, Terminal, draw_title, load_scores, mix, overlay, shade, title_width
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+SND = Sound("arcade", {
+    "move": [dict(w="square", f=660, d=0.035, v=0.35, duty=0.25)],
+    "start": [dict(w="square", f=523, d=0.07, v=0.45), dict(w="square", f=784, d=0.07, v=0.45),
+              dict(w="square", f=1047, d=0.2, v=0.5, duty=0.25)],
+    "sound_on": [dict(w="tri", f=440, d=0.07), dict(w="tri", f=880, d=0.14)],
+    "back": [dict(w="tri", f=660, f2=330, d=0.16, v=0.45)],
+})
 
 GAMES = [
     dict(file="hoverdrift.py", name="HOVERDRIFT", tag="glide over endless voxel worlds",
@@ -65,10 +74,12 @@ HELP = [
     "",
     "Up / Down            choose a game",
     "Enter / Space        play",
+    "M                    sound on / off",
     "Esc / Q              quit",
     "",
     "The same in every game:",
-    "Esc / P              pause / game menu (Q there: quit)",
+    "Esc / P              pause / game menu (Q there: quit,",
+    "                     M there: sound on / off)",
     "?                    help with all of the game's keys",
     "Enter / Space        confirm",
     "Arrows / WASD        move, choose",
@@ -336,7 +347,7 @@ def render(cols, rows, sel, t, note, help_=False):
             cv.put(rx, r + 7, ("needs a %dx%d window (now %dx%d)" % (mc, mr, cols, rows))[:tw2], (255, 120, 100))
     if note:
         cv.center(rows - 3, " %s " % note, (14, 14, 20), (255, 150, 100))
-    cv.put(0, rows - 1, " Up/Down choose   Enter play   ? help   Esc quit ".ljust(cols)[:cols], (150, 154, 184), (12, 10, 22))
+    cv.put(0, rows - 1, (" Up/Down choose   Enter play   M %s   ? help   Esc quit " % SND.label().lower()).ljust(cols)[:cols], (150, 154, 184), (12, 10, 22))
     sig = " v%s  %s " % (VERSION, COPYRIGHT)
     if cols >= 50 + len(sig):
         cv.put(cols - len(sig), rows - 1, sig, (96, 100, 128), (12, 10, 22))
@@ -364,14 +375,22 @@ def menu(sel, note):
                 if k == "?":
                     help_ = True
                 elif k in ("q", "esc"):
+                    SND.play("back")
                     return None
+                elif k == "m":
+                    if SND.toggle():
+                        SND.play("sound_on")
                 if k in ("up", "w", "k"):
                     sel = (sel - 1) % len(GAMES)
+                    SND.play("move")
                 elif k in ("down", "s", "j", "tab"):
                     sel = (sel + 1) % len(GAMES)
+                    SND.play("move")
                 elif k in tuple("123456789"):
                     sel = min(len(GAMES) - 1, int(k) - 1)
+                    SND.play("move")
                 elif k in ("enter", " "):
+                    SND.play("start")
                     return sel
 
 

@@ -22,6 +22,7 @@ import time
 from collections import deque
 
 from arcadekit import Canvas, Terminal, clamp, load_scores, mix, overlay, shade, shared_key, submit, title_screen
+from arcadesound import Sound
 
 GAME = "skyshot"
 G = 50.0                 # gravity, pixels / s^2
@@ -36,6 +37,54 @@ WEAPONS = [  # name, blast radius (px), damage, ammo per round (None = unlimited
     ("Splitter", 4.0, 24, 2, "split"),
     ("Dirt ball", 6.5, 0, 2, "dirt"),
 ]
+SND = Sound(GAME, {
+    # aiming: tiny ticks while the barrel turns or the power changes
+    "aim": [dict(w="tri", f=880, d=0.015, v=0.1)],
+    "power": [dict(w="square", f=330, d=0.015, v=0.08, duty=0.25)],
+    "weapon": [dict(w="tri", f=523, d=0.025, v=0.2), dict(w="tri", f=784, d=0.03, v=0.18)],
+    "empty": [dict(w="square", f=147, d=0.08, v=0.2, duty=0.4)],
+    # the cannon: a low thump with a puff of noise
+    "fire": [dict(w="noise", f=1400, f2=200, d=0.18, v=0.42), dict(w="sine", f=150, f2=50, d=0.22, v=0.55, at=0)],
+    "fire_heavy": [dict(w="noise", f=1000, f2=120, d=0.28, v=0.5), dict(w="sine", f=120, f2=38, d=0.32, v=0.62, at=0),
+                   dict(w="square", f=80, f2=45, d=0.18, v=0.18, duty=0.3, at=0)],
+    # a shell past the top of its arc: the classic falling whistle
+    "whistle": [dict(w="sine", f=1900, f2=700, d=0.85, v=0.16, vib=(9, 0.15), r="lin")],
+    "split": [dict(w="square", f=1200, f2=600, d=0.05, v=0.22, duty=0.25), dict(w="noise", f=4000, d=0.06, v=0.14, at=0)],
+    # impacts, sized by the shell
+    "boom_small": [dict(w="noise", f=2200, f2=150, d=0.35, v=0.5), dict(w="sine", f=110, f2=45, d=0.25, v=0.4, at=0)],
+    "boom": [dict(w="noise", f=1800, f2=80, d=0.6, v=0.65), dict(w="sine", f=95, f2=35, d=0.4, v=0.5, at=0)],
+    "boom_big": [dict(w="noise", f=1500, f2=50, d=0.95, v=0.8), dict(w="sine", f=80, f2=28, d=0.6, v=0.6, at=0),
+                 dict(w="noise", f=200, f2=60, d=0.6, v=0.3, at=0.25, r="lin")],
+    "splash": [dict(w="noise", f=5000, f2=900, d=0.4, v=0.36), dict(w="sine", f=500, f2=180, d=0.15, v=0.25, at=0)],
+    "dirt": [dict(w="noise", f=400, f2=90, d=0.35, v=0.45, r="lin"), dict(w="tri", f=110, f2=70, d=0.2, v=0.35, at=0),
+             dict(w="noise", f=900, f2=300, d=0.2, v=0.16, at=0.2)],
+    "miss": [dict(w="sine", f=700, f2=350, d=0.25, v=0.16, r="lin")],
+    # tanks
+    "hit": [dict(w="square", f=740, f2=520, d=0.09, v=0.28, duty=0.3), dict(w="tri", f=1110, f2=880, d=0.18, v=0.22, at=0)],
+    "destroyed": [dict(w="noise", f=2000, f2=40, d=1.15, v=0.85), dict(w="sine", f=70, f2=25, d=0.8, v=0.6, at=0),
+                  dict(w="square", f=330, f2=60, d=0.5, v=0.16, duty=0.3, at=0.1)],
+    "fall": [dict(w="tri", f=180, f2=70, d=0.18, v=0.45), dict(w="noise", f=600, f2=100, d=0.15, v=0.3, at=0.05)],
+    "land": [dict(w="tri", f=120, f2=80, d=0.06, v=0.25)],
+    # the match
+    "turn": [dict(w="tri", f=587, d=0.06, v=0.24), dict(w="tri", f=880, d=0.1, v=0.22)],
+    "wind": [dict(w="noise", f=260, f2=140, d=1.1, v=0.16, a=0.35, r="lin", vib=(3, 2.0))],
+    "sudden": [dict(w="square", f=440, d=0.12, v=0.24, duty=0.25), dict(w="square", f=440, d=0.12, v=0.24, duty=0.25, at=0.2),
+               dict(w="square", f=330, d=0.3, v=0.26, duty=0.25, at=0.4)],
+    "round": [dict(w="square", f=392, d=0.08, v=0.28, duty=0.25), dict(w="square", f=523, d=0.08, v=0.28, duty=0.25),
+              dict(w="square", f=659, d=0.08, v=0.28, duty=0.25), dict(w="tri", f=784, d=0.4, v=0.42, vib=(6, 0.2), r="lin")],
+    "match_win": [dict(w="square", f=f, d=0.09, v=0.28, duty=0.25) for f in (523, 523, 523)] +
+                 [dict(w="square", f=659, d=0.18, v=0.3, duty=0.25), dict(w="square", f=523, d=0.09, v=0.28, duty=0.25),
+                  dict(w="tri", f=784, d=0.5, v=0.45, vib=(6, 0.25), r="lin"),
+                  dict(w="tri", f=523, d=0.5, v=0.28, at=0.63, r="lin")],
+    "match_lose": [dict(w="tri", f=392, d=0.2, v=0.38), dict(w="tri", f=370, d=0.2, v=0.38),
+                   dict(w="tri", f=349, d=0.2, v=0.38), dict(w="tri", f=330, f2=262, d=0.55, v=0.4, vib=(5, 0.3), r="lin")],
+    # menus
+    "menu": [dict(w="tri", f=660, d=0.025, v=0.2)],
+    "start": [dict(w="square", f=392, d=0.05, v=0.3, duty=0.25), dict(w="square", f=523, d=0.05, v=0.3, duty=0.25),
+              dict(w="square", f=784, d=0.15, v=0.32, duty=0.25)],
+    "pause": [dict(w="tri", f=523, f2=392, d=0.07, v=0.22)],
+    "sound_on": [dict(w="tri", f=440, d=0.06, v=0.35), dict(w="tri", f=880, d=0.12, v=0.35)],
+})
 PALETTES = [
     dict(sky=((62, 120, 210), (182, 218, 246)), sun=(255, 250, 225), mount=((112, 142, 192), (148, 176, 214)),
          grass=(96, 186, 72), dirt=(152, 106, 62), deep=(92, 60, 38), rock=(112, 102, 98), water=(48, 118, 190),
@@ -462,6 +511,8 @@ class Match:
         self.paused = self.help = False
         self.winner = None
         self.fast = mode == "demo"
+        self.quiet = mode == "demo"          # the computer duel behind the title makes no sound
+        self.whistled = False
         self.new_round()
 
     def new_round(self):
@@ -492,6 +543,10 @@ class Match:
             t = self.tanks[self.turn]
             self.plan = cpu_plan(self.world, self.tanks, t, self.wind, self.diff, self.rnd, self.shots[self.turn])
 
+    def sfx(self, name, vol=1.0, gap=0.04):
+        if not self.quiet:
+            SND.play(name, vol, gap)
+
     def say(self, s, ttl=2.5):
         self.msg, self.msg_t = s, ttl
 
@@ -504,6 +559,7 @@ class Match:
         if self.phase != "aim" or self.cpu[self.turn]:
             return
         t = self.active
+        a0, p0, w0 = t.angle, t.power, t.weapon
         if k in ("left", "a"):
             t.angle = min(180, t.angle + 1)
         elif k in ("right", "d"):
@@ -528,8 +584,16 @@ class Match:
                 t.weapon = i
             else:
                 self.say("No %s left this round." % WEAPONS[i][0].lower(), 1.5)
+                self.sfx("empty")
         elif k in (" ", "enter"):
             self.fire()
+            return
+        if t.angle != a0:
+            self.sfx("aim", gap=0.05)
+        elif t.power != p0:
+            self.sfx("power", gap=0.05)
+        elif t.weapon != w0:
+            self.sfx("weapon")
 
     def fire(self):
         t = self.active
@@ -540,6 +604,8 @@ class Match:
                 t.ammo[t.weapon] -= 1
         s = launch(self.world, t, w=t.weapon)
         self.shells = [s]
+        self.whistled = False
+        self.sfx("fire_heavy" if t.weapon == 1 else "fire")
         self.flash = [s.x, s.y, 0.14]
         r = self.rnd
         for _ in range(10):
@@ -586,6 +652,7 @@ class Match:
         if max(self.wins) >= 2:
             self.phase, self.phase_t = "matchover", 0.0
             self.winner = 0 if self.wins[0] > self.wins[1] else 1
+            self.sfx("match_lose" if self.mode == "cpu" and self.winner == 1 else "match_win")
         else:
             self.starter = 1 - self.round_winner      # the loser of a round opens the next one
             self.new_round()
@@ -616,8 +683,12 @@ class Match:
                 s.trail.append((s.x, s.y))
                 vy0 = s.vy
                 hit = fly(w, self.tanks, s, self.wind)
+                if hit is None and not self.whistled and vy0 < 0 <= s.vy:
+                    self.whistled = True              # over the top of the arc: down it comes
+                    self.sfx("whistle")
                 if hit is None and WEAPONS[s.w][4] == "split" and not s.split and vy0 < 0 <= s.vy:
                     s.split = True
+                    self.sfx("split")
                     sp = math.hypot(s.vx, s.vy) * 0.16 + 3
                     for d in (-1, 1):
                         f = Shell(s.x, s.y, s.vx + d * sp, s.vy - 2, s.w, s.owner)
@@ -633,6 +704,7 @@ class Match:
                 if hit == "off":
                     if not self.shells:
                         self.say("Wide - that one left the field.")
+                        self.sfx("miss")
                     continue
                 self.explode(s.x, s.y, s.w, s.owner, hit == "water", hit if isinstance(hit, Tank) else None)
             if not self.shells:
@@ -646,6 +718,8 @@ class Match:
                 dmg = int(min(40, (fall - 4.5) * 2.2))
                 if dmg > 0 and t.hp > 0:
                     self.hurt(t, dmg, "fall")
+            elif fall is not None and fall > 1.5:
+                self.sfx("land", gap=0.1)
         self.update_fx()
         if self.phase == "settle":
             self.settle_t += PH
@@ -661,6 +735,10 @@ class Match:
         if why == "fall":
             self.say("%s fell into the hole: %d damage." % (self.names[t.idx].capitalize(), dmg), 2.0)
         if t.hp <= 0:
+            self.sfx("destroyed")
+        else:
+            self.sfx("fall" if why == "fall" else "hit", gap=0.08)
+        if t.hp <= 0:
             self.booms.append([cx, cy, 6.5, 0.0])
             r = self.rnd
             for _ in range(36):
@@ -673,6 +751,7 @@ class Match:
         w, r = self.world, self.rnd
         name, rad, dmg, _, kind = WEAPONS[widx]
         if kind == "dirt":
+            self.sfx("dirt")
             w.add_dirt(x, y, rad)
             for _ in range(18):
                 a = r.uniform(0, 6.283)
@@ -684,6 +763,10 @@ class Match:
             return
         w.carve(x, y, rad)
         self.booms.append([x, y, rad, 0.0])
+        if water:
+            self.sfx("splash")
+        else:
+            self.sfx("boom_big" if rad >= 6 else "boom_small" if kind == "split" else "boom", gap=0.06)
         for _ in range(int(10 + rad * 4)):
             a = r.uniform(3.4, 6.0) if not water else r.uniform(4.2, 5.2)
             v = r.uniform(15, 55)
@@ -750,15 +833,22 @@ class Match:
             self.round_winner = win
             self.wins[win] += 1
             self.phase, self.phase_t = "roundover", 0.0
+            self.sfx("round")
             return
         self.turn = 1 - self.turn
         self.wind = int(clamp(round(self.wind * 0.35 + self.rnd.gauss(0, 5)), -10, 10))
         if self.round_turns == 30:
             self.mult = 2
             self.say("Sudden death: every hit counts double!", 3.5)
+            self.sfx("sudden")
         elif self.round_turns == 50:
             self.mult = 4
             self.say("Sudden death: every hit counts four times!", 3.5)
+            self.sfx("sudden")
+        else:
+            self.sfx("turn")
+        if abs(self.wind) >= 6:                       # a strong wind is heard as well as seen
+            self.sfx("wind", vol=0.5 + 0.05 * (abs(self.wind) - 6))
         self.begin_turn()
 
 
@@ -995,10 +1085,11 @@ HELP = [
     "3 Splitter (2, bursts in three at the top of its arc)",
     "4 Dirt ball (2, buries the other tank in fresh earth)",
     "",
-    "Esc / P                 pause menu (Q there: quit)",
+    "Esc / P                 pause menu (Q quit, M sound)",
     "?                       this help",
 ]
-PAUSE = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "Q                 quit to the menu"]
+PAUSE = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "M                 sound on / off",
+         "Q                 quit to the menu"]
 
 
 def world_size(cols, rows):
@@ -1035,7 +1126,7 @@ class TitleDemo:
         title_screen(cv, "SKYSHOT", "an artillery duel on crumbling hills", items, sel,
                      "best win streak vs computer:  " + rec if rec else None,
                      extra=["", "Left / Right: computer difficulty"],
-                     keys="↑↓ choose  ←→ difficulty  Enter play  ? help  Esc quit",
+                     keys="↑↓ choose  ←→ difficulty  Enter play  M %s  ? help  Esc quit" % SND.label().lower(),
                      help_lines=HELP, show_help=help_, dim=0.4)
         return cv
 
@@ -1093,15 +1184,23 @@ def main():
                         return
                     elif k in ("up", "w"):
                         sel = (sel - 1) % 3
+                        SND.play("menu")
                     elif k in ("down", "s"):
                         sel = (sel + 1) % 3
+                        SND.play("menu")
                     elif k in ("left", "a", "right", "d"):
                         demo.diff = (demo.diff + (1 if k in ("right", "d") else -1)) % 3
+                        SND.play("menu")
+                    elif k == "m":
+                        if SND.toggle():
+                            SND.play("sound_on")
                     elif k in ("1", "2"):
                         sel = int(k) - 1
                         go = True
+                        SND.play("start")
                     elif k in ("enter", " "):
                         go = True
+                        SND.play("start")
             mode = "two" if sel == 1 else "cpu"
             diff = demo.diff
             while True:                                   # one match; Enter on the end screen starts another
@@ -1117,10 +1216,12 @@ def main():
                                 back = True
                             elif k in ("enter", " ") and m.phase_t > 0.5:
                                 again = True
+                                SND.play("start")
                             continue
                         a = shared_key(k, m.paused, pause_keys=("esc", "p", "q"))
                         if a == "pause":
                             m.paused = True
+                            SND.play("pause")
                         elif a == "resume":
                             m.paused = m.help = False
                         elif a == "quit":
@@ -1128,6 +1229,9 @@ def main():
                         elif a == "help":
                             m.help = not m.help
                             m.paused = True
+                        elif a == "sound":
+                            if SND.toggle():
+                                SND.play("sound_on")
                         elif a is None:
                             if m.phase == "roundover" and k in ("enter", " "):
                                 m.skip()
@@ -1150,7 +1254,7 @@ def main():
                         continue
                     cv = render(m, cols, rows)
                     if m.paused:
-                        overlay(cv, HELP if m.help else PAUSE)
+                        overlay(cv, HELP if m.help else PAUSE + ["", SND.label()])
                     if m.phase == "matchover":
                         render_over(cv, m, record, streak[diff])
                     term.write(cv.emit())

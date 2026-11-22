@@ -14,6 +14,7 @@ import time
 
 from arcadekit import (PAUSE_LINES, Canvas, Terminal, clamp, draw_title, load_scores, mix, overlay, shade,
                        shared_key, submit, title_screen, title_width)
+from arcadesound import Sound
 
 GAME = "depthwell"
 
@@ -48,6 +49,43 @@ LAYER = [(236, 84, 84), (244, 150, 56), (236, 212, 70), (130, 214, 76), (56, 200
          (100, 110, 240), (170, 96, 236), (226, 90, 200), (200, 200, 210), (140, 120, 100), (90, 150, 130),
          (180, 140, 220), (120, 120, 140)]
 CLEAR_SCORE = [0, 200, 600, 1200, 2000, 3000]
+SND = Sound(GAME, {
+    # small and soft: these happen all the time; the three turn axes each have their own pitch
+    "move": [dict(w="tri", f=330, d=0.022, v=0.18)],
+    "turn_x": [dict(w="square", f=440, f2=523, d=0.03, v=0.14, duty=0.25)],
+    "turn_y": [dict(w="square", f=523, f2=622, d=0.03, v=0.14, duty=0.25)],
+    "turn_z": [dict(w="square", f=622, f2=740, d=0.03, v=0.14, duty=0.25)],
+    "sink": [dict(w="sine", f=220, f2=165, d=0.03, v=0.25)],
+    "lock": [dict(w="tri", f=131, f2=98, d=0.08, v=0.32), dict(w="noise", f=500, f2=150, d=0.05, v=0.14, at=0)],
+    "drop": [dict(w="sine", f=600, f2=110, d=0.16, v=0.32),
+             dict(w="noise", f=1500, f2=120, d=0.12, v=0.26, at=0.1), dict(w="tri", f=98, f2=65, d=0.12, v=0.32, at=0.1)],
+    # a floor layer vanishing: a deep, echoing chord that grows with the count
+    "clear1": [dict(w="tri", f=294, d=0.1, v=0.4), dict(w="tri", f=440, d=0.3, v=0.38, r="lin")],
+    "clear2": [dict(w="tri", f=294, d=0.08, v=0.4), dict(w="tri", f=370, d=0.08, v=0.4),
+               dict(w="tri", f=587, d=0.36, v=0.4, vib=(5, 0.2), r="lin")],
+    "clear3": [dict(w="tri", f=294, d=0.08, v=0.4), dict(w="tri", f=370, d=0.08, v=0.4), dict(w="tri", f=440, d=0.08, v=0.4),
+               dict(w="tri", f=587, d=0.5, v=0.42, vib=(5, 0.25), r="lin"),
+               dict(w="sine", f=880, d=0.5, v=0.18, at=0.24, r="lin")],
+    "clear4": [dict(w="square", f=f, d=0.07, v=0.26, duty=0.25) for f in (294, 370, 440, 587)] +
+              [dict(w="tri", f=740, d=0.6, v=0.42, vib=(5, 0.25), r="lin"), dict(w="tri", f=440, d=0.6, v=0.3, at=0.28, r="lin"),
+               dict(w="noise", f=80, d=0.5, v=0.16, at=0.28, r="lin")],
+    "clear5": [dict(w="noise", f=1200, f2=60, d=0.5, v=0.36)] +
+              [dict(w="square", f=f, d=0.07, v=0.26, duty=0.25, at=0.05 + i * 0.07)
+               for i, f in enumerate((294, 370, 440, 587, 740))] +
+              [dict(w="tri", f=880, d=0.6, v=0.42, vib=(6, 0.3), r="lin", at=0.4),
+               dict(w="tri", f=587, d=0.6, v=0.3, at=0.4, r="lin")],
+    "empty": [dict(w="sine", f=f, d=0.06, v=0.32) for f in (587, 740, 880, 1175, 1480, 1760)] +
+             [dict(w="tri", f=1175, d=0.6, v=0.3, vib=(7, 0.3), r="lin")],
+    "levelup": [dict(w="tri", f=392, d=0.07, v=0.36), dict(w="tri", f=494, d=0.07, v=0.36),
+                dict(w="tri", f=587, d=0.07, v=0.36), dict(w="square", f=784, d=0.26, v=0.26, duty=0.25, vib=(6, 0.2))],
+    "over": [dict(w="tri", f=330, f2=294, d=0.22, v=0.4), dict(w="tri", f=262, f2=233, d=0.22, v=0.4),
+             dict(w="tri", f=196, f2=131, d=0.6, v=0.42, r="lin"), dict(w="noise", f=70, d=0.6, v=0.14, at=0.44, r="lin")],
+    # menus
+    "menu": [dict(w="tri", f=587, d=0.025, v=0.2)],
+    "start": [dict(w="tri", f=440, d=0.05, v=0.34), dict(w="tri", f=587, d=0.05, v=0.34), dict(w="tri", f=880, d=0.16, v=0.36)],
+    "pause": [dict(w="tri", f=494, f2=370, d=0.07, v=0.22)],
+    "sound_on": [dict(w="tri", f=440, d=0.06, v=0.35), dict(w="tri", f=880, d=0.12, v=0.35)],
+})
 HELP = [
     "DEPTHWELL - keys",
     "",
@@ -63,7 +101,7 @@ HELP = [
     "FROM ABOVE (right): every column coloured by its height, the landing cells",
     "outlined in white. The gauge on the left marks your piece's depth.",
     "",
-    "Esc / P                  pause menu (Q there: quit)",
+    "Esc / P                  pause menu (Q quit, M sound)",
     "?                        this help",
 ]
 
@@ -152,6 +190,7 @@ class Well:
             self.px += dx
             self.py += dy
             self.touch()
+            SND.play("move", gap=0.03)
 
     def turn(self, axis, n):
         o = [rot(c, axis, n) for c in self.offs]
@@ -160,6 +199,7 @@ class Well:
             if self.fits(o, self.px + dx, self.py + dy, self.pz + dz):
                 self.offs, self.px, self.py, self.pz = o, self.px + dx, self.py + dy, self.pz + dz
                 self.touch()
+                SND.play("turn_" + "xyz"[axis], gap=0.03)
                 return
 
     def touch(self):
@@ -171,13 +211,14 @@ class Well:
             self.pz += 1
             self.score += self.level
             self.fall = 0.0
+            SND.play("sink", gap=0.05)
 
     def drop(self):
         z0 = self.pz
         while self.fits(self.offs, self.px, self.py, self.pz + 1):
             self.pz += 1
         self.score += 2 * (self.pz - z0) * self.level
-        self.lock()
+        self.lock(dropped=True)
 
     def landing(self):
         z = self.pz
@@ -185,7 +226,8 @@ class Well:
             z += 1
         return z
 
-    def lock(self):
+    def lock(self, dropped=False):
+        SND.play("drop" if dropped else "lock")
         for x, y, z in self.cubes_at():
             self.cell[z][y][x] = True
         n = len(self.offs)
@@ -194,6 +236,7 @@ class Well:
         full = [z for z in range(self.D) if all(all(row) for row in self.cell[z])]
         if full:
             self.clearing = (full, self.t + 0.35)
+            SND.play("clear%d" % min(len(full), 5))
         else:
             self.spawn()
 
@@ -211,8 +254,12 @@ class Well:
         if not any(any(any(r) for r in lay) for lay in self.cell):
             pts += 5000 * self.level
             self.pops.append(["EMPTY WELL!", self.t + 1.8, (255, 255, 170)])
+            SND.play("empty")
         self.score += pts
+        lv = self.level
         self.level = max(self.level, self.start_level + self.layers // 4)
+        if self.level > lv:
+            SND.play("levelup")
         self.spawn()
 
     def height(self):
@@ -459,7 +506,7 @@ def render(g, cols, rows, ghost=True):
     for i, (txt, until, c) in enumerate(reversed(g.pops[-2:])):
         cv.center(int(cy / 2) - 2 + i * 2, " %s " % txt, (14, 14, 20), c, int(cx - size / 2), int(size))
     if g.paused:
-        overlay(cv, HELP if g.help else PAUSE_LINES)
+        overlay(cv, HELP if g.help else PAUSE_LINES + ["", SND.label()])
     return cv
 
 
@@ -499,7 +546,7 @@ def render_menu(cols, rows, sel, opts, t, help_=False):
     rec = load_scores().get(GAME, {}).get(mode_key(PITS[pit], si))
     title_screen(cv, "DEPTHWELL", "falling blocks in three dimensions", items, sel,
                  "best for this well: %d" % rec if rec is not None else None,
-                 keys="Up/Down choose   Left/Right change   Enter start   ? help   Esc back",
+                 keys="Up/Down choose   Left/Right change   Enter start   M %s   ? help   Esc back" % SND.label().lower(),
                  help_lines=HELP, show_help=help_)
     return cv
 
@@ -524,13 +571,20 @@ def main():
                         return
                     if k in ("up", "w"):
                         sel = (sel - 1) % 4
+                        SND.play("menu")
                     elif k in ("down", "s"):
                         sel = (sel + 1) % 4
+                        SND.play("menu")
                     elif k in ("left", "right", "a", "d") and sel < 3:
                         d = -1 if k in ("left", "a") else 1
                         lim = [len(PITS), len(SETS), 15][sel]
                         opts[sel] = (opts[sel] + d) % lim if sel < 2 else clamp(opts[sel] + d, 1, lim)
+                        SND.play("menu")
+                    elif k == "m":
+                        if SND.toggle():
+                            SND.play("sound_on")
                     elif k in ("enter", " "):
+                        SND.play("start")
                         go = True
             pit, si, level = PITS[opts[0]], opts[1], opts[2]
             while True:
@@ -553,6 +607,7 @@ def main():
                         a = shared_key(k, g.paused, pause_keys=("esc", "p"))   # Q turns pieces here
                         if a == "pause":
                             g.paused = True
+                            SND.play("pause")
                         elif a == "resume":
                             g.paused = g.help = False
                         elif a == "quit":
@@ -560,12 +615,16 @@ def main():
                         elif a == "help":
                             g.help = not g.help
                             g.paused = True
+                        elif a == "sound":
+                            if SND.toggle():
+                                SND.play("sound_on")
                         elif a is None:
                             if k == "g":
                                 ghost = not ghost
                             else:
                                 g.key(k)
                     if g.over and record is None:
+                        SND.play("over")
                         record = submit(GAME, mode_key(pit, si), g.score)
                     cols, rows = term.size()
                     if cols < 70 or rows < 24:

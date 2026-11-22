@@ -23,6 +23,17 @@ import time
 import tty
 from collections import deque
 
+try:
+    from arcadesound import Sound
+except ImportError:
+    class Sound:  # sound engine missing: stay silent
+        available = enabled = False
+        def __init__(self, *a, **k): pass
+        def play(self, *a, **k): pass
+        def toggle(self): return False
+        def label(self): return "Sound: none"
+        def stop(self): pass
+
 FPS = 60
 FOV_PLANE = 0.66          # camera plane length -> ~66 degree field of view
 MOVE_SPEED = 3.6          # units per second
@@ -35,6 +46,33 @@ BRIDGE_MOVE = 0.85        # the same for walking and strafing
 PLAYER_R = 0.22
 BOT_R = 0.25
 BEST_FILE = os.path.expanduser("~/.blockfire_best")
+FIRE_CD, PULSE_CD = 0.28, 0.6   # seconds between shots (bullets / pulse mode when out of ammo)
+
+# --- Sound effects (short and soft; the gunshot's gap is the fire interval) --------------------------------
+SND = Sound("blockfire", {
+    "shot": [dict(w="noise", f=6500, f2=700, d=0.09, v=0.5), dict(w="square", f=150, f2=48, d=0.08, v=0.5, at=0)],
+    "pulse": [dict(w="noise", f=9000, d=0.012, v=0.35),                                   # dry click + weak zap
+              dict(w="sine", f=950, f2=320, d=0.08, v=0.3, at=0.012)],
+    "empty": [dict(w="square", f=1250, d=0.014, v=0.3), dict(w="noise", f=8000, d=0.02, v=0.25, at=0.05)],
+    "hit": [dict(w="square", f=1500, f2=950, d=0.04, v=0.28, duty=0.25), dict(w="noise", f=5000, d=0.03, v=0.18, at=0)],
+    "boom": [dict(w="noise", f=2600, f2=110, d=0.42, v=0.55), dict(w="square", f=120, f2=40, d=0.28, v=0.38, at=0)],
+    "boom_big": [dict(w="noise", f=1900, f2=60, d=0.8, v=0.7), dict(w="square", f=90, f2=30, d=0.6, v=0.45, at=0),
+                 dict(w="noise", f=420, f2=70, d=0.55, v=0.4, at=0.12)],
+    "hurt": [dict(w="saw", f=320, f2=120, d=0.15, v=0.32), dict(w="noise", f=1300, d=0.08, v=0.28, at=0)],
+    "eshot": [dict(w="square", f=920, f2=480, d=0.07, v=0.3, duty=0.25)],
+    "health": [dict(w="tri", f=660, d=0.06, v=0.45), dict(w="tri", f=880, d=0.06, v=0.45),
+               dict(w="tri", f=1320, d=0.15, v=0.45)],
+    "ammo": [dict(w="square", f=330, d=0.04, v=0.3, duty=0.3), dict(w="noise", f=3500, d=0.03, v=0.25),
+             dict(w="square", f=494, d=0.06, v=0.3, duty=0.3)],
+    "alarm": [dict(w="square", f=700, f2=1050, d=0.22, v=0.26, duty=0.25, r="hold"),
+              dict(w="square", f=700, f2=1050, d=0.22, v=0.26, duty=0.25, r="hold", at=0.3),
+              dict(w="square", f=700, f2=1050, d=0.22, v=0.26, duty=0.25, r="lin", at=0.6)],
+    "cleared": [dict(w="tri", f=523, d=0.1, v=0.45), dict(w="tri", f=659, d=0.1, v=0.45), dict(w="tri", f=784, d=0.1, v=0.45),
+                dict(w="square", f=1047, d=0.4, v=0.3, duty=0.25, vib=(6, 0.2))],
+    "death": [dict(w="saw", f=420, f2=55, d=1.0, v=0.38, r="lin"), dict(w="noise", f=1500, f2=80, d=0.9, v=0.45, at=0)],
+    "start": [dict(w="square", f=440, d=0.06, v=0.3, duty=0.25), dict(w="square", f=880, d=0.14, v=0.3, duty=0.25)],
+    "select": [dict(w="square", f=880, d=0.035, v=0.26, duty=0.25)],
+})
 
 # --- Arena -------------------------------------------------------------------
 #  # concrete   B brick   T tech panel   M mossy stone
@@ -309,10 +347,14 @@ class Game:
         if self.ammo > 0:
             self.ammo -= 1
             dmg = self.rnd.uniform(28, 40)
-            self.fire_cd = 0.28
+            self.fire_cd = FIRE_CD
+            SND.play("shot", 0.8, FIRE_CD - 0.02)
+            if self.ammo == 0:
+                SND.play("empty", 0.8)
         else:
             dmg = self.rnd.uniform(10, 14)
-            self.fire_cd = 0.6
+            self.fire_cd = PULSE_CD
+            SND.play("pulse", 0.7, PULSE_CD - 0.02)
             if self.rnd.random() < 0.3:
                 self.msg("Out of ammo - pulse mode. Find ammo (yellow ===).", 2.0)
         self.muzzle = 0.09
@@ -339,11 +381,14 @@ class Game:
             best.last_seen = (self.px, self.py)
             if best.hp <= 0:
                 self.kill(best)
+            else:
+                SND.play("hit", 0.7)
 
     def kill(self, b):
         b.state = "dead"
         b.dead_t = 3.0
         self.fx.append(("kill", b.x, b.y, b.kind))
+        SND.play("boom_big" if b.kind == "brute" else "boom", 0.9, 0.08)
         self.kills += 1
         self.msg("%s down. +100" % b.kind.capitalize(), 2.0)
         if self.rnd.random() < 0.35:
@@ -374,6 +419,7 @@ class Game:
             self.hp = 0
             self.over = True
             self.save_best()
+            SND.play("death")
 
     def update_player(self, dt):
         h, br = self.hold, self.bridge
@@ -435,6 +481,7 @@ class Game:
                 self.spawn_queue = kinds
                 self.spawn_t = 0.0
                 self.msg("WAVE %d - %d bots incoming" % (self.wave, n), 4.0)
+                SND.play("alarm", 0.8)
             return
         alive = sum(1 for b in self.bots if b.alive)
         self.spawn_t -= dt
@@ -446,6 +493,7 @@ class Game:
             self.hp = min(100.0, self.hp + 25)
             self.ammo = min(self.max_ammo, self.ammo + 15)
             self.msg("WAVE %d CLEARED  +25 HP  +15 ammo" % self.wave, 4.0)
+            SND.play("cleared")
             self.inter = 4.0
 
     def spawn_bot(self, kind):
@@ -561,11 +609,14 @@ class Game:
         acc = k["acc"] - dist * 0.025 - (0.15 if self.moving else 0.0)
         hit = self.rnd.random() < max(0.08, acc)
         self.fx.append(("shot", b, hit))
+        SND.play("eshot", max(0.12, 0.45 - dist * 0.025), 0.1)   # quieter than yours, fainter far away
         if hit:
             self.hp -= k["dmg"] * self.rnd.uniform(0.8, 1.2)
             self.dmg_flash = 0.25
             self.hurt_ang = math.atan2(b.y - self.py, b.x - self.px)
             self.hurt_t = 0.8
+            if self.hp > 0:
+                SND.play("hurt", 0.8, 0.2)
 
     def update_pickups(self, dt):
         for p in self.pickups:
@@ -578,9 +629,11 @@ class Game:
                 if p["kind"] == "h" and self.hp < 100:
                     self.hp = min(100.0, self.hp + 30)
                     self.msg("+30 health", 2.0)
+                    SND.play("health", 0.8)
                 elif p["kind"] == "a" and self.ammo < self.max_ammo:
                     self.ammo = min(self.max_ammo, self.ammo + 20)
                     self.msg("+20 ammo", 2.0)
+                    SND.play("ammo", 0.8)
                 else:
                     continue
                 p["active"] = False
@@ -1530,7 +1583,7 @@ class Renderer:
                      "R restart     Esc / Q quit", ""]
             self.box(text, cols, prow, lines, (255, 255, 255), (110, 20, 20))
         elif g.paused:
-            text_box(text, cols, prow, HELP if self.help else PAUSE)
+            text_box(text, cols, prow, HELP if self.help else PAUSE + ["", SND.label()])
         elif g.inter > 0 and not any(b.alive for b in g.bots):
             self.box(text, cols, prow, ["", "W A V E   %d" % (g.wave + 1), "starts in %d" % (int(g.inter) + 1), ""],
                      (255, 220, 90), (24, 24, 40))
@@ -1571,10 +1624,11 @@ HELP = [
     "Space / F / Enter        fire",
     "M                        minimap on / off",
     "",
-    "Esc / P                  pause menu (Q there: quit)",
+    "Esc / P                  pause menu (Q there: quit, M: sound on / off)",
     "?                        this help",
 ]
-PAUSE = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "Q                 quit"]
+PAUSE = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "M                 sound on / off",
+         "Q                 quit"]
 
 
 # The ASCII ARCADE title layout (same look as arcadekit.title_screen in the collection)
@@ -1689,6 +1743,7 @@ def run(term):
             elif k in (" ", "enter"):
                 start = True
         if start:
+            SND.play("start")
             break
     last = time.perf_counter()
     held = set()           # actions whose keys are down (only known with the kitty protocol)
@@ -1720,6 +1775,7 @@ def run(term):
                     return g
                 if k == "r":
                     g.reset()
+                    SND.play("start")
                 continue
             if g.paused:
                 if k in ("esc", "p", "enter", " "):
@@ -1729,6 +1785,9 @@ def run(term):
                     return g
                 elif k == "?":
                     r.help = not r.help
+                elif k == "m":     # M is the minimap during play, sound on / off in the pause menu
+                    if SND.toggle():
+                        SND.play("select")
                 continue
             if k in ("esc", "p", "q", "?"):
                 g.paused, r.help = True, k == "?"

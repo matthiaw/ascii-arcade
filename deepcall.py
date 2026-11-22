@@ -20,6 +20,7 @@ from collections import deque
 
 from arcadekit import (Canvas, Terminal, clamp, load_scores, mix, overlay, shade, shared_key, submit,
                        title_screen)
+from arcadesound import Sound
 
 GAME = "deepcall"
 W, H = 320, 1700                 # world size in pixels (one pixel = one half-block)
@@ -38,6 +39,45 @@ ZONES = [  # name, top y, sonar colour, water colour, rock memory colour
 AMBER = (255, 190, 90)
 LAMP = (255, 240, 200)
 FLARE = (255, 150, 60)
+
+# Sounds: eerie and sparse. The sonar "pong" is the voice of the game; everything else stays out of its way.
+SND = Sound(GAME, {
+    "ping": [dict(w="sine", f=1180, f2=1140, d=0.95, v=0.42, a=0.006),
+             dict(w="sine", f=2360, f2=2300, d=0.28, v=0.07, at=0)],
+    "focus": [dict(w="sine", f=1760, f2=1720, d=0.6, v=0.34, a=0.004),
+              dict(w="sine", f=3520, d=0.12, v=0.05, at=0)],
+    "echo_near": [dict(w="sine", f=1140, f2=1120, d=0.28, v=0.14, a=0.02)],
+    "echo_mid": [dict(w="sine", f=990, f2=975, d=0.34, v=0.11, a=0.03)],
+    "echo_far": [dict(w="sine", f=850, f2=840, d=0.4, v=0.08, a=0.04)],
+    "lamp": [dict(w="square", f=2400, d=0.012, v=0.14, duty=0.2), dict(w="noise", f=6000, d=0.018, v=0.08, at=0)],
+    "flare": [dict(w="noise", f=5200, f2=1400, d=0.55, v=0.24, a=0.01),
+              dict(w="saw", f=320, f2=170, d=0.4, v=0.08, at=0)],
+    "salvage": [dict(w="tri", f=660, d=0.06, v=0.3), dict(w="tri", f=990, d=0.22, v=0.26)],
+    "oxygen": [dict(w="sine", f=420, f2=860, d=0.2, v=0.3), dict(w="noise", f=3000, d=0.08, v=0.08, at=0.05)],
+    "battery": [dict(w="square", f=330, f2=990, d=0.22, v=0.18, duty=0.25, curve="lin"),
+                dict(w="tri", f=1320, d=0.12, v=0.18)],
+    "pickup": [dict(w="tri", f=520, d=0.05, v=0.26), dict(w="tri", f=780, d=0.14, v=0.24)],
+    "vent": [dict(w="sine", f=380, f2=820, d=0.035, v=0.16), dict(w="sine", f=480, f2=1000, d=0.03, v=0.13, at=0.08),
+             dict(w="sine", f=420, f2=900, d=0.035, v=0.11, at=0.17), dict(w="sine", f=560, f2=1150, d=0.03, v=0.09, at=0.27)],
+    "hull": [dict(w="noise", f=520, f2=110, d=0.35, v=0.38, r="lin"), dict(w="tri", f=95, f2=50, d=0.3, v=0.4, at=0)],
+    "o2_warn": [dict(w="sine", f=660, d=0.13, v=0.24), dict(w="sine", f=520, d=0.2, v=0.22, at=0.2)],
+    "sting": [dict(w="saw", f=1900, f2=900, d=0.08, v=0.18), dict(w="noise", f=7000, d=0.05, v=0.12, at=0)],
+    "lurker": [dict(w="tri", f=140, f2=220, d=0.5, v=0.3, a=0.08, vib=(9, 0.6), r="lin")],
+    "bite": [dict(w="noise", f=900, f2=180, d=0.25, v=0.42), dict(w="square", f=120, f2=60, d=0.2, v=0.22, at=0)],
+    "roar": [dict(w="saw", f=58, f2=38, d=1.2, v=0.42, a=0.25, r="lin", vib=(5, 0.5)),
+             dict(w="tri", f=82, f2=52, d=1.1, v=0.35, a=0.2, r="lin", at=0),
+             dict(w="noise", f=160, f2=60, d=1.1, v=0.25, a=0.3, r="lin", at=0)],
+    "strike": [dict(w="noise", f=420, f2=40, d=0.9, v=0.55), dict(w="tri", f=70, f2=34, d=0.8, v=0.45, at=0)],
+    "zone": [dict(w="sine", f=110, f2=98, d=1.0, v=0.22, a=0.3, r="lin"),
+             dict(w="sine", f=165, f2=147, d=0.9, v=0.1, a=0.35, r="lin", at=0)],
+    "source": [dict(w="sine", f=523, d=1.2, v=0.22, a=0.15, r="lin"),
+               dict(w="sine", f=659, d=1.05, v=0.2, a=0.15, r="lin", at=0.15),
+               dict(w="sine", f=784, d=0.9, v=0.2, a=0.15, r="lin", at=0.3),
+               dict(w="sine", f=1047, d=0.75, v=0.18, a=0.1, r="lin", at=0.45, vib=(5, 0.15))],
+    "death": [dict(w="sine", f=330, f2=98, d=1.1, v=0.34, vib=(4, 0.3), r="lin"),
+              dict(w="noise", f=300, f2=50, d=0.9, v=0.2, at=0)],
+    "sound_on": [dict(w="sine", f=880, d=0.06, v=0.3), dict(w="sine", f=1320, d=0.14, v=0.28)],
+})
 GOLD = (255, 220, 110)
 
 
@@ -313,6 +353,7 @@ class Creature:
         self.cool = 0.0                   # time until it may bite again
         self.flee = 0.0
         self.state = "idle"
+        self.chasing = False              # a lurker that has noticed the sub
         if kind == "leviathan":
             self.body = [(x, y)] * 18
 
@@ -390,12 +431,20 @@ class Dive:
         self.over = self.won = False
         self.paused = self.help = False
         self.cause = ""
+        self.quiet = False                # the title demo dives without sound
+        self.echo_q = []                  # (time, sound, volume): sonar echoes on their way back
+        self.warn_at = 0.0                # next low-air warning
+        self.in_vent = False
         self.say("Dive! Space pings the sonar, F a focused ping, L the lamp, E a flare.", 6)
 
     # --- helpers ---------------------------------------------------------------------------------
     def say(self, s, ttl=3.0):
         self.msgs.append([s, self.t + ttl])
         self.msgs = self.msgs[-3:]
+
+    def sfx(self, name, vol=1.0, gap=0.04):
+        if not self.quiet:
+            SND.play(name, vol, gap)
 
     def make_noise(self, x, y, radius, meter):
         self.noises.append((x, y, radius, self.t))
@@ -428,11 +477,13 @@ class Dive:
             self.ping(True)
         elif k == "l":
             self.lamp = not self.lamp
+            self.sfx("lamp")
             self.say("Lamp on - it shows the way, and you to them." if self.lamp else "Lamp off.", 2)
         elif k == "e":
             if self.flares > 0:
                 self.flares -= 1
                 self.flare_list.append([self.x - self.face * 4, self.y + 2, -self.face * 6.0, -4.0, self.t + 14])
+                self.sfx("flare")
                 self.say("Flare away - it draws them to itself.", 2)
             else:
                 self.say("No flares left.", 2)
@@ -446,11 +497,19 @@ class Dive:
         col = ZONES[self.zone][2]
         if focused:
             a = math.atan2(self.vy * 0.4, self.face * 1.0)
-            self.pings.append(Ping(self.w, self.x, self.y, self.t, FOCUS_R, (a, 0.42), col))
+            p = Ping(self.w, self.x, self.y, self.t, FOCUS_R, (a, 0.42), col)
             self.make_noise(self.x, self.y, 110, 0.15)
+            self.sfx("focus", gap=0.1)
         else:
-            self.pings.append(Ping(self.w, self.x, self.y, self.t, PING_R, None, col))
+            p = Ping(self.w, self.x, self.y, self.t, PING_R, None, col)
             self.make_noise(self.x, self.y, 150, 0.27)
+            self.sfx("ping", gap=0.1)
+        self.pings.append(p)
+        # the echo comes back from the nearest wall: soon and bright when close, late and dull when far
+        near = min((r[0] for r in p.rays if r[3]), default=None)
+        if near is not None and not self.quiet:
+            name = "echo_near" if near < 35 else "echo_mid" if near < 85 else "echo_far"
+            self.echo_q.append((self.t + 0.08 + 2 * near / PING_SPEED, name, 1.0 - near / p.R * 0.5))
 
     # --- light: mark what a ray of light reaches ---------------------------------------------------
     def light(self, x, y, a0, span, R, n, strength, color):
@@ -507,9 +566,13 @@ class Dive:
         if z != self.zone:
             if z > self.zone:
                 self.say("Entering %s - %d m" % (ZONES[z][0], self.depth_m()), 4)
+                self.sfx("zone")
             self.zone = z
         # oxygen, power, noise
         self.oxygen -= dt * 0.42
+        if self.oxygen < 25 and self.t >= self.warn_at:      # a soft two-tone call, every few seconds at most
+            self.warn_at = self.t + 7.0
+            self.sfx("o2_warn")
         self.power = min(100.0, self.power + dt * (3.0 - (1.6 if self.lamp else 0)))
         if self.lamp:
             if self.power <= 0:
@@ -520,14 +583,23 @@ class Dive:
             self.make_noise(self.x, self.y, 30, 0)
         self.noise = max(0.0, self.noise - dt * 0.07)
         self.noises = [n for n in self.noises if self.t - n[3] < 0.6]
+        in_vent = False
         for v in w.vents:
             if math.hypot(v[0] - self.x, v[1] - self.y) < 14:
                 if self.oxygen < 99:
+                    in_vent = True
                     self.oxygen = min(100.0, self.oxygen + dt * 22)
                     if int(self.t * 2) % 6 == 0:
                         self.say("Air vent - filling the tanks.", 1)
             if random.random() < dt * 6:
                 self.bubbles.append([v[0] + random.uniform(-2, 2), v[1], random.uniform(2.5, 5.0)])
+        if in_vent and not self.in_vent:
+            self.sfx("vent", gap=1.5)
+        self.in_vent = in_vent
+        if self.echo_q and self.echo_q[0][0] <= self.t:
+            due = [e for e in self.echo_q if e[0] <= self.t]
+            self.echo_q = [e for e in self.echo_q if e[0] > self.t]
+            self.sfx(due[-1][1], due[-1][2], gap=0.12)
         for b in self.bubbles:
             b[1] -= b[2] * dt * 6
             b[0] += math.sin(b[1] * 0.3) * dt * 2
@@ -585,6 +657,7 @@ class Dive:
             if abs(it["x"] - self.x) < 6 and abs(it["y"] - self.y) < 4:
                 w.loot.remove(it)
                 k = it["kind"]
+                self.sfx(k if k in ("salvage", "oxygen", "battery") else "pickup")
                 if k == "salvage":
                     self.salvage += it["value"]
                     self.say("Salvage: +%d" % it["value"], 2)
@@ -609,6 +682,8 @@ class Dive:
             self.oxygen = 0
             self.over = True
             self.cause = "The air ran out at %d m." % self.depth_m()
+        if self.over:                     # update() stops after this frame, so this plays once
+            self.sfx("source" if self.won else "death")
         self.hurt = max(0.0, self.hurt - dt)
         # forget faded echoes
         if int(self.t * 4) != int((self.t - dt) * 4):
@@ -664,6 +739,7 @@ class Dive:
             self.hull -= dmg
             self.hurt = 0.3
             self.make_noise(self.x, self.y, 70, 0.12)
+            self.sfx("hull", min(1.0, 0.5 + dmg / 20), gap=0.4)
             self.say("Hull impact! (-%d)" % dmg, 1.5)
             self.cause = "You crashed into the rock at %d m." % self.depth_m()
 
@@ -688,6 +764,7 @@ class Dive:
                     c.cool = 1.5
                     self.damage(4, "A jellyfish stung you to death at %d m." % self.depth_m())
                     self.say("Jellyfish sting!", 1.5)
+                    self.sfx("sting")
                     dl = d or 1   # it pushes you off
                     self.vx += (self.x - c.x) / dl * 16
                     self.vy += (self.y - c.y) / dl * 16
@@ -701,6 +778,9 @@ class Dive:
                     speed = 20
                 elif d < 22 and (self.lamp or self.t - c.seen < 1.0):
                     tx, ty, speed = self.x, self.y, 17      # slower than the sub: you can get away
+                    if not c.chasing:
+                        c.chasing = True
+                        self.sfx("lurker", gap=2.0)
                 elif c.target:
                     tx, ty, speed = c.target[0], c.target[1], 13
                     if math.hypot(tx - c.x, ty - c.y) < 4:
@@ -709,12 +789,15 @@ class Dive:
                     tx = c.hx + math.sin(c.ph * 0.3) * 18
                     ty = c.hy + math.cos(c.ph * 0.23) * 10
                     speed = 7
+                if d > 34 or c.flee > 0:
+                    c.chasing = False
                 self.swim(c, tx, ty, speed, dt)
                 if d < 5 and c.cool <= 0 and c.flee <= 0:
                     c.cool, c.flee = 4.0, 7.0
                     c.target = None
                     self.damage(9, "A lurker tore the hull open at %d m." % self.depth_m())
                     self.say("Something bit the hull! (-9)", 2)
+                    self.sfx("bite")
                 continue
             # the leviathan: slow, huge, it follows the loudest sound when the deep is loud enough
             if c.flee > 0:
@@ -723,6 +806,7 @@ class Dive:
                 if c.state != "hunt":
                     c.state = "hunt"
                     self.say("Something enormous has heard you...", 4)
+                    self.sfx("roar", gap=8.0)
                 tx, ty, speed = self.loud[0], self.loud[1], 15
             else:
                 if c.state == "hunt" and self.noise < 0.3:
@@ -754,6 +838,7 @@ class Dive:
                 self.vx += (self.x - c.x) * 2
                 self.vy += (self.y - c.y) * 2
                 self.say("THE LEVIATHAN STRUCK! (-42)", 3)
+                self.sfx("strike")
 
     def swim(self, c, tx, ty, speed, dt):
         w = self.w
@@ -1050,10 +1135,11 @@ HELP = [
     "Keep the NOISE bar low: loud dives wake what lives down there.",
     "The gauge on the right edge shows your depth and the Source at the bottom.",
     "",
-    "Esc / P                  pause menu (Q there: quit)",
+    "Esc / P                  pause menu (Q there: quit, M: sound on / off)",
     "?                        this help",
 ]
-PAUSE = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "Q                 quit to the menu"]
+PAUSE = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "M                 sound on / off",
+         "Q                 quit to the menu"]
 
 
 def render_end(d, cv, record):
@@ -1072,6 +1158,7 @@ class TitleDemo:
 
     def __init__(self):
         self.d = Dive(seed=7)
+        self.d.quiet = True
         p = self.d.w.path[60]
         self.d.x, self.d.y = p[0], p[1]
         self.d.msgs = []
@@ -1149,6 +1236,9 @@ def main():
                             d.paused = d.help = False
                         elif a == "quit":
                             back = True
+                        elif a == "sound":
+                            if SND.toggle():
+                                SND.play("sound_on")
                         elif a == "help":
                             d.help = not d.help
                             d.paused = True
@@ -1165,7 +1255,7 @@ def main():
                         continue
                     cv = render(d, cols, rows)
                     if d.paused:
-                        overlay(cv, HELP if d.help else PAUSE)
+                        overlay(cv, HELP if d.help else PAUSE + ["", SND.label()])
                     if d.over:
                         render_end(d, cv, record)
                     term.write(cv.emit())

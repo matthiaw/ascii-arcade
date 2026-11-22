@@ -20,7 +20,45 @@ import time
 
 from arcadekit import FONT, Canvas, Terminal, clamp, load_scores, mix, overlay, shade, shared_key, submit, title_screen
 
+try:
+    from arcadesound import Sound
+except ImportError:
+    class Sound:  # sound engine missing: stay silent
+        available = enabled = False
+        def __init__(self, *a, **k): pass
+        def play(self, *a, **k): pass
+        def toggle(self): return False
+        def label(self): return "Sound: none"
+        def stop(self): pass
+
 GAME = "nightdrive"
+
+# ---- sound effects (short and soft; nothing loops) ---------------------------------------------------------
+SND = Sound(GAME, {
+    "beep": [dict(w="square", f=659, d=0.12, v=0.38, duty=0.25, r="hold")],                       # 3, 2, 1
+    "go": [dict(w="square", f=1319, d=0.36, v=0.34, duty=0.25, r="lin", vib=(7, 0.15)),
+           dict(w="tri", f=659, d=0.36, v=0.3, at=0, r="lin")],
+    "gear": [dict(w="saw", f=95, f2=170, d=0.09, v=0.26), dict(w="square", f=48, f2=85, d=0.09, v=0.18, duty=0.2, at=0)],
+    "checkpoint": [dict(w="tri", f=784, d=0.08, v=0.45), dict(w="tri", f=988, d=0.08, v=0.45),
+                   dict(w="square", f=1319, d=0.32, v=0.3, duty=0.25, vib=(6, 0.2)),
+                   dict(w="tri", f=659, d=0.32, v=0.25, at=0.16)],
+    "tick": [dict(w="square", f=1760, d=0.025, v=0.28, duty=0.5)],                                  # low time
+    "tock": [dict(w="square", f=2349, d=0.03, v=0.32, duty=0.5)],                                   # last 3 s
+    "crash": [dict(w="noise", f=3200, f2=260, d=0.32, v=0.62), dict(w="square", f=95, f2=40, d=0.24, v=0.45, at=0),
+              dict(w="saw", f=880, f2=560, d=0.42, v=0.12, at=0.06, r="lin", vib=(28, 0.7))],          # crunch + skid
+    "bump": [dict(w="noise", f=1400, f2=200, d=0.11, v=0.42), dict(w="square", f=82, f2=50, d=0.1, v=0.32, at=0)],
+    "verge": [dict(w="noise", f=230, f2=170, d=0.26, v=0.22, a=0.02, r="hold")],                    # gravel rumble
+    "whoosh": [dict(w="noise", f=4200, f2=1100, d=0.3, v=0.16, a=0.12, r="lin")],                  # overtaking
+    "finish": [dict(w="tri", f=523, d=0.11), dict(w="tri", f=659, d=0.11), dict(w="tri", f=784, d=0.11),
+               dict(w="tri", f=1047, d=0.11), dict(w="square", f=1047, d=0.55, v=0.3, duty=0.25, vib=(6, 0.25)),
+               dict(w="tri", f=523, d=0.55, v=0.35, at=0.44), dict(w="tri", f=784, d=0.55, v=0.25, at=0.44)],
+    "timeup": [dict(w="square", f=440, d=0.18, v=0.32, duty=0.25), dict(w="square", f=370, d=0.18, v=0.32, duty=0.25),
+               dict(w="square", f=311, d=0.18, v=0.32, duty=0.25),
+               dict(w="tri", f=262, f2=196, d=0.6, v=0.45, r="lin", vib=(5, 0.3))],
+    "select": [dict(w="square", f=880, d=0.035, v=0.26, duty=0.25)],
+    "start": [dict(w="square", f=659, d=0.06, v=0.3, duty=0.25), dict(w="square", f=988, d=0.14, v=0.3, duty=0.25)],
+})
+GEARS = (0.3, 0.52, 0.72, 0.88)  # share of top speed where the engine "shifts up" (a short blip)
 
 # ---- world and car constants -------------------------------------------------------------------------------
 SEG = 200.0               # length of one road segment (world units)
@@ -321,6 +359,10 @@ class Race:
         self.cars = []
         self.cp_times = []                           # time left at each checkpoint
         self.reached = start                         # furthest stage entered
+        self.count_n = -1                            # last countdown number beeped
+        self.tick_s = 99                             # last low-time second ticked
+        self.gear = 0
+        self.verge_cd = 0.0
         self.fill_traffic(initial=True)
 
     # ---- small helpers ---------------------------------------------------------------------------------
@@ -342,6 +384,11 @@ class Race:
 
     def say(self, s, ttl=2.5, col=(255, 240, 200)):
         self.msgs.append([s, ttl, col])
+
+    def sfx(self, name, vol=1.0, gap=0.04):
+        """A sound effect - never from the title demo (and silent in the tests anyway)."""
+        if not self.demo:
+            SND.play(name, vol, gap)
 
     # ---- input: the same calls for the player and the autopilot -------------------------------------
     def key(self, k):
@@ -383,9 +430,13 @@ class Race:
         for m in self.msgs:
             m[1] -= dt
         if self.state == "count":
+            if int(self.t_state) != self.count_n and self.t_state < 3.0:
+                self.count_n = int(self.t_state)
+                self.sfx("beep")
             if self.t_state >= 3.0:
                 self.state, self.t_state = "run", 0.0
                 self.say("GO!", 1.2, (120, 255, 140))
+                self.sfx("go")
             self.traffic(dt)
             return
         running = self.state == "run"
@@ -395,6 +446,14 @@ class Race:
                 self.time_left = 0.0
                 self.state, self.t_state = "timeup", 0.0
                 running = False
+                self.sfx("timeup")
+            elif self.time_left < 10:                # one tick per second when time runs low
+                s = int(math.ceil(self.time_left))
+                if s != self.tick_s:
+                    self.tick_s = s
+                    self.sfx("tock" if s <= 3 else "tick", 0.8)
+            else:
+                self.tick_s = 99
         trk = self.trk
         # controls
         self.steer_hold -= dt
@@ -440,6 +499,18 @@ class Race:
                 self.shake = min(1.0, self.shake + dt * 8)
         self.speed = clamp(self.speed, 0.0, MAXV)
         self.x = clamp(self.x, -2.5, 2.5)
+        # engine: a short blip when shifting up under hard throttle; rumble on the verge (rate-limited)
+        g = sum(1 for b in GEARS if self.speed > b * MAXV)
+        if g > self.gear:
+            if thr > 0.6 and running and not offroad:
+                self.sfx("gear", 0.7, 0.3)
+            self.gear = g
+        elif g < self.gear and self.speed < GEARS[self.gear - 1] * MAXV * 0.9:
+            self.gear = g
+        self.verge_cd -= dt
+        if offroad and running and self.speed > MAXV * 0.08 and self.verge_cd <= 0:
+            self.verge_cd = 0.3
+            self.sfx("verge", 0.5 + 0.5 * self.speed / OFFROAD_V, 0.25)
         old_pz = self.pz
         self.pos += self.speed * dt
         moved = self.speed * dt
@@ -474,6 +545,7 @@ class Race:
                 else:
                     self.score += int(self.time_left) * 100
                     self.state, self.t_state = "finish", 0.0
+                    self.sfx("finish")
             else:
                 s = self.trk.ranges[self.ci][0]
                 self.reached = max(self.reached, s)
@@ -481,6 +553,7 @@ class Race:
                 if not self.demo:
                     self.time_left += bonus
                     self.score += 1000
+                self.sfx("checkpoint")
                 self.say("CHECKPOINT  +%d s" % bonus, 3.0, (120, 255, 160))
                 self.say("STAGE %d  %s" % (s + 1, STAGES[s]["name"]), 3.0, (255, 220, 120))
 
@@ -491,6 +564,7 @@ class Race:
         self.hit_cool = spin + 0.5
         self.shake = 1.0
         self.crashes += 1
+        self.sfx("crash", 0.9, 0.3)
 
     # ---- traffic ---------------------------------------------------------------------------------------
     def spawn(self, z, onc):
@@ -554,6 +628,7 @@ class Race:
                     c.ahead = False
                     self.overtakes += 1
                     self.score += 50
+                    self.sfx("whoosh", 0.6, 0.5)
                 if self.hit_cool > 0 or abs(c.x - self.x) > CAR_HALF * 1.8:
                     continue
                 if abs(dz) < 260 or (pdz > 0) != (dz > 0):
@@ -567,6 +642,8 @@ class Race:
                         self.pos = c.z - 300 - PLAYER_Z
                         self.hit_cool = 0.5
                         self.shake = 0.8
+                        if rel <= 0.4:
+                            self.sfx("bump", 0.8, 0.3)
                         if rel > 0.4:
                             self.crash(0.6, c.v * 0.8 / MAXV, 1 if self.x > c.x else -1)
         self.cars = [c for c in cars if pz - 25 * SEG < c.z < pz + (DRAW + 160) * SEG]
@@ -1500,9 +1577,11 @@ HELP = [
     "rocks spin you round. Throttle auto/manual is set on the title.",
     "",
     "Esc / P                  pause menu (Q there: quit)",
+    "M  (in the pause menu)   sound on / off",
     "?                        this help",
 ]
-PAUSE = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "Q                 quit to the menu"]
+PAUSE = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "M                 sound on / off",
+         "Q                 quit to the menu"]
 
 
 def render_end(cv, r, record):
@@ -1726,16 +1805,20 @@ def main():
                         return
                     elif k in ("up", "w"):
                         sel = (sel - 1) % 3
+                        SND.play("select")
                     elif k in ("down", "s"):
                         sel = (sel + 1) % 3
+                        SND.play("select")
                     elif k in ("left", "right", "a", "d"):
                         d = -1 if k in ("left", "a") else 1
                         if sel == 1:
                             start = (start + d) % (unlocked + 1)
                         elif sel == 2:
                             auto = not auto
+                        SND.play("select")
                     elif k in ("enter", " "):
                         go = True
+                        SND.play("start")
             while True:                                  # one race; Enter on the end screen starts another
                 r = Race(start, auto=auto)
                 last = time.time()
@@ -1750,6 +1833,7 @@ def main():
                                 back = True
                             elif k in ("enter", " "):
                                 again = True
+                                SND.play("start")
                             continue
                         a = shared_key(k, r.paused, pause_keys=("esc", "p", "q"))
                         if a == "pause":
@@ -1761,6 +1845,9 @@ def main():
                         elif a == "help":
                             r.help = not r.help
                             r.paused = True
+                        elif a == "sound":
+                            if SND.toggle():
+                                SND.play("select")
                         elif a is None:
                             r.key(k)
                     r.update(min(0.1, now - last))
@@ -1779,7 +1866,7 @@ def main():
                         continue
                     cv = render(r, cols, rows)
                     if r.paused:
-                        overlay(cv, HELP if r.help else PAUSE)
+                        overlay(cv, HELP if r.help else PAUSE + ["", SND.label()])
                     elif r.state in ("timeup", "finish") and r.t_state > 0.8:
                         render_end(cv, r, record)
                     term.write(cv.emit())

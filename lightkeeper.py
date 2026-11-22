@@ -23,6 +23,7 @@ import time
 from collections import deque
 
 from arcadekit import Canvas, Terminal, clamp, load_scores, mix, overlay, shade, shared_key, submit, title_screen
+from arcadesound import Sound
 
 GAME = "lightkeeper"
 WATER, ROCK, LAND, HARBOUR = 0, 1, 2, 3
@@ -43,6 +44,41 @@ UPGRADES = [
     ("buoy", "Spare lifebuoy", "one more life"),
 ]
 WEATHER = ["calm", "breezy", "fog banks", "rain and lightning", "storm"]
+
+# Sounds: the foghorn is the voice of the lighthouse; the rest is weather, wood and little bells.
+SND = Sound(GAME, {
+    "horn": [dict(w="saw", f=98, f2=94, d=1.05, v=0.34, a=0.12, r="hold", vib=(4.5, 0.08)),
+             dict(w="square", f=98.8, f2=94.6, d=1.0, v=0.18, a=0.14, r="hold", duty=0.4, at=0),
+             dict(w="saw", f=147.5, f2=141.5, d=0.95, v=0.1, a=0.16, r="hold", at=0)],
+    "refill": [dict(w="sine", f=180, f2=120, d=0.09, v=0.32), dict(w="sine", f=210, f2=130, d=0.09, v=0.28),
+               dict(w="sine", f=190, f2=115, d=0.1, v=0.24), dict(w="sine", f=230, f2=140, d=0.12, v=0.2)],
+    "relit": [dict(w="noise", f=3000, f2=900, d=0.18, v=0.16), dict(w="tri", f=440, d=0.1, v=0.14, at=0.04)],
+    "empty": [dict(w="tri", f=330, f2=160, d=0.3, v=0.24), dict(w="noise", f=1200, f2=300, d=0.2, v=0.1, at=0)],
+    "saved": [dict(w="tri", f=784, d=0.08, v=0.28), dict(w="tri", f=1047, d=0.08, v=0.26),
+              dict(w="sine", f=1568, d=0.35, v=0.18)],
+    "wreck": [dict(w="noise", f=1400, f2=90, d=0.5, v=0.55), dict(w="square", f=110, f2=45, d=0.35, v=0.3, at=0),
+              dict(w="noise", f=600, f2=120, d=0.25, v=0.3, at=0.12)],
+    "flare": [dict(w="noise", f=6000, f2=2500, d=0.25, v=0.16, a=0.02),
+              dict(w="saw", f=500, f2=1300, d=0.25, v=0.08, at=0), dict(w="noise", f=3000, d=0.1, v=0.12, at=0.28)],
+    "boat_away": [dict(w="square", f=70, d=0.04, v=0.2, duty=0.3), dict(w="square", f=74, d=0.04, v=0.2, duty=0.3),
+                  dict(w="square", f=80, d=0.04, v=0.2, duty=0.3), dict(w="square", f=86, d=0.04, v=0.2, duty=0.3),
+                  dict(w="tri", f=440, f2=660, d=0.16, v=0.2)],
+    "pickup": [dict(w="tri", f=523, d=0.07, v=0.26), dict(w="tri", f=659, d=0.12, v=0.24)],
+    "rescued": [dict(w="tri", f=523, d=0.1, v=0.28), dict(w="tri", f=659, d=0.1, v=0.28),
+                dict(w="tri", f=784, d=0.1, v=0.28), dict(w="sine", f=1047, d=0.4, v=0.24, vib=(5, 0.15))],
+    "thunder": [dict(w="noise", f=260, f2=40, d=1.2, v=0.5, a=0.02, r="exp"),
+                dict(w="noise", f=90, f2=30, d=1.1, v=0.35, a=0.15, r="lin", at=0.1)],
+    "lost": [dict(w="sine", f=392, d=0.3, v=0.26), dict(w="sine", f=311, d=0.55, v=0.24, vib=(4, 0.2))],
+    "dawn": [dict(w="tri", f=392, d=0.14, v=0.26), dict(w="tri", f=523, d=0.14, v=0.26),
+             dict(w="tri", f=659, d=0.14, v=0.26), dict(w="tri", f=784, d=0.2, v=0.26),
+             dict(w="sine", f=1047, d=0.45, v=0.22, vib=(5, 0.12)), dict(w="sine", f=523, d=0.6, v=0.12, at=0.56)],
+    "pick": [dict(w="tri", f=880, d=0.03, v=0.18)],
+    "upgrade": [dict(w="square", f=659, d=0.07, v=0.24, duty=0.25), dict(w="square", f=988, d=0.18, v=0.24, duty=0.25)],
+    "over": [dict(w="saw", f=196, f2=180, d=0.4, v=0.2, a=0.05, r="lin"),
+             dict(w="saw", f=165, f2=150, d=0.4, v=0.2, a=0.05, r="lin"),
+             dict(w="saw", f=131, f2=98, d=0.42, v=0.2, a=0.05, r="lin", vib=(4, 0.2))],
+    "sound_on": [dict(w="tri", f=440, d=0.07, v=0.3), dict(w="tri", f=880, d=0.14, v=0.28)],
+})
 
 
 def wrap(a):
@@ -240,6 +276,8 @@ class Night:
         self.flash = 0.0
         self.over = self.dawn = False
         self.paused = self.help = False
+        self.quiet = False         # the title demo keeps its light without sound
+        self.flare_at = None       # next distress flare sound while a wreck waits
         self.saved = self.wrecks = self.rescued = self.lost = 0
         n = 3 + 2 * night + max(0, night - 3) * 2
         self.schedule = sorted(self.rnd.uniform(4, self.length * 0.72) for _ in range(n))
@@ -277,6 +315,10 @@ class Night:
     def say(self, s, ttl=3.0):
         self.msgs.append([s, self.t + ttl])
         self.msgs = self.msgs[-3:]
+
+    def sfx(self, name, vol=1.0, gap=0.04):
+        if not self.quiet:
+            SND.play(name, vol, gap)
 
     # --- the light --------------------------------------------------------------------------------
     def fog_at(self, x, y):
@@ -326,6 +368,7 @@ class Night:
         elif k == "r":
             if self.refill <= 0 and self.oil < self.tank() - 1:
                 self.refill = 4.0
+                self.sfx("refill")
                 self.say("Refilling the lamp - the coast goes dark for a moment.", 3)
         elif k == "b" and not coop:
             self.send_boat()
@@ -336,6 +379,7 @@ class Night:
             b.vy += dy * 5
             if b.state == "docked":
                 b.state = "out"
+                self.sfx("boat_away")
 
     def horn(self):
         if self.horn_cd > 0:
@@ -343,6 +387,7 @@ class Night:
             return
         self.horn_cd = max(3.0, 8.0 - 2.0 * self.up.get("horn", 0))
         self.horn_ring = self.t
+        self.sfx("horn", gap=1.0)
         R = self.horn_radius()
         n = 0
         for s in self.ships:
@@ -363,6 +408,7 @@ class Night:
             return
         w = min(wrecks, key=lambda s: math.hypot(s.x - b.x, s.y - b.y))
         self.boat_to(w)
+        self.sfx("boat_away")
         self.say("Rescue boat away - light its way, it is slow in the dark.", 3)
 
     def boat_to(self, wreck):
@@ -387,10 +433,14 @@ class Night:
             self.oil = min(self.tank(), self.oil + self.tank() / 4.0 * dt)
             if self.refill <= 0:
                 self.say("The lamp burns again.", 1.5)
+                self.sfx("relit")
         else:
             narrow = (0.45 - self.half) / 0.33
+            had_oil = self.oil > 0
             self.oil -= dt * (0.9 + 1.2 * narrow)      # a bigger tank simply lasts longer
             if self.oil <= 0:
+                if had_oil:
+                    self.sfx("empty")
                 self.oil = 0
                 if int(self.t * 2) % 8 == 0:
                     self.say("The lamp is out of oil! Press R to refill.", 1.5)
@@ -399,6 +449,7 @@ class Night:
         self.flash = max(0.0, self.flash - dt * 4)
         if self.lightning and self.rnd.random() < self.lightning * dt:
             self.flash = 1.0
+            self.sfx("thunder", 0.8 + 0.2 * self.rnd.random(), gap=0.8)
             for s in self.ships:
                 if s.state == "sailing":
                     s.aware = max(s.aware, 1.2)
@@ -412,14 +463,24 @@ class Night:
         for s in self.ships:
             self.update_ship(s, dt)
         self.update_boat(dt)
+        if any(s.state == "wrecked" for s in self.ships):      # red distress flares now and then
+            if self.flare_at is None:
+                self.flare_at = self.t + 0.9
+            elif self.t >= self.flare_at:
+                self.flare_at = self.t + 10.0
+                self.sfx("flare", 0.8)
+        else:
+            self.flare_at = None
         self.msgs = [m for m in self.msgs if m[1] > self.t]
         if self.lives <= 0:
             self.over = True
+            self.sfx("over")
         elif self.t >= self.length and not self.schedule and not any(
                 s.state in ("sailing", "wrecked") for s in self.ships) and self.boat.state != "carrying":
             self.dawn = True
             self.score += 300 * self.night
             self.say("Dawn.", 3)
+            self.sfx("dawn")
 
     def spawn(self):
         c, rnd = self.c, self.rnd
@@ -439,6 +500,7 @@ class Night:
                 self.lives -= 1
                 self.lost += 1
                 self.say("The crew of the %s was lost." % s.label, 4)
+                self.sfx("lost")
             return
         if s.state != "sailing":
             return
@@ -480,12 +542,14 @@ class Night:
             pts = int(s.points * (1 + 0.1 * self.night))
             self.score += pts
             self.say("The %s is safe in harbour. +%d" % (s.label, pts), 2.5)
+            self.sfx("saved")
         elif here in (ROCK, LAND) or bow in (ROCK, LAND):
             s.state = "wrecked"
             s.timer = max(20.0, 52.0 - 4 * self.night)
             self.wrecks += 1
             hint = "Press B for the rescue boat!" if self.keepers == 1 else "Rescue boat, go!"
             self.say("The %s ran aground! %d aboard. %s" % (s.label, s.crew, hint), 4)
+            self.sfx("wreck", gap=0.2)
 
     def update_boat(self, dt):
         b, c = self.boat, self.c
@@ -528,6 +592,7 @@ class Night:
                         b.crew, s.state = s.crew, "rescued"
                         b.state = "carrying"
                         self.say("%d sailors aboard the rescue boat - bring them home." % b.crew, 3)
+                        self.sfx("pickup")
                         if self.keepers == 1:
                             b.field = c.field([b.home], keep_off=0)
                     break
@@ -546,6 +611,7 @@ class Night:
                 self.score += pts
                 self.rescued += b.crew
                 self.say("%d sailors rescued. +%d" % (b.crew, pts), 3)
+                self.sfx("rescued")
             b.crew, b.state, b.target, b.field = 0, "docked", None, None
         if self.keepers == 2 and b.state == "out" and b.crew == 0 and \
                 math.hypot(b.x - b.home[0], b.y - b.home[1]) < 3 and math.hypot(b.vx, b.vy) < 1:
@@ -760,7 +826,7 @@ HELP_SOLO = [
     "Wrecks fire red flares - rescue the crew before time runs out.",
     "The rescue boat is slow in the dark: keep it in the light.",
     "",
-    "Esc / P                  pause menu (Q there: quit)",
+    "Esc / P                  pause menu (Q there: quit, M: sound on / off)",
     "?                        this help",
 ]
 HELP_COOP = [
@@ -773,10 +839,11 @@ HELP_COOP = [
     "",
     "The boat is slower in the dark - the keeper should light its way.",
     "",
-    "Esc / P            pause menu (Q there: quit)",
+    "Esc / P            pause menu (Q there: quit, M: sound on / off)",
     "?                  this help",
 ]
-PAUSE = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "Q                 quit to the menu"]
+PAUSE = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "M                 sound on / off",
+         "Q                 quit to the menu"]
 
 
 # =============================================================================================
@@ -846,6 +913,7 @@ class TitleDemo:
         W, H = map_size(cols, rows)
         self.size = (cols, rows)
         self.n = Night(W, H, 11, 2)
+        self.n.quiet = True
         self.n.msgs = []
         self.p = Painter(self.n)
         self.n.half = 0.2
@@ -924,9 +992,12 @@ def main():
                         if n.dawn:
                             if k in ("up", "w"):
                                 camp.pick = (camp.pick - 1) % 3
+                                SND.play("pick")
                             elif k in ("down", "s"):
                                 camp.pick = (camp.pick + 1) % 3
+                                SND.play("pick")
                             elif k in ("enter", " "):
+                                SND.play("upgrade")
                                 camp.take_upgrade()
                                 n = camp.n
                             elif k in ("q", "esc"):
@@ -939,6 +1010,9 @@ def main():
                             n.paused = n.help = False
                         elif a == "quit":
                             back = True
+                        elif a == "sound":
+                            if SND.toggle():
+                                SND.play("sound_on")
                         elif a == "help":
                             n.help = not n.help
                             n.paused = True
@@ -955,7 +1029,7 @@ def main():
                         continue
                     cv = render(n, camp.p, cols, rows)
                     if n.paused:
-                        overlay(cv, (HELP_COOP if keepers == 2 else HELP_SOLO) if n.help else PAUSE)
+                        overlay(cv, (HELP_COOP if keepers == 2 else HELP_SOLO) if n.help else PAUSE + ["", SND.label()])
                     if n.dawn:
                         render_dawn(cv, camp)
                     if n.over:
