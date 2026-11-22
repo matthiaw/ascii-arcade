@@ -6,7 +6,7 @@
 #   brew trust --formula matthiaw/arcade/ascii-arcade
 #   brew install ascii-arcade
 class AsciiArcade < Formula
-  desc "Ten games for the terminal, drawn in truecolor half-block pixels"
+  desc "Eleven games for the terminal, drawn in truecolor half-block pixels"
   homepage "https://github.com/matthiaw/ascii-arcade"
   url "https://github.com/matthiaw/ascii-arcade.git", tag: "v1.1.0"
   license "MIT"

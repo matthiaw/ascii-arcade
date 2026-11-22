@@ -389,6 +389,7 @@ ACCENTS = {  # (top, bottom) of each game's title gradient
     "SKYSHOT": ((255, 140, 170), (200, 60, 110)),
     "NIGHTDRIVE": ((255, 120, 230), (130, 70, 255)),
     "ORBITAL": ((200, 240, 255), (120, 170, 255)),
+    "LEAFLING": ((250, 224, 110), (118, 196, 58)),
 }
 
 

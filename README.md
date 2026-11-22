@@ -67,6 +67,7 @@ kitty, Ghostty); 256 colours work too. Bigger windows give bigger pictures.
 | **SKYSHOT** | An artillery duel on ground that breaks apart: set angle and power, read the wind, carve craters under the other tank. Four shells, best of three rounds. Two players at one keyboard or one against the computer (easy / normal / hard). | 70x22+ |
 | **NIGHTDRIVE** | Race through the night against the clock: winding hilly roads, headlights and street lamps, traffic and oncoming cars, six stages from neon city to a rainstorm. | 70x22+ |
 | **ORBITAL** | A calm gravity puzzle: launch a probe past planets, moons, asteroid belts and wormholes to the dock ring. Fewer launches, more stars. | 70x22+ |
+| **LEAFLING** | A jump'n'run with a leaf for a hat: run, jump, glide and wall-jump through twelve levels in four worlds (sunlit forest canopy, crystal caves, wind-swept sky ruins, an autumn storm at night), with light motes, hidden seeds, lanterns, beetles, bats, spitting plants, two chases and two bosses. | 70x22+ |
 | **STACKFALL** | Falling blocks in a well ten wide and twenty deep. Modes: Marathon, Sprint (40 rows), Rising (rubble pushes up from below). | 40x20+ |
 | **DEPTHWELL** | Falling blocks in three dimensions: look down into a well, turn cube pieces about all three axes, fill whole layers. Four well sizes, three piece sets. | 70x24+ |
 
@@ -155,6 +156,30 @@ and your last three paths stay on screen as faint lines. Reach the gold dock rin
 order first): one launch earns three stars, two or three launches two stars. Eight lessons come first, then
 generated levels add moving moons, asteroid belts, wormholes, a fuel nudge and waypoints.
 
+## LEAFLING keys
+
+| Key | |
+|---|---|
+| Left / Right (`A` / `D`) | run |
+| Space / Up / `W` / `Z` | jump - press again in the air to glide on your leaf |
+| Down (`S`) | drop through thin platforms; also stops you |
+| `R` | back to the last lantern |
+| Esc / `P` | pause menu (`Q` there: back to the world map, `M`: sound on / off) |
+| `?` | help |
+
+Slide down mossy walls and jump off them to climb; springy mushrooms throw you high; crumbling blocks fall
+away under your feet. Stomp beetles, bats and plants from above and dodge the seeds the plants spit. Touch a
+lantern to make it your restart point. Every level hides three seeds (behind fake walls, high up, off the
+beaten path); every 50 light motes give an extra leaf. The last level of each world ends with a set piece:
+a bramble wall or a storm front chasing you, or a beetle boss you stomp while it is dizzy. Levels unlock as you
+finish them; the world map shows your best time and seeds per level.
+
+Terminals with the kitty keyboard protocol (kitty, WezTerm, Ghostty, recent iTerm2) report key releases: there
+the jump height follows how long you hold the key and holding jump in the air glides. In other terminals (macOS
+Terminal) a direction key keeps you running while it repeats (it bridges the initial repeat delay), the other
+direction turns at once, Down stops; jumps are always full and jump in the air switches the glide on and off.
+`python3 leafling.py --selftest` plans a route through every level with the game's own physics.
+
 ## STACKFALL keys
 
 | Key | |
@@ -221,7 +246,7 @@ change and share the games freely, as long as the copyright notice stays in.
 | `arcade.py` | the launcher |
 | `arcadekit.py` | shared toolkit: raw terminal input, half-block pixel canvas, block font, high scores |
 | `arcadesound.py` | the sound engine: synthesized effects, played without waiting |
-| `stackfall.py`, `depthwell.py`, `deepcall.py`, `lightkeeper.py`, `skyshot.py`, `nightdrive.py`, `orbital.py` | the games written for the arcade (use `arcadekit.py`) |
+| `stackfall.py`, `depthwell.py`, `deepcall.py`, `lightkeeper.py`, `skyshot.py`, `nightdrive.py`, `orbital.py`, `leafling.py` | the games written for the arcade (use `arcadekit.py`) |
 | `hoverdrift.py`, `emberfall.py`, `blockfire.py` | HOVERDRIFT, EMBERFALL and BLOCKFIRE (they run on their own and do not need `arcadekit.py`) |
 | `extras/emberfall-art/` | the source images and tools behind EMBERFALL's pictures (not in the Homebrew package) |
 | `VERSION` | the current version (written by the release workflow) |

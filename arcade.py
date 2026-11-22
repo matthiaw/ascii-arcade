@@ -60,6 +60,10 @@ GAMES = [
          info=["Set angle and power, launch the probe and let", "the planets' gravity bend its path to the dock.",
                "Moons, asteroid belts, wormholes; fewer tries."],
          keys="arrows aim/power   Space launch   R retry   N/B level", size=(70, 22), score="orbital"),
+    dict(file="leafling.py", name="LEAFLING", tag="a jump'n'run with a leaf for a hat",
+         info=["Run, jump, glide on your leaf and wall-jump", "through a forest canopy, crystal caves, sky",
+               "ruins and an autumn storm. Find the seeds."],
+         keys="arrows run   Space jump / glide   Down drop", size=(70, 22), score="leafling"),
     dict(file="stackfall.py", name="STACKFALL", tag="falling blocks, ten wide, twenty deep",
          info=["Turn and drop seven kinds of pieces, fill rows", "to melt them away. Marathon, Sprint (40 rows)",
                "and Rising, where rubble pushes up from below."],
@@ -251,7 +255,7 @@ def thumb_sky(cv, x, y, w, h, t):
     skyshot.preview(cv, x, y, w, h, t)
 
 
-_ND, _OR = [], []
+_ND, _OR, _LF = [], [], []
 
 
 def blit_scene(cv, x, y, w, h, sub):
@@ -280,7 +284,17 @@ def thumb_orbital(cv, x, y, w, h, t):
     blit_scene(cv, x, y, w, h, _OR[0].scene(w, (h + 1) // 2, dt))
 
 
-THUMBS = {"nightdrive.py": thumb_night, "orbital.py": thumb_orbital, "skyshot.py": thumb_sky, "lightkeeper.py": thumb_light, "deepcall.py": thumb_deep, "hoverdrift.py": thumb_hover, "emberfall.py": thumb_ember, "stackfall.py": thumb_stack,
+def thumb_leaf(cv, x, y, w, h, t):
+    """Leafling running and gliding through LEAFLING's four worlds."""
+    import leafling
+    if not _LF:
+        _LF[:] = [leafling.TitleDemo(), t]
+    dt = min(0.1, max(0.0, t - _LF[1]))
+    _LF[1] = t
+    blit_scene(cv, x, y, w, h, _LF[0].scene(w, (h + 1) // 2, dt))
+
+
+THUMBS = {"nightdrive.py": thumb_night, "orbital.py": thumb_orbital, "leafling.py": thumb_leaf, "skyshot.py": thumb_sky, "lightkeeper.py": thumb_light, "deepcall.py": thumb_deep, "hoverdrift.py": thumb_hover, "emberfall.py": thumb_ember, "stackfall.py": thumb_stack,
           "depthwell.py": thumb_depth, "blockfire.py": thumb_block}
 
 
@@ -290,6 +304,10 @@ def record_line(g):
     rec = load_scores().get(g["score"], {})
     if not rec:
         return "no records yet"
+    if g["score"] == "leafling":
+        done = sum(1 for k in rec if k.endswith(" time"))
+        seeds = sum(bin(v).count("1") for k, v in rec.items() if k.endswith(" seeds"))
+        return "best: %d of 12 levels done, %d of 36 seeds" % (done, seeds)
     parts = []
     for mode, v in sorted(rec.items()):
         parts.append("%s %s" % (mode, ("%d:%05.2f" % (v // 60, v % 60)) if mode == "Sprint" else v))
