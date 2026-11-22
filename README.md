@@ -13,10 +13,11 @@ Every game can also be started on its own (`python3 stackfall.py` and so on).
 
 ```sh
 brew tap matthiaw/arcade https://github.com/matthiaw/ascii-arcade
+brew trust --formula matthiaw/arcade/ascii-arcade
 brew install ascii-arcade
 ```
 
-If Homebrew says the tap is not trusted: `brew trust --formula matthiaw/arcade/ascii-arcade`, then install again.
+(`brew trust` is needed from Homebrew 7 on, which only loads formulae from other taps once you trust them.)
 Afterwards:
 
 ```sh

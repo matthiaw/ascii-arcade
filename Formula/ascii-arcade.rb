@@ -3,6 +3,7 @@
 #
 # Homebrew formula. The release workflow (.github/workflows/release.yml) updates the tag below.
 #   brew tap matthiaw/arcade https://github.com/matthiaw/ascii-arcade
+#   brew trust --formula matthiaw/arcade/ascii-arcade
 #   brew install ascii-arcade
 class AsciiArcade < Formula
   desc "Ten games for the terminal, drawn in truecolor half-block pixels"
