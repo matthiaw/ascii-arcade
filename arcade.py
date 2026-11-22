@@ -80,15 +80,15 @@ GAMES = [
          info=["Gather light motes in a night garden maze; sun", "blossoms turn four shadow spirits pale to catch.",
                "Eight mazes: one-way gates, fog, total dark."],
          keys="arrows move   Esc pause   ? help", size=(60, 22), score="glimmer"),
-    dict(file="sporefield.py", name="SPOREFIELD", tag="stop the sporeworm before it reaches the roots",
+    dict(file="sporefield.py", name="SPOREFIELD", tag="stop the sporeworm before the roots",
          info=["Shoot the sporeworm winding down a night meadow:", "every hit splits it and leaves a toadstool.",
                "Jitterlegs, moths, puffballs; glowing seeds."],
          keys="arrows move   Space fire   F auto-fire", size=(60, 22), score="sporefield"),
-    dict(file="scaffold.py", name="SCAFFOLD", tag="climb the tower, dodge what the Wrecker throws",
+    dict(file="scaffold.py", name="SCAFFOLD", tag="climb the tower past the Wrecker",
          info=["A runaway demolition robot holds the top of a", "skyscraper. Climb girders, belts, lifts and",
                "cranes past its drums; cut its power at night."],
          keys="arrows walk / climb   Space jump", size=(60, 22), score="scaffold"),
-    dict(file="voidlance.py", name="VOIDLANCE", tag="a side-scrolling star fighter with a charge lance",
+    dict(file="voidlance.py", name="VOIDLANCE", tag="a star fighter with a charge lance",
          info=["Charge the lance, dock the Warden pod at nose", "or tail, six crystal weapons, missiles, bits.",
                "Eight stages, eight midbosses, eight bosses."],
          keys="arrows fly   Space shoot/charge   F pod   B bomb", size=(70, 22), score="voidlance"),
@@ -102,7 +102,7 @@ HELP = [
     "ASCII ARCADE - keys",
     "",
     "Up / Down            choose a game",
-    "1 - 9, 0             jump to a game (0 again: the games after 10)",
+    "1 - 9, 10 - 15       jump to a game (two digits: type them quickly)",
     "Enter / Space        play",
     "M                    sound on / off",
     "G                    pixels: fine / smart / solid",
@@ -366,8 +366,11 @@ PANEL, PANEL_FG = (16, 14, 30), (222, 222, 234)                         # backin
 
 
 def badge(i):
-    """The key that reaches game i: 1-9, then 0 for the tenth; pressing 0 again steps on (0x2 = 0 twice)."""
-    return str(i + 1) if i < 9 else "0" if i == 9 else "0x%d" % (i - 8)
+    """The game's number: typed as one digit, or two digits in quick succession (1 then 2 = game 12)."""
+    return str(i + 1)
+
+
+DIGIT_GAP = 0.8      # seconds in which a second digit joins the first one
 
 
 def accent(g):
@@ -482,7 +485,7 @@ def render(cols, rows, sel, t, note, help_=False):
     snd = SND.label().lower()
     pix = arcadekit.PIXEL_MODE
     if cols >= 112:
-        footer(cv, "Up/Down choose   1-9 0 jump   Enter play   M %s   G pixels: %s   ? help   Esc quit" % (snd, pix))
+        footer(cv, "Up/Down choose   1-15 jump   Enter play   M %s   G pixels: %s   ? help   Esc quit" % (snd, pix))
     elif cols >= 96:
         footer(cv, "Up/Down choose   Enter play   M %s   G pixels: %s   ? help   Esc quit" % (snd, pix))
     else:
@@ -501,6 +504,7 @@ def menu(sel, note):
     with Terminal() as term:
         t0 = time.time()
         help_ = False
+        digit = (None, 0.0)          # the last digit typed and when
         while True:
             cols, rows = term.size()
             if cols < 60 or rows < 20:
@@ -530,12 +534,20 @@ def menu(sel, note):
                 elif k in ("down", "s", "j", "tab"):
                     sel = (sel + 1) % len(GAMES)
                     SND.play("move")
-                elif k in tuple("123456789"):
-                    sel = min(len(GAMES) - 1, int(k) - 1)
-                    SND.play("move")
-                elif k == "0" and len(GAMES) > 9:        # 0 reaches game 10; pressed again, the ones after it
-                    sel = sel + 1 if 9 <= sel < len(GAMES) - 1 else 9
-                    SND.play("move")
+                elif k in tuple("0123456789"):
+                    now = time.time()
+                    prev, when = digit
+                    n = int(k)
+                    if prev is not None and now - when < DIGIT_GAP and 1 <= prev * 10 + n <= len(GAMES):
+                        n = prev * 10 + n                 # second digit: 1 then 2 = game 12
+                        digit = (None, 0.0)
+                    else:
+                        digit = (n, now)
+                        if n == 0:
+                            n = 10                        # 0 alone: game 10, as before
+                    if 1 <= n <= len(GAMES):
+                        sel = n - 1
+                        SND.play("move")
                 elif k in ("enter", " "):
                     SND.play("start")
                     return sel

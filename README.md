@@ -1,7 +1,7 @@
 # ASCII ARCADE
 
 A little collection of games for the terminal. Start the launcher, pick a game with the arrow keys (or its
-number: 1-9, 0 for the tenth, 0 again for each game after it), press Enter. When the game ends you are back in the menu.
+number: 1-15, two digits typed quickly one after the other), press Enter. When the game ends you are back in the menu.
 
 ```sh
 python3 arcade.py
