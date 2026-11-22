@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Matthias Wegner
+# SPDX-License-Identifier: MIT (see the LICENSE file)
 """
 BLOCKFIRE - a first-person arena shooter in your terminal.
 

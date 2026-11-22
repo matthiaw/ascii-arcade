@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Matthias Wegner
+# SPDX-License-Identifier: MIT (see the LICENSE file)
 """STACKFALL - falling blocks in your terminal.
 
 Seven four-block pieces fall into a well ten wide and twenty deep. Fill a row and it melts away; let the

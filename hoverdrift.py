@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Matthias Wegner
+# SPDX-License-Identifier: MIT (see the LICENSE file)
 """HOVERDRIFT - glide over endless painted landscapes, right in your terminal.
 
 A voxel-space renderer (height map + colour map, drawn column by column like the flight games of the

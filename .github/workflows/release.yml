@@ -1,0 +1,70 @@
+# Automatic versioning: every push to main becomes a release.
+# The version rises by patch; "[minor]" / "feat..." in a commit message raises minor, "[major]" major.
+# "[skip release]" in the last commit message skips the release. It can also be started by hand (Actions tab).
+name: release
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["**.md", "Formula/**", ".github/**", "scripts/**"]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version step (auto = from the commit messages)"
+        type: choice
+        options: [auto, patch, minor, major]
+        default: auto
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: ${{ !contains(github.event.head_commit.message, '[skip release]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Check that every file compiles and the launcher starts
+        run: |
+          for f in *.py; do python -m py_compile "$f"; done
+          python arcade.py --version
+          python arcade.py --list
+
+      - name: Work out the version
+        id: ver
+        run: |
+          bump="${{ github.event.inputs.bump }}"
+          [ "$bump" = "auto" ] && bump=""
+          v=$(python scripts/next_version.py $bump)
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "New version: $v"
+
+      - name: Write VERSION and the Homebrew formula, tag and push
+        env:
+          V: ${{ steps.ver.outputs.version }}
+        run: |
+          echo "$V" > VERSION
+          sed -i -E "s/tag: \"v[0-9]+\.[0-9]+\.[0-9]+\"/tag: \"v$V\"/" Formula/ascii-arcade.rb
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add VERSION Formula/ascii-arcade.rb
+          git diff --cached --quiet || git commit -m "Release v$V [skip ci]"
+          git tag -a "v$V" -m "ASCII ARCADE v$V"
+          git push --atomic origin HEAD:main "v$V"
+
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ steps.ver.outputs.version }}
+        run: gh release create "v$V" --title "ASCII ARCADE v$V" --generate-notes

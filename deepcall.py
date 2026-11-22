@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Matthias Wegner
+# SPDX-License-Identifier: MIT (see the LICENSE file)
 """DEEPCALL - a submarine alone in the dark.
 
 Dive into a deep-sea trench where nothing can be seen. Only your sonar shows the way: every ping sends out

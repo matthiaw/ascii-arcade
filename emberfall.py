@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# Copyright (c) 2026 Matthias Wegner
+# SPDX-License-Identifier: MIT (see the LICENSE file)
 """
 EMBERFALL - The Pale Flame
 A party-based fantasy role-playing game drawn entirely in ASCII, for the terminal.

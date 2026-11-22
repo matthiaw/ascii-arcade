@@ -1,0 +1,298 @@
+{
+ "_doc": "key -> source image in art/src, width in columns, optional maxh (rows) and crop. Keys match art keys in emberfall.py (monster ids, PORTRAITS, SCENES). Run: python3 tools/bake_art.py",
+ "ashmaw": {
+  "src": "ashmaw.jpg",
+  "w": 34,
+  "maxh": 21
+ },
+ "rat": {
+  "src": "rat.jpg",
+  "w": 34,
+  "maxh": 20
+ },
+ "wolf": {
+  "src": "wolf.jpg",
+  "w": 34,
+  "maxh": 20
+ },
+ "goblin": {
+  "src": "goblin.jpg",
+  "w": 34,
+  "maxh": 20
+ },
+ "goblin_archer": {
+  "src": "goblin_archer.jpg",
+  "w": 34,
+  "maxh": 20
+ },
+ "snagtooth": {
+  "src": "snagtooth.jpg",
+  "w": 34,
+  "maxh": 20
+ },
+ "bandit": {
+  "src": "bandit.jpg",
+  "w": 34,
+  "maxh": 20
+ },
+ "kobold": {
+  "src": "kobold.jpg",
+  "w": 34,
+  "maxh": 20
+ },
+ "kobold_slinger": {
+  "src": "kobold_slinger.jpg",
+  "w": 34,
+  "maxh": 20
+ },
+ "cultist": {
+  "src": "cultist.jpg",
+  "w": 34,
+  "maxh": 20
+ },
+ "fanatic": {
+  "src": "fanatic.jpg",
+  "w": 34,
+  "maxh": 20
+ },
+ "spider": {
+  "src": "spider.jpg",
+  "w": 34,
+  "maxh": 20
+ },
+ "ogre": {
+  "src": "ogre.jpg",
+  "w": 34,
+  "maxh": 20
+ },
+ "skeleton": {
+  "src": "skeleton.jpg",
+  "w": 34,
+  "maxh": 20
+ },
+ "skeleton_archer": {
+  "src": "skeleton_archer.jpg",
+  "w": 34,
+  "maxh": 20
+ },
+ "zombie": {
+  "src": "zombie.jpg",
+  "w": 34,
+  "maxh": 20
+ },
+ "ghoul": {
+  "src": "ghoul.jpg",
+  "w": 34,
+  "maxh": 20
+ },
+ "corvane": {
+  "src": "corvane.jpg",
+  "w": 34,
+  "maxh": 20
+ },
+ "town": {
+  "src": "town.jpg",
+  "w": 60,
+  "crop": false
+ },
+ "cellar": {
+  "src": "cellar.jpg",
+  "w": 60,
+  "crop": false
+ },
+ "forest": {
+  "src": "forest.jpg",
+  "w": 60,
+  "crop": false
+ },
+ "mine": {
+  "src": "mine.jpg",
+  "w": 60,
+  "crop": false
+ },
+ "galleries": {
+  "src": "galleries.jpg",
+  "w": 60,
+  "crop": false
+ },
+ "sanctum": {
+  "src": "sanctum.jpg",
+  "w": 60,
+  "crop": false
+ },
+ "lair": {
+  "src": "lair.jpg",
+  "w": 60,
+  "crop": false
+ },
+ "human_fighter": {
+  "src": "human_fighter.jpg",
+  "w": 28,
+  "maxh": 15
+ },
+ "human_rogue": {
+  "src": "human_rogue.jpg",
+  "w": 28,
+  "maxh": 15
+ },
+ "human_wizard": {
+  "src": "human_wizard.jpg",
+  "w": 28,
+  "maxh": 15
+ },
+ "human_cleric": {
+  "src": "human_cleric.jpg",
+  "w": 28,
+  "maxh": 15
+ },
+ "elf_fighter": {
+  "src": "elf_fighter.jpg",
+  "w": 28,
+  "maxh": 15
+ },
+ "elf_rogue": {
+  "src": "elf_rogue.jpg",
+  "w": 28,
+  "maxh": 15
+ },
+ "elf_wizard": {
+  "src": "elf_wizard.jpg",
+  "w": 28,
+  "maxh": 15
+ },
+ "elf_cleric": {
+  "src": "elf_cleric.jpg",
+  "w": 28,
+  "maxh": 15
+ },
+ "dwarf_fighter": {
+  "src": "dwarf_fighter.jpg",
+  "w": 28,
+  "maxh": 15
+ },
+ "dwarf_rogue": {
+  "src": "dwarf_rogue.jpg",
+  "w": 28,
+  "maxh": 15
+ },
+ "dwarf_wizard": {
+  "src": "dwarf_wizard.jpg",
+  "w": 28,
+  "maxh": 15
+ },
+ "dwarf_cleric": {
+  "src": "dwarf_cleric.jpg",
+  "w": 28,
+  "maxh": 15
+ },
+ "halfling_fighter": {
+  "src": "halfling_fighter.jpg",
+  "w": 28,
+  "maxh": 15
+ },
+ "halfling_rogue": {
+  "src": "halfling_rogue.jpg",
+  "w": 28,
+  "maxh": 15
+ },
+ "halfling_wizard": {
+  "src": "halfling_wizard.jpg",
+  "w": 28,
+  "maxh": 15
+ },
+ "halfling_cleric": {
+  "src": "halfling_cleric.jpg",
+  "w": 28,
+  "maxh": 15
+ },
+ "fighter": {
+  "src": "human_fighter.jpg",
+  "w": 28,
+  "maxh": 15
+ },
+ "rogue": {
+  "src": "human_rogue.jpg",
+  "w": 28,
+  "maxh": 15
+ },
+ "wizard": {
+  "src": "human_wizard.jpg",
+  "w": 28,
+  "maxh": 15
+ },
+ "cleric": {
+  "src": "human_cleric.jpg",
+  "w": 28,
+  "maxh": 15
+ },
+ "brannoc": {
+  "src": "brannoc.jpg",
+  "w": 28,
+  "maxh": 15
+ },
+ "tamsin": {
+  "src": "tamsin.jpg",
+  "w": 28,
+  "maxh": 15
+ },
+ "maren": {
+  "src": "maren.jpg",
+  "w": 28,
+  "maxh": 15
+ },
+ "lysa": {
+  "src": "lysa.jpg",
+  "w": 28,
+  "maxh": 15
+ },
+ "hobb": {
+  "src": "hobb.jpg",
+  "w": 28,
+  "maxh": 15
+ },
+ "pell": {
+  "src": "pell.jpg",
+  "w": 28,
+  "maxh": 15
+ },
+ "aldous": {
+  "src": "aldous.jpg",
+  "w": 28,
+  "maxh": 15
+ },
+ "greta": {
+  "src": "greta.jpg",
+  "w": 28,
+  "maxh": 15
+ },
+ "oswin": {
+  "src": "oswin.jpg",
+  "w": 28,
+  "maxh": 15
+ },
+ "captain": {
+  "src": "captain.jpg",
+  "w": 28,
+  "maxh": 15
+ },
+ "villager": {
+  "src": "villager.jpg",
+  "w": 28,
+  "maxh": 15
+ },
+ "title_l": {
+  "src": "title.jpg",
+  "w": 96,
+  "crop": false
+ },
+ "title_m": {
+  "src": "title.jpg",
+  "w": 72,
+  "crop": false
+ },
+ "title_s": {
+  "src": "title.jpg",
+  "w": 54,
+  "crop": false
+ }
+}

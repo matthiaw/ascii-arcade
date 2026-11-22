@@ -9,6 +9,26 @@ python3 arcade.py
 
 Every game can also be started on its own (`python3 stackfall.py` and so on).
 
+## Install with Homebrew
+
+```sh
+brew tap matthiaw/arcade https://github.com/matthiaw/ascii-arcade
+brew install ascii-arcade
+```
+
+If Homebrew says the tap is not trusted: `brew trust --formula matthiaw/arcade/ascii-arcade`, then install again.
+Afterwards:
+
+```sh
+arcade              # the menu
+arcade stackfall    # one game straight away
+arcade --list       # all games
+arcade --version
+brew upgrade ascii-arcade
+```
+
+Homebrew brings its own Python (3.14); the games need nothing else.
+
 ## The same keys in every game
 
 | Key | |
@@ -162,6 +182,28 @@ the level rises every 4 layers.
 
 High scores of STACKFALL and DEPTHWELL are kept in `~/.ascii_arcade_scores.json`.
 
+## Versions and releases
+
+Versioning is automatic: every push to `main` that changes the games becomes a release
+(`.github/workflows/release.yml`). The workflow checks that every file compiles, raises the version, writes it to
+`VERSION` and to the Homebrew formula, tags the commit `vX.Y.Z` and publishes a GitHub release with notes.
+
+| In a commit message | Step |
+|---|---|
+| (nothing special) | patch: 1.0.0 -> 1.0.1 |
+| `[minor]` or a message starting with `feat` | minor: 1.0.1 -> 1.1.0 |
+| `[major]` or `BREAKING` | major: 1.1.0 -> 2.0.0 |
+| `[skip release]` | no release |
+
+Changes only to Markdown files, the formula, the workflow or `scripts/` do not make a release. A release can also
+be started by hand under Actions -> release -> Run workflow, with a choice of step. Writing a new version into
+`VERSION` by hand releases exactly that version.
+
+## Licence
+
+Copyright (c) 2026 Matthias Wegner. Released under the MIT License - see [LICENSE](LICENSE). You may use, copy,
+change and share the games freely, as long as the copyright notice stays in.
+
 ## Files
 
 | File | |
@@ -169,4 +211,9 @@ High scores of STACKFALL and DEPTHWELL are kept in `~/.ascii_arcade_scores.json`
 | `arcade.py` | the launcher |
 | `arcadekit.py` | shared toolkit: raw terminal input, half-block pixel canvas, block font, high scores |
 | `stackfall.py`, `depthwell.py`, `deepcall.py`, `lightkeeper.py`, `skyshot.py`, `nightdrive.py`, `orbital.py` | the games written for the arcade (use `arcadekit.py`) |
-| `hoverdrift.py`, `emberfall.py`, `blockfire.py` | standalone copies of the HOVERDRIFT, EMBERFALL and BLOCKFIRE repositories |
+| `hoverdrift.py`, `emberfall.py`, `blockfire.py` | HOVERDRIFT, EMBERFALL and BLOCKFIRE (they run on their own and do not need `arcadekit.py`) |
+| `extras/emberfall-art/` | the source images and tools behind EMBERFALL's pictures (not in the Homebrew package) |
+| `VERSION` | the current version (written by the release workflow) |
+| `Formula/ascii-arcade.rb` | the Homebrew formula (this repository is its own tap) |
+| `.github/workflows/release.yml`, `scripts/next_version.py` | automatic versioning and releases |
+| `LICENSE` | MIT License |

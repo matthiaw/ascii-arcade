@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Matthias Wegner
+# SPDX-License-Identifier: MIT (see the LICENSE file)
 """DEPTHWELL - falling blocks in three dimensions, seen from above, looking down into a well.
 
 Pieces made of cubes sink into a square well. Move them, turn them about all three axes and fill a whole

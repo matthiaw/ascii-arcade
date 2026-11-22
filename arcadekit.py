@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Matthias Wegner
+# SPDX-License-Identifier: MIT (see the LICENSE file)
 """arcadekit - the little shared toolkit of the ASCII ARCADE games.
 
 Raw terminal input, a half-block pixel canvas with text overlays, a chunky block font and a high score file.
@@ -11,6 +13,18 @@ import termios
 import tty
 
 SCORES_PATH = os.path.expanduser("~/.ascii_arcade_scores.json")
+
+
+def _read_version():
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "VERSION")) as f:
+            return f.read().strip() or "dev"
+    except OSError:
+        return "dev"
+
+
+VERSION = _read_version()
+COPYRIGHT = "(c) 2026 Matthias Wegner - MIT License"
 
 
 def clamp(v, a, b):

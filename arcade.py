@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Matthias Wegner
+# SPDX-License-Identifier: MIT (see the LICENSE file)
 """ASCII ARCADE - a little collection of games for the terminal.
 
 Pick a game with the arrow keys and press Enter; when it ends you are back here.
@@ -12,7 +14,7 @@ import sys
 import time
 
 import depthwell
-from arcadekit import Canvas, Terminal, draw_title, load_scores, mix, overlay, shade, title_width
+from arcadekit import COPYRIGHT, VERSION, Canvas, Terminal, draw_title, load_scores, mix, overlay, shade, title_width
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -70,6 +72,8 @@ HELP = [
     "?                    help with all of the game's keys",
     "Enter / Space        confirm",
     "Arrows / WASD        move, choose",
+    "",
+    "ASCII ARCADE %s  %s" % (VERSION, COPYRIGHT),
 ]
 ACCENT = [(236, 84, 84), (244, 150, 56), (236, 212, 70), (130, 214, 76), (56, 200, 160), (60, 170, 236),
           (100, 110, 240), (170, 96, 236), (226, 90, 200)]
@@ -333,6 +337,9 @@ def render(cols, rows, sel, t, note, help_=False):
     if note:
         cv.center(rows - 3, " %s " % note, (14, 14, 20), (255, 150, 100))
     cv.put(0, rows - 1, " Up/Down choose   Enter play   ? help   Esc quit ".ljust(cols)[:cols], (150, 154, 184), (12, 10, 22))
+    sig = " v%s  %s " % (VERSION, COPYRIGHT)
+    if cols >= 50 + len(sig):
+        cv.put(cols - len(sig), rows - 1, sig, (96, 100, 128), (12, 10, 22))
     if help_:
         overlay(cv, HELP)
     return cv
@@ -368,6 +375,38 @@ def menu(sel, note):
                     return sel
 
 
+USAGE = """usage: arcade [GAME | --list | --version | --help]
+
+Without arguments the ASCII ARCADE menu opens. With a game name that game starts straight away,
+for example:  arcade stackfall
+"""
+
+
+def run_game(g):
+    return subprocess.call([sys.executable, os.path.join(HERE, g["file"])], cwd=HERE)
+
+
+def cli(args):
+    """Command line: returns an exit code, or None to open the menu."""
+    if not args:
+        return None
+    a = args[0].lower()
+    if a in ("-h", "--help", "help"):
+        print(USAGE)
+    elif a in ("-v", "-V", "--version", "version"):
+        print("ASCII ARCADE %s  %s" % (VERSION, COPYRIGHT))
+    elif a in ("--list", "list"):
+        for g in GAMES:
+            print("%-12s %s" % (g["name"].lower(), g["tag"]))
+    else:
+        g = next((g for g in GAMES if g["name"].lower() == a or g["file"] == a), None)
+        if g is None:
+            print("unknown game %r - try: arcade --list" % args[0], file=sys.stderr)
+            return 2
+        return run_game(g)
+    return 0
+
+
 def main():
     sel, note = 0, ""
     while True:
@@ -376,11 +415,14 @@ def main():
             return
         g = GAMES[sel]
         t = time.time()
-        code = subprocess.call([sys.executable, os.path.join(HERE, g["file"])], cwd=HERE)
+        code = run_game(g)
         note = "" if code == 0 or time.time() - t > 3 else "%s ended unexpectedly (exit code %d)" % (g["name"], code)
 
 
 if __name__ == "__main__":
+    rc = cli(sys.argv[1:])
+    if rc is not None:
+        sys.exit(rc)
     try:
         main()
     except KeyboardInterrupt:

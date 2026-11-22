@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Matthias Wegner
+# SPDX-License-Identifier: MIT (see the LICENSE file)
 """SKYSHOT - two cannons, one hill between them, and the wind never stops changing.
 
 A turn-based artillery duel on destructible ground. Set the angle and the power, read the wind, fire.

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Matthias Wegner
+# SPDX-License-Identifier: MIT (see the LICENSE file)
 """ORBITAL - a calm gravity puzzle among the planets.
 
 A little star system seen from above: planets of every size pull on your probe, moons circle, asteroid belts

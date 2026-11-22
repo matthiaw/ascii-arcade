@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Matthias Wegner
+# SPDX-License-Identifier: MIT (see the LICENSE file)
 """NIGHTDRIVE - an arcade checkpoint race through the night.
 
 A winding, hilly highway after dark: neon city, a moonlit coast, a misty pine forest, the desert, a mountain

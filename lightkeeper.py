@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Matthias Wegner
+# SPDX-License-Identifier: MIT (see the LICENSE file)
 """LIGHTKEEPER - one beam, many ships, a long night.
 
 You keep the lighthouse on a rocky island. Night falls, a storm comes in, and ships from every side are making
