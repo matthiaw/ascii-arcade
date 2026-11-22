@@ -76,15 +76,33 @@ GAMES = [
          info=["Look down into a well and sink cube pieces.", "Turn them about all three axes, fill whole",
                "floor layers. Four well sizes, three piece sets."],
          keys="arrows move   Q/A W/S E/D turn   Space drop", size=(70, 22), score="depthwell"),
+    dict(file="glimmer.py", name="GLIMMER", tag="a will-o'-wisp in a hedge maze at night",
+         info=["Gather light motes in a night garden maze; sun", "blossoms turn four shadow spirits pale to catch.",
+               "Eight mazes: one-way gates, fog, total dark."],
+         keys="arrows move   Esc pause   ? help", size=(60, 22), score="glimmer"),
+    dict(file="sporefield.py", name="SPOREFIELD", tag="stop the sporeworm before it reaches the roots",
+         info=["Shoot the sporeworm winding down a night meadow:", "every hit splits it and leaves a toadstool.",
+               "Jitterlegs, moths, puffballs; glowing seeds."],
+         keys="arrows move   Space fire   F auto-fire", size=(60, 22), score="sporefield"),
+    dict(file="scaffold.py", name="SCAFFOLD", tag="climb the tower, dodge what the Wrecker throws",
+         info=["A runaway demolition robot holds the top of a", "skyscraper. Climb girders, belts, lifts and",
+               "cranes past its drums; cut its power at night."],
+         keys="arrows walk / climb   Space jump", size=(60, 22), score="scaffold"),
+    dict(file="voidlance.py", name="VOIDLANCE", tag="a side-scrolling star fighter with a charge lance",
+         info=["Charge the lance, dock the Warden pod at nose", "or tail, six crystal weapons, missiles, bits.",
+               "Eight stages, eight midbosses, eight bosses."],
+         keys="arrows fly   Space shoot/charge   F pod   B bomb", size=(70, 22), score="voidlance"),
 ]
 GENRE = {"hoverdrift.py": "flight", "emberfall.py": "role-playing", "blockfire.py": "shooter", "deepcall.py": "exploration",
          "lightkeeper.py": "action", "skyshot.py": "artillery", "nightdrive.py": "racing", "orbital.py": "puzzle",
-         "leafling.py": "platformer", "stackfall.py": "blocks", "depthwell.py": "3D blocks"}
+         "leafling.py": "platformer", "stackfall.py": "blocks", "depthwell.py": "3D blocks",
+         "glimmer.py": "maze chase", "sporefield.py": "fixed shooter", "scaffold.py": "climber",
+         "voidlance.py": "shoot 'em up"}
 HELP = [
     "ASCII ARCADE - keys",
     "",
     "Up / Down            choose a game",
-    "1 - 9, 0             jump to a game (0 again: game 11)",
+    "1 - 9, 0             jump to a game (0 again: the games after 10)",
     "Enter / Space        play",
     "M                    sound on / off",
     "G                    pixels: fine / smart / solid",
@@ -304,8 +322,25 @@ def thumb_leaf(cv, x, y, w, h, t):
     blit_scene(cv, x, y, w, h, _LF[0].scene(w, (h + 1) // 2, dt))
 
 
+_DEMOS = {}
+
+
+def thumb_demo(module):
+    """A preview from a game's own TitleDemo (scene(cols, rows, dt) -> Canvas)."""
+    def thumb(cv, x, y, w, h, t):
+        if module not in _DEMOS:
+            _DEMOS[module] = [__import__(module).TitleDemo(), t]
+        d = _DEMOS[module]
+        dt = min(0.1, max(0.0, t - d[1]))
+        d[1] = t
+        blit_scene(cv, x, y, w, h, d[0].scene(w, (h + 1) // 2, dt))
+    return thumb
+
+
 THUMBS = {"nightdrive.py": thumb_night, "orbital.py": thumb_orbital, "leafling.py": thumb_leaf, "skyshot.py": thumb_sky, "lightkeeper.py": thumb_light, "deepcall.py": thumb_deep, "hoverdrift.py": thumb_hover, "emberfall.py": thumb_ember, "stackfall.py": thumb_stack,
-          "depthwell.py": thumb_depth, "blockfire.py": thumb_block}
+          "depthwell.py": thumb_depth, "blockfire.py": thumb_block, "glimmer.py": thumb_demo("glimmer"),
+          "sporefield.py": thumb_demo("sporefield"), "scaffold.py": thumb_demo("scaffold"),
+          "voidlance.py": thumb_demo("voidlance")}
 
 
 def record_line(g):
@@ -331,8 +366,8 @@ PANEL, PANEL_FG = (16, 14, 30), (222, 222, 234)                         # backin
 
 
 def badge(i):
-    """The key that reaches game i: 1-9, then 0 for the tenth and 00 (0 pressed twice) for the eleventh."""
-    return str(i + 1) if i < 9 else "0" if i == 9 else "00" if i == 10 else " "
+    """The key that reaches game i: 1-9, then 0 for the tenth; pressing 0 again steps on (0x2 = 0 twice)."""
+    return str(i + 1) if i < 9 else "0" if i == 9 else "0x%d" % (i - 8)
 
 
 def accent(g):

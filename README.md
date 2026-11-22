@@ -1,7 +1,7 @@
 # ASCII ARCADE
 
 A little collection of games for the terminal. Start the launcher, pick a game with the arrow keys (or its
-number: 1-9, 0 for the tenth, 0 again for the eleventh), press Enter. When the game ends you are back in the menu.
+number: 1-9, 0 for the tenth, 0 again for each game after it), press Enter. When the game ends you are back in the menu.
 
 ```sh
 python3 arcade.py
@@ -102,6 +102,10 @@ No dependencies: Python 3 on macOS or Linux (on Windows use WSL). Best in WezTer
 | **LEAFLING** | A jump'n'run with a leaf for a hat: run, jump, glide and wall-jump through twelve levels in four worlds (sunlit forest canopy, crystal caves, wind-swept sky ruins, an autumn storm at night), with light motes, hidden seeds, lanterns, beetles, bats, spitting plants, two chases and two bosses. | 70x22+ |
 | **STACKFALL** | Falling blocks in a well ten wide and twenty deep. Modes: Marathon, Sprint (40 rows), Rising (rubble pushes up from below). | 40x20+ |
 | **DEPTHWELL** | Falling blocks in three dimensions: look down into a well, turn cube pieces about all three axes, fill whole layers. Four well sizes, three piece sets. | 70x22+ |
+| **GLIMMER** | A will-o'-wisp in a hedge maze at night: gather the light motes, catch the four shadow spirits while a sun blossom turns them pale. Eight hand-made mazes, some with one-way hedge gates, drifting fog or no light but your own, night treats and an interlude every third maze. | 60x22+ |
+| **SPOREFIELD** | Stop the sporeworm before it reaches the roots: a fixed shooter on a glowing night meadow. Every hit splits the worm and leaves a toadstool; jitterlegs, plumbugs, gloam moths, puffballs and burrowgrubs get in the way, glowing seeds give double sap, piercing sap, slow time, bombs or a shell. Eight palettes, three difficulties. | 60x22+ |
+| **SCAFFOLD** | Climb an unfinished skyscraper at night while a runaway demolition robot, the Wrecker, throws oil drums, gears, crates, rivets and counterweights down at you. Five stages (sloped girders, conveyor decks, lift shafts, a windy crane yard, the breaker floor where you cut its power), then it topples and comes back faster the next night. | 60x22+ |
+| **VOIDLANCE** | A side-scrolling star fighter: charge the lance (three levels and a nova), dock the Warden pod at your nose or tail, feed it six kinds of crystal weapons, add missiles, crawler bombs, orbiting bits and shields. Eight stages from an orbital wreck yard to the Null Citadel, 41 kinds of enemies, each stage with its own caves, midboss and multi-phase boss. Easy / normal / hard, checkpoints, continues, stage select. | 70x22+ |
 
 ## DEEPCALL keys
 
@@ -249,6 +253,77 @@ the level rises every 4 layers.
 
 High scores of STACKFALL and DEPTHWELL are kept in `~/.ascii_arcade_scores.json`.
 
+## GLIMMER keys
+
+| Key | |
+|---|---|
+| Arrows (`W` `A` `S` `D`) | move; a turn pressed early waits until the path opens |
+| Left / Right (title) | choose the start maze |
+| Enter / Space | skip the interlude |
+| Esc / `P` | pause menu (`Q` there: back to the menu) |
+| `?` | help |
+
+Light motes 10, sun blossoms 50, pale spirits 200 / 400 / 800 / 1600 in a row, night treats 100 to 5000
+(two per maze). Murk chases you straight on, Nettle cuts you off ahead, Hollow flanks you with Murk's help and
+Sorrel is shy; all of them are slow in the tunnels. An extra wisp at 10000 points; the mazes repeat faster.
+
+## SPOREFIELD keys
+
+| Key | |
+|---|---|
+| Arrows / WASD | move the beetle in its corner (diagonals too) |
+| Space | spit sap - hold it to keep firing |
+| `F` | auto-fire on / off (handy in terminals without the kitty keyboard protocol) |
+| Esc / `P` | pause menu (`Q` there: back to the menu) |
+| `?` | help |
+
+Every hit splits the sporeworm and turns the hit segment into a toadstool; heads score 100, segments 10, and
+toadstools take four hits. Gloam moths poison caps (a worm that touches one dives straight down), plumbugs
+drop new ones, jitterlegs eat them. Losing a beetle restores damaged and poisoned caps for a small bonus; an
+extra beetle every 12000 points.
+
+## SCAFFOLD keys
+
+| Key | |
+|---|---|
+| Left / Right (`A` / `D`) | walk |
+| Up / Down (`W` / `S`) | climb a ladder (stand in front of it) |
+| Space / `Z` | jump (a fixed arc: aim before you go) |
+| Esc / `P` | pause menu (`Q` there: back to the menu, `M`: sound on / off) |
+| `?` | help |
+
+Reach the kill switch at the top of each stage; on the fifth, pull all six breakers. Jump drums, crates and
+sparks for 100 / 300 / 800 points, or grab a hanging wrench and smash them for 8 seconds (no climbing while you
+hold it). Falls further than your jump are fatal. The bonus counts down and is yours when you reach the goal;
+at zero you lose a rigger. Bonus items lie around, an extra rigger comes at 10000 points, and every night (L)
+the Wrecker throws faster. `python3 scaffold.py --selftest` proves every stage can be finished with the game's
+own physics.
+
+## VOIDLANCE keys
+
+| Key | |
+|---|---|
+| Arrows / WASD | fly (8 directions) |
+| Space | shoot; hold to charge the lance, let go to fire (kitty protocol) |
+| `C` | start charging, `C` again: fire the lance |
+| `X` | rapid fire |
+| `F` | launch the pod / call it back |
+| `B` | smart bomb |
+| Esc / `P` | pause menu (`Q` there: back to the menu, `M`: sound on / off) |
+| `?` | help |
+
+The lance has three levels - a bolt, a piercing bolt and a beam straight through the screen - and keeps
+charging past the third into the NOVA, which wipes every bullet away. The Warden pod comes with the first
+crystal: it docks at the nose or the tail, whichever side touches it, soaks up small shots and rams enemies;
+launched, it keeps firing on its own. Crystals of the same colour raise the pod weapon to level 3, another
+colour switches it (ring spread, ricochet ray, crawl wave, homing needles, scatter burst, chain arc). Item
+carriers drop missiles, crawler bombs, orbiting bits, speed, shields, smart bombs and extra ships. Never touch
+the walls. Each stage has two checkpoints; stages unlock as you reach them and can be picked on the title.
+
+Terminals with the kitty keyboard protocol (kitty, WezTerm, Ghostty, recent iTerm2) report key releases: tap
+Space to shoot, hold it to charge. In other terminals (macOS Terminal) holding Space gives rapid fire while the
+key repeats, and the lance is charged with `C` (press again to fire).
+
 ## Versions and releases
 
 Versioning is automatic: every push to `main` that changes the games becomes a release
@@ -276,9 +351,9 @@ change and share the games freely, as long as the copyright notice stays in.
 | File | |
 |---|---|
 | `arcade.py` | the launcher |
-| `arcadekit.py` | shared toolkit: raw terminal input, half-block pixel canvas, block font, high scores |
+| `arcadekit.py` | shared toolkit: raw terminal input (with held keys via the kitty keyboard protocol), half-block pixel canvas, block font, high scores |
 | `arcadesound.py` | the sound engine: synthesized effects, played without waiting |
-| `stackfall.py`, `depthwell.py`, `deepcall.py`, `lightkeeper.py`, `skyshot.py`, `nightdrive.py`, `orbital.py`, `leafling.py` | the games written for the arcade (use `arcadekit.py`) |
+| `stackfall.py`, `depthwell.py`, `deepcall.py`, `lightkeeper.py`, `skyshot.py`, `nightdrive.py`, `orbital.py`, `leafling.py`, `glimmer.py`, `sporefield.py`, `scaffold.py`, `voidlance.py` | the games written for the arcade (use `arcadekit.py`) |
 | `hoverdrift.py`, `emberfall.py`, `blockfire.py` | HOVERDRIFT, EMBERFALL and BLOCKFIRE (they run on their own and do not need `arcadekit.py`) |
 | `extras/emberfall-art/` | the source images and tools behind EMBERFALL's pictures (not in the Homebrew package) |
 | `VERSION` | the current version (written by the release workflow) |

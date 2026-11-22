@@ -11,6 +11,7 @@ import re
 import select
 import sys
 import termios
+import time
 import tty
 
 
@@ -152,6 +153,173 @@ class Terminal:
                                "backspace" if ch in "\x7f\x08" else ch.lower())
                     i += 1
         return out
+
+
+# =============================================================================================
+# Held keys: the kitty keyboard protocol reports presses AND releases (kitty, WezTerm, Ghostty, recent iTerm2);
+# elsewhere a key counts as held while the terminal keeps repeating it
+# =============================================================================================
+KITTY_RE = re.compile(r"\x1b\[([0-9:;]*)([uABCDHF~])")
+KITTY_NAMES = {13: "enter", 27: "esc", 32: " ", 9: "tab", 127: "backspace", 57399: "0"}
+KITTY_ARROWS = {"A": "up", "B": "down", "C": "right", "D": "left"}
+KITTY_SHIFTED = {"/": "?", "1": "!"}
+
+
+class KeyTerminal(Terminal):
+    """Terminal plus the kitty keyboard protocol where the terminal speaks it: events() returns
+    [(name, kind)] with kind 'press', 'repeat' or 'release'. keys() still works (presses only).
+    ARCADE_LEGACY_KEYS=1 switches the protocol off."""
+
+    def __enter__(self):
+        super().__enter__()
+        self.kitty = self.detect_kitty()
+        if self.kitty:
+            self.write("\x1b[>15u")
+        return self
+
+    def __exit__(self, *exc):
+        if getattr(self, "kitty", False):
+            self.write("\x1b[<u")
+        return super().__exit__(*exc)
+
+    def detect_kitty(self):
+        self.pending = ""
+        if os.environ.get("ARCADE_LEGACY_KEYS") or os.environ.get("LEAFLING_LEGACY_KEYS"):
+            return False
+        self.write("\x1b[?u\x1b[c")
+        data, end = "", time.time() + 0.5
+        while time.time() < end and not re.search(r"\x1b\[\?[0-9;]*c", data):
+            if select.select([self.fd], [], [], 0.05)[0]:
+                data += os.read(self.fd, 1024).decode("utf-8", "ignore")
+        kitty = re.search(r"\x1b\[\?\d*u", data) is not None
+        self.pending = re.sub(r"\x1b\[\?[0-9;]*[uc]", "", data)
+        return kitty
+
+    def events(self, timeout=0.0):
+        data, self.pending = getattr(self, "pending", ""), ""
+        wait = 0 if data else timeout
+        while select.select([self.fd], [], [], wait)[0]:
+            wait = 0
+            chunk = os.read(self.fd, 4096).decode("utf-8", "ignore")
+            if not chunk:
+                break
+            data += chunk
+        return self.parse(data) if data else []
+
+    def keys(self, timeout=0.0):
+        return [n for n, kind in self.events(timeout) if kind == "press"]
+
+    def parse(self, data):
+        out = []
+        i = 0
+        while i < len(data):
+            m = KITTY_RE.match(data, i) if getattr(self, "kitty", False) else None
+            if m:
+                i = m.end()
+                fields = m.group(1).split(";")
+                codes = fields[0].split(":")
+                mods, event = 1, "1"
+                if len(fields) > 1 and fields[1]:
+                    mm = fields[1].split(":")
+                    mods = int(mm[0]) if mm[0].isdigit() else 1
+                    event = mm[1] if len(mm) > 1 else "1"
+                final = m.group(2)
+                name = None
+                if final in KITTY_ARROWS:
+                    name = KITTY_ARROWS[final]
+                elif final == "u" and codes[0].isdigit():
+                    c = int(codes[0])
+                    if (mods - 1) & 4 and c in (99, 100):       # ctrl+c / ctrl+d
+                        raise KeyboardInterrupt
+                    if (mods - 1) & 1 and len(codes) > 1 and codes[1].isdigit():
+                        c = int(codes[1])
+                    name = KITTY_NAMES.get(c) or (chr(c).lower() if 32 < c < 0x110000 else None)
+                    if name and (mods - 1) & 1 and name in KITTY_SHIFTED:
+                        name = KITTY_SHIFTED[name]
+                elif final == "~" and codes[0] in ("5", "6"):
+                    name = "pgup" if codes[0] == "5" else "pgdn"
+                if name:
+                    out.append((name, {"1": "press", "2": "repeat", "3": "release"}.get(event, "press")))
+                continue
+            if data[i] == "\x1b":
+                for seq, nm in KEYS.items():
+                    if data.startswith(seq, i):
+                        out.append((nm, "press"))
+                        i += len(seq)
+                        break
+                else:
+                    lone = i + 1 >= len(data) or data[i + 1] not in "[O"
+                    if lone:
+                        out.append(("esc", "press"))
+                    i += 1 if lone else 3
+            else:
+                ch = data[i]
+                if ch == "\x03":
+                    raise KeyboardInterrupt
+                out.append(("tab" if ch == "\t" else "enter" if ch in "\r\n" else
+                            "backspace" if ch in "\x7f\x08" else ch.lower(), "press"))
+                i += 1
+        return out
+
+
+class HeldKeys:
+    """Which keys are down right now, for action games.
+
+    kitty mode: exact, from presses and releases. Classic mode: a key counts as held for a short window after
+    each press or repeat (the first window bridges the keyboard's initial repeat delay); pressing the opposite
+    direction drops the other one at once.
+
+        held = HeldKeys(term.kitty)
+        for name, kind in term.events(): held.feed(name, kind, now)
+        held.down("left", "a")        # any of these held?
+        held.hit(" ")                 # pressed since the last frame (an edge; used up by take_hits())
+    """
+    OPPOSITE = {"left": "right", "right": "left", "up": "down", "down": "up", "a": "d", "d": "a", "w": "s", "s": "w"}
+
+    def __init__(self, kitty, first=0.55, repeat=0.14):
+        self.kitty = kitty
+        self.first, self.repeat = first, repeat
+        self.until = {}          # classic mode: key -> held until
+        self.real = set()        # kitty mode
+        self.hits = []
+        self.now = 0.0
+
+    def feed(self, name, kind, now):
+        self.now = now
+        if kind == "release":
+            self.real.discard(name)
+            self.until.pop(name, None)
+            return
+        if kind == "press":
+            self.hits.append(name)
+        if self.kitty:
+            self.real.add(name)
+            return
+        opp = self.OPPOSITE.get(name)
+        if opp:
+            self.until.pop(opp, None)
+        held_now = self.until.get(name, 0) > now
+        self.until[name] = now + (self.repeat if held_now else self.first)
+
+    def tick(self, now):
+        self.now = now
+
+    def down(self, *names):
+        if self.kitty:
+            return any(n in self.real for n in names)
+        return any(self.until.get(n, 0) > self.now for n in names)
+
+    def hit(self, *names):
+        return any(n in self.hits for n in names)
+
+    def take_hits(self):
+        h, self.hits = self.hits, []
+        return h
+
+    def clear(self):
+        self.until.clear()
+        self.real.clear()
+        self.hits = []
 
 
 # =============================================================================================
@@ -434,6 +602,10 @@ ACCENTS = {  # (top, bottom) of each game's title gradient
     "NIGHTDRIVE": ((255, 120, 230), (130, 70, 255)),
     "ORBITAL": ((200, 240, 255), (120, 170, 255)),
     "LEAFLING": ((250, 224, 110), (118, 196, 58)),
+    "GLIMMER": ((255, 236, 140), (240, 150, 60)),
+    "SPOREFIELD": ((200, 255, 140), (120, 70, 200)),
+    "SCAFFOLD": ((255, 196, 90), (220, 80, 40)),
+    "VOIDLANCE": ((140, 230, 255), (150, 80, 255)),
 }
 
 
