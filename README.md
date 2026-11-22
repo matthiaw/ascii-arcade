@@ -9,6 +9,17 @@ python3 arcade.py
 
 Every game can also be started on its own (`python3 stackfall.py` and so on).
 
+## Which terminal?
+
+**WezTerm is a good choice**, especially on a Mac: it draws the pixel graphics exactly (sharp, no seams), shows
+24-bit colour, and supports the kitty keyboard protocol, so held keys work precisely (variable jump height in
+LEAFLING, smooth steering in BLOCKFIRE). It is free and installs with `brew install --cask wezterm`; then run
+`arcade` inside it. iTerm2, kitty and Ghostty work just as well.
+
+The built-in macOS Terminal.app works, but it draws the half-block pixels from the font and leaves thin seams,
+so pictures look streaky. If you stay with it, press G in the launcher for the smart or solid pixel style (see
+[Pixels](#pixels-fine-smart-or-solid)); a smaller font (Cmd -) then gives finer pixels.
+
 ## Install with Homebrew
 
 ```sh
@@ -50,7 +61,8 @@ The pause menu always reads: Esc / P / Enter continue, ? help, M sound on / off,
 The pictures are drawn with the half-block character `▀`: every character cell shows two pixels, the top one
 in the text colour and the bottom one in the background colour. WezTerm, iTerm2, kitty and Ghostty draw that
 character themselves and it fills the cell exactly. macOS Terminal.app takes it from the font instead, and
-there it leaves a thin gap, so pictures look streaky (changing the font does not help).
+there it leaves a thin gap, so pictures look streaky (changing the font does not help). The simplest fix is
+to play in WezTerm.
 
 Press **G** in the launcher to cycle through three pixel styles; the choice is kept for every game in
 `~/.ascii_arcade_settings.json`:
@@ -72,8 +84,8 @@ or `pw-play` / `paplay` / `aplay` on Linux. Press M in the launcher or in any pa
 the choice is kept in `~/.ascii_arcade_settings.json`. `ARCADE_SOUND=0 arcade` starts without sound.
 `python3 arcadesound.py` plays a short demo.
 
-No dependencies: Python 3 on macOS or Linux (on Windows use WSL). Best in a truecolor terminal (WezTerm, iTerm2,
-kitty, Ghostty); 256 colours work too. Bigger windows give bigger pictures.
+No dependencies: Python 3 on macOS or Linux (on Windows use WSL). Best in WezTerm (or iTerm2, kitty, Ghostty);
+256 colours work too. Bigger windows give bigger pictures.
 
 ## The games
 

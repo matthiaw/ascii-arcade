@@ -28,7 +28,8 @@ class AsciiArcade < Formula
     <<~EOS
       Start the menu with:   arcade
       Start one game with:   arcade stackfall   (arcade --list shows all)
-      Best in a truecolor terminal (WezTerm, iTerm2, kitty, Ghostty).
+      Best in WezTerm (brew install --cask wezterm); iTerm2, kitty and Ghostty work too.
+      In macOS Terminal.app press G in the menu for smart or solid pixels.
     EOS
   end
 
