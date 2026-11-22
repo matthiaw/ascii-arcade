@@ -6110,6 +6110,34 @@ PICS = {
 }
 # --- END PICS ---
 
+def _solid_pixels():
+    """Pixel style: "fine" draws two pixels per cell with half-blocks; "solid" draws one pixel per cell from
+    background colour only, for terminals whose fonts leave gaps in half-blocks (macOS Terminal.app).
+    ARCADE_PIXELS=solid|fine overrides the setting in ~/.ascii_arcade_settings.json (G in the launcher)."""
+    env = os.environ.get("ARCADE_PIXELS", "").strip().lower()
+    if env in ("solid", "fine"):
+        return env == "solid"
+    try:
+        with open(os.path.expanduser("~/.ascii_arcade_settings.json")) as f:
+            return json.load(f).get("pixels") == "solid"
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+SOLID_PIXELS = _solid_pixels()
+
+
+def solid_cell(t, b):
+    """One colour for a cell in solid-pixel mode: the brighter pixel where they differ a lot, else their mean
+    (palette indices: the top one)."""
+    if t == b or not isinstance(t, tuple):
+        return t
+    lt, lb = t[0] * 3 + t[1] * 6 + t[2], b[0] * 3 + b[1] * 6 + b[2]
+    if abs(lt - lb) > 600:          # strong contrast: keep the bright detail (text, stars, outlines of light)
+        return t if lt > lb else b
+    return ((t[0] + b[0]) >> 1, (t[1] + b[1]) >> 1, (t[2] + b[2]) >> 1)
+
+
 PIC_MODE = None   # set by the UI: "true" (24-bit), "256", or None (ASCII only)
 PIC_MAXH = 99     # tallest picture that fits the current screen
 PIC_CODE = {c: i for i, c in enumerate("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")}
@@ -6166,6 +6194,18 @@ def pic_escapes(p, y, x, true=True):
             if skip:
                 out.append("\x1b[%dC" % skip)
                 skip = 0
+            if SOLID_PIXELS:   # one colour per cell, no half-block glyph
+                fi = PIC_CODE[f[k]]
+                if true:
+                    c = tuple(pal[fi]) if ch == "f" else solid_cell(tuple(pal[fi]), (0, 0, 0) if b[k] == "." else tuple(pal[PIC_CODE[b[k]]]))
+                    sgr = "48;2;%d;%d;%d" % c
+                else:
+                    sgr = "48;5;%d" % SAFE256.get(fb[fi], fb[fi])
+                if sgr != last:
+                    out.append("\x1b[0;" + sgr + "m")
+                    last = sgr
+                out.append(" ")
+                continue
             sgr = col(f[k], False) + ";" + (black if b[k] == "." else col(b[k], True))
             if sgr != last:
                 out.append("\x1b[0;" + sgr + "m")
@@ -6866,7 +6906,9 @@ class UI:
         for r in range(rows):
             for x in range(x0, x0 + wpx):
                 top, bot = px.get((x, 2 * r)), px.get((x, 2 * r + 1))
-                if top and bot:
+                if SOLID_PIXELS and (top or bot):   # one colour per cell, no block glyphs
+                    self.put(y + r, x, " ", self.C(top or bot, top or bot))
+                elif top and bot:
                     self.put(y + r, x, "\u2588" if top == bot else "\u2580", self.C(top, bot))
                 elif top:
                     self.put(y + r, x, "\u2580", self.C(top, BLACK))
@@ -7499,6 +7541,8 @@ class UI:
                 if pending_move:
                     out.append("\x1b[%d;%dH" % (y + 1, x0 + i + 1))
                     pending_move = False
+                if SOLID_PIXELS and ch == "\u2580":
+                    ch, b = " ", solid_cell(f, b)
                 sgr = (f, b)
                 if sgr != last:
                     out.append("\x1b[0;38;2;%d;%d;%d;48;2;%d;%d;%dm" % (f + b))

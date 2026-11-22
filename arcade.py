@@ -16,6 +16,8 @@ import time
 
 import depthwell
 from arcadesound import Sound
+import arcadekit
+from arcadesound import load_settings, save_settings
 from arcadekit import (ACCENTS, COPYRIGHT, VERSION, Canvas, Terminal, draw_title, footer, load_scores, mix, overlay, shade,
                        title_width)
 
@@ -85,6 +87,8 @@ HELP = [
     "1 - 9, 0             jump to a game (0 again: game 11)",
     "Enter / Space        play",
     "M                    sound on / off",
+    "G                    pixels: fine (two per cell) / solid",
+    "                     (solid avoids streaks in macOS Terminal)",
     "Esc / Q              quit",
     "",
     "The same in every game:",
@@ -441,10 +445,15 @@ def render(cols, rows, sel, t, note, help_=False):
     if note:
         cv.center(rows - 3, " %s " % note, (14, 14, 20), (255, 150, 100))
     snd = SND.label().lower()
-    if cols >= 96:
-        footer(cv, "Up/Down choose   1-9 0 jump   Enter play   M %s   ? help   Esc quit" % snd)
+    pix = "solid" if arcadekit.SOLID_PIXELS else "fine"
+    if cols >= 112:
+        footer(cv, "Up/Down choose   1-9 0 jump   Enter play   M %s   G pixels: %s   ? help   Esc quit" % (snd, pix))
+    elif cols >= 96:
+        footer(cv, "Up/Down choose   Enter play   M %s   G pixels: %s   ? help   Esc quit" % (snd, pix))
     else:
-        footer(cv, "Up/Down choose  Enter play  M %s  ? help  Esc quit" % snd.split(":")[0])
+        footer(cv, "Up/Down choose  Enter play  M %s  G pixels  ? help  Esc quit" % snd.split(":")[0])
+    if TERMINAL_APP_HINT[0] and not arcadekit.SOLID_PIXELS and not help_:
+        cv.center(rows - 2, " Streaky pixels in macOS Terminal? Press G for solid pixels. ", (20, 16, 10), (236, 200, 110))
     sig = "v%s" % VERSION
     if cols >= 110:
         cv.put(16, rows - 1, sig, (110, 114, 144), (12, 10, 22))
@@ -477,6 +486,9 @@ def menu(sel, note):
                 elif k == "m":
                     if SND.toggle():
                         SND.play("sound_on")
+                elif k == "g":
+                    set_pixels(not arcadekit.SOLID_PIXELS)
+                    SND.play("move")
                 if k in ("up", "w", "k"):
                     sel = (sel - 1) % len(GAMES)
                     SND.play("move")
@@ -494,11 +506,28 @@ def menu(sel, note):
                     return sel
 
 
-USAGE = """usage: arcade [GAME | --list | --version | --help]
+USAGE = """usage: arcade [GAME | --list | --version | --help | --pixels solid|fine]
 
 Without arguments the ASCII ARCADE menu opens. With a game name that game starts straight away,
 for example:  arcade stackfall
+
+--pixels solid   one pixel per character cell, drawn with background colour only: no streaks in
+                 terminals whose font leaves gaps in half-block characters (macOS Terminal.app)
+--pixels fine    two pixels per cell with half-blocks (the default; sharp in WezTerm, iTerm2, kitty, Ghostty)
+The choice is remembered for every game (also: G in the menu; ARCADE_PIXELS=solid|fine for one run).
 """
+
+# in macOS Terminal.app, until the player has chosen a pixel style once, the menu suggests solid pixels
+TERMINAL_APP_HINT = [os.environ.get("TERM_PROGRAM") == "Apple_Terminal" and "pixels" not in load_settings()
+                     and not os.environ.get("ARCADE_PIXELS")]
+
+
+def set_pixels(solid):
+    """Switch the pixel style for the menu now and for every game started from here on."""
+    arcadekit.SOLID_PIXELS = bool(solid)
+    save_settings(pixels="solid" if solid else "fine")
+    os.environ.pop("ARCADE_PIXELS", None)
+    TERMINAL_APP_HINT[0] = False
 
 
 def run_game(g):
@@ -514,6 +543,13 @@ def cli(args):
         print(USAGE)
     elif a in ("-v", "-V", "--version", "version"):
         print("ASCII ARCADE %s  %s" % (VERSION, COPYRIGHT))
+    elif a in ("--pixels", "pixels"):
+        mode = args[1].lower() if len(args) > 1 else ""
+        if mode not in ("solid", "fine"):
+            print("pixels: %s   (arcade --pixels solid | fine)" % ("solid" if arcadekit.SOLID_PIXELS else "fine"))
+        else:
+            set_pixels(mode == "solid")
+            print("pixels: %s (remembered for every game)" % mode)
     elif a in ("--list", "list"):
         for g in GAMES:
             print("%-12s %s" % (g["name"].lower(), g["tag"]))

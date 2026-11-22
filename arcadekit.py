@@ -13,6 +13,35 @@ import sys
 import termios
 import tty
 
+
+def _solid_pixels():
+    """Pixel style: "fine" draws two pixels per cell with the half-block character; "solid" draws one
+    pixel per cell from background colour only, for terminals whose fonts leave gaps in half-blocks
+    (macOS Terminal.app). ARCADE_PIXELS=solid|fine overrides the setting kept in ~/.ascii_arcade_settings.json
+    (switched with G in the ASCII ARCADE launcher)."""
+    env = os.environ.get("ARCADE_PIXELS", "").strip().lower()
+    if env in ("solid", "fine"):
+        return env == "solid"
+    try:
+        with open(os.path.expanduser("~/.ascii_arcade_settings.json")) as f:
+            return json.load(f).get("pixels") == "solid"
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+SOLID_PIXELS = _solid_pixels()
+
+
+def solid_cell(t, b):
+    """One colour for a cell in solid-pixel mode: the brighter pixel where they differ a lot, else their mean
+    (palette indices: the top one)."""
+    if t == b or not isinstance(t, tuple):
+        return t
+    lt, lb = t[0] * 3 + t[1] * 6 + t[2], b[0] * 3 + b[1] * 6 + b[2]
+    if abs(lt - lb) > 600:          # strong contrast: keep the bright detail (text, stars, outlines of light)
+        return t if lt > lb else b
+    return ((t[0] + b[0]) >> 1, (t[1] + b[1]) >> 1, (t[2] + b[2]) >> 1)
+
 SCORES_PATH = os.path.expanduser("~/.ascii_arcade_scores.json")
 
 
@@ -235,6 +264,8 @@ class Canvas:
                         lb = bg
                     line.append(ch)
                     continue
+                if SOLID_PIXELS and t != b:
+                    t = b = solid_cell(t, b)
                 if t == b:
                     if b != lb:
                         line.append(bgs(b))

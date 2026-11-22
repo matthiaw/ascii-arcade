@@ -37,12 +37,26 @@ Homebrew brings its own Python (3.14); the games need nothing else.
 | Esc | in a game: pause / game menu - on a title screen: quit (back to the arcade) - in sub-screens: back |
 | P | pause (real-time games; in EMBERFALL P drinks a potion, Esc opens its game menu: M sound, Q save and quit) |
 | M | in the pause menu and in the launcher: sound on / off (remembered for every game) |
+| G | in the launcher: pixels fine / solid (solid avoids streaks in macOS Terminal) |
 | Q | in the pause menu: quit - on a title screen: quit (in DEPTHWELL Q also turns pieces) |
 | ? | help with all of the game's keys, also on the title screens |
 | Enter / Space | confirm |
 | Arrows / WASD | move, choose |
 
 The pause menu always reads: Esc / P / Enter continue, ? help, M sound on / off, Q quit. No game ends on a single stray key.
+
+## Pixels: fine or solid
+
+The pictures are drawn with the half-block character `▀`: every character cell shows two pixels, the top one
+in the text colour and the bottom one in the background colour. WezTerm, iTerm2, kitty and Ghostty draw that
+character themselves and it fills the cell exactly. macOS Terminal.app takes it from the font instead, and
+there it leaves a thin gap, so pictures look streaky.
+
+For such terminals there is **solid** pixel mode: one pixel per cell, drawn with the background colour only, so
+no gaps at all (coarser, half the vertical detail). Press **G** in the launcher to switch between fine and
+solid; the choice is kept for every game in `~/.ascii_arcade_settings.json`. Also `arcade --pixels solid` /
+`arcade --pixels fine`, or `ARCADE_PIXELS=solid arcade` for a single run. In Terminal.app the launcher suggests
+it until you have chosen once.
 
 ## Sound
 
