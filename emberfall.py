@@ -161,6 +161,13 @@ ROCKFG = (101, K.COLOR_YELLOW)
 FIRE_COLS = [RED, EMBER, ORANGE, AMBER, YELLOW]
 PALE_COLS = [PALE, ICE, CYAN, (123, K.COLOR_CYAN)]
 WATER_COLS = [(39, K.COLOR_CYAN), (45, K.COLOR_CYAN), (33, K.COLOR_BLUE)]
+PANEL = (234, K.COLOR_BLACK)          # the shared ASCII ARCADE title colours
+TITLE_SEL = (215, K.COLOR_YELLOW)
+FOOTER_BG = (233, K.COLOR_BLACK)
+FOOTER_FG = (246, K.COLOR_WHITE)
+FOOTER_LABEL = (252, K.COLOR_WHITE)
+TITLE_GRAD = [(222, K.COLOR_YELLOW), (221, K.COLOR_YELLOW), (215, K.COLOR_YELLOW), (209, K.COLOR_RED),
+              (166, K.COLOR_RED)]   # top to bottom of the block letters, like the other games' titles
 BRIGHT8 = {WHITE, YELLOW, CYAN, LGREEN, PINK, GOLD, ICE, PALE, MAGENTA, RED}
 
 # =============================================================================
@@ -6344,6 +6351,18 @@ class BotDone(Exception):
     pass
 
 
+TITLE_FONT = {
+    "E": ["#####", "#....", "####.", "#....", "#####"], "M": ["#...#", "##.##", "#.#.#", "#...#", "#...#"],
+    "B": ["####.", "#...#", "####.", "#...#", "####."], "R": ["####.", "#...#", "####.", "#..#.", "#...#"],
+    "F": ["#####", "#....", "####.", "#....", "#...."], "A": [".###.", "#...#", "#####", "#...#", "#...#"],
+    "L": ["#....", "#....", "#....", "#....", "#####"],
+}
+
+
+def title_cols(text, k):
+    return len(text) * 6 * k - k
+
+
 class BackToTitle(Exception):
     pass
 
@@ -6648,6 +6667,37 @@ class UI:
         if title:
             t = "[ %s ]" % title
             self.put(y, x + max(2, (w - len(t)) // 2), t, self.C(YELLOW, bg, True))
+
+    def block_title(self, text, y, k):
+        """Block letters drawn with half-block characters (two pixels per cell), centred. Returns rows used."""
+        W = self.W
+        if PIC_MODE is None:                 # plain ASCII / 8 colours: the classic banner
+            b = banner(text)
+            cols = [EMBER, ORANGE, AMBER, GOLD, YELLOW]
+            for j, l in enumerate(b):
+                self.put(y + j, (W - len(l)) // 2, l, self.C(cols[j % len(cols)], BLACK, True))
+            return len(b) + 1
+        wpx, hpx = title_cols(text, k), 5 * k
+        x0 = max(0, (W - wpx) // 2)
+        px = {}
+        for n, ch in enumerate(text):
+            for gy, row in enumerate(TITLE_FONT[ch]):
+                for gx, bit in enumerate(row):
+                    if bit == "#":
+                        for yy in range(k):
+                            for xx in range(k):
+                                px[(x0 + (n * 6 + gx) * k + xx, gy * k + yy)] = TITLE_GRAD[gy]
+        rows = (hpx + 1) // 2
+        for r in range(rows):
+            for x in range(x0, x0 + wpx):
+                top, bot = px.get((x, 2 * r)), px.get((x, 2 * r + 1))
+                if top and bot:
+                    self.put(y + r, x, "\u2588" if top == bot else "\u2580", self.C(top, bot))
+                elif top:
+                    self.put(y + r, x, "\u2580", self.C(top, BLACK))
+                elif bot:
+                    self.put(y + r, x, "\u2584", self.C(bot, BLACK))
+        return rows + 1
 
     def art(self, y, x, key, lines=None, fg=None, pal=None, bg=BLACK, fmt=None):
         p = pic_for(key)
@@ -8331,28 +8381,33 @@ class UI:
             embers = [e for e in embers if e[1] > 0]
             for e in embers:
                 self.put(int(e[1]), int(e[0]), e[3], self.C(self.rng.choice(FIRE_COLS)))
+            # the ASCII ARCADE title layout: block title, scene, tagline, menu panel, footer bar
+            k2 = W >= title_cols("X" * 11, 2) + 4 and H >= 30   # the letter size every arcade title uses
             y = 1
+            y += self.block_title("EMBERFALL", y, 2 if k2 else 1)
+            need = len(opts) * 2 + 7
             pk = next((k for k in ("title_l", "title_m", "title_s")
-                       if pic_for(k) and PICS[k]["h"] <= H - 13 and PICS[k]["w"] <= W - 2), None)
+                       if pic_for(k) and PICS[k]["h"] <= H - y - need and PICS[k]["w"] <= W - 2), None)
             if pk:
                 self.art(y, (W - PICS[pk]["w"]) // 2, pk)
-                y += PICS[pk]["h"] + 1
-            elif H >= 32:
-                self.art(y, (W - len(DRAGON[0])) // 2, "dragon")
-                y += len(DRAGON)
-            b = banner("EMBERFALL")
-            for j, l in enumerate(b):
-                cols = [EMBER, ORANGE, AMBER, GOLD, YELLOW]
-                self.put(y + j, (W - len(l)) // 2, l, self.C(cols[j], BLACK, True))
-            y += len(b)
+                y += PICS[pk]["h"]
             sub = "~  T H E   P A L E   F L A M E  ~"
             self.put(y, (W - len(sub)) // 2, sub, self.C(PALE))
             y += 2
+            pw = max(len(lab) for lab, _ in opts) + 14
+            px0 = (W - pw) // 2
+            panel, sel_a = self.C(LIGHT, PANEL), self.C(BLACK, TITLE_SEL)
+            for j in range(len(opts) * 2 + 1):
+                self.put(y + j, px0, " " * pw, panel)
             for i, (lab, v) in enumerate(opts):
-                s = ("  > %s <  " if i == sel else "    %s    ") % lab
-                self.put(y + i, (W - len(s)) // 2, s, self.C(BLACK, GOLD) if i == sel else self.C(LIGHT))
-            foot = "Up/Down choose  Enter start  ? help  Esc quit   -   Rules after the D&D 5e SRD 5.1 (CC-BY-4.0)."
-            self.put(H - 1, max(0, (W - len(foot)) // 2), foot, self.C(DGRAY))
+                line = ((" > " if i == sel else "   ") + lab).ljust(pw - 4)
+                self.put(y + 1 + i * 2, px0 + 2, line, sel_a if i == sel else panel)
+            credit = "Rules after the D&D 5e SRD 5.1 (CC-BY-4.0)."
+            self.put(H - 2, max(0, (W - len(credit)) // 2), credit, self.C(DGRAY))
+            label, keys = " ASCII ARCADE ", " Up/Down choose   Enter start   ? help   Esc quit "
+            self.put(H - 1, 0, " " * (W - 1), self.C(FOOTER_FG, FOOTER_BG))
+            self.put(H - 1, 0, label, self.C(BLACK, FOOTER_LABEL))
+            self.put(H - 1, max(len(label) + 1, W - 1 - len(keys)), keys, self.C(FOOTER_FG, FOOTER_BG))
             self.refresh()
             k = self.key()
             if k in (curses.KEY_UP, ord('8')):

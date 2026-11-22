@@ -349,3 +349,94 @@ def overlay(cv, lines, fg=(240, 240, 246), bg=(22, 22, 42)):
     """A centred text box (pause menu, help) on top of a canvas."""
     w = max(len(l) for l in lines) + 4
     cv.box(max(0, (cv.cols - w) // 2), max(0, cv.rows // 2 - len(lines) // 2 - 1), list(lines), fg, bg)
+
+
+# =============================================================================================
+# The shared title screen: every game puts its own live scene behind the same layout
+# =============================================================================================
+TITLE_DIM = (6, 6, 14)
+PANEL_BG = (14, 14, 28)
+PANEL_FG = (220, 220, 232)
+GOLD_TEXT = (240, 210, 120)
+FOOTER_BG = (12, 10, 22)
+FOOTER_FG = (150, 154, 184)
+TITLE_LONGEST = 11   # LIGHTKEEPER: every title uses the letter size that fits the longest name
+ACCENTS = {  # (top, bottom) of each game's title gradient
+    "HOVERDRIFT": ((150, 215, 255), (70, 140, 230)),
+    "EMBERFALL": ((255, 215, 130), (205, 95, 45)),
+    "BLOCKFIRE": ((255, 165, 70), (215, 50, 40)),
+    "DEEPCALL": ((120, 240, 255), (40, 160, 210)),
+    "LIGHTKEEPER": ((255, 232, 150), (235, 165, 65)),
+    "STACKFALL": ((140, 235, 120), (60, 170, 95)),
+    "DEPTHWELL": ((165, 160, 255), (105, 90, 225)),
+    "SKYSHOT": ((255, 140, 170), (200, 60, 110)),
+    "NIGHTDRIVE": ((255, 120, 230), (130, 70, 255)),
+    "ORBITAL": ((200, 240, 255), (120, 170, 255)),
+}
+
+
+def block_title(cv, text, x, y, k, top, bottom):
+    """Block letters with a soft shadow and a top-to-bottom gradient."""
+    shadow = (0, 0, 0)
+    for n, ch in enumerate(text):
+        glyph = FONT.get(ch.upper(), FONT[" "])
+        for gy, row in enumerate(glyph):
+            c = mix(top, bottom, gy / 4)
+            for gx, bit in enumerate(row):
+                if bit == "#":
+                    bx, by = x + (n * 6 + gx) * k, y + gy * k
+                    if k >= 2:
+                        cv.rect(bx + 1, by + 1, k, k, mix(cv.px[min(cv.H - 1, by + 1)][min(cv.W - 1, bx + 1)], shadow, 0.7))
+            for gx, bit in enumerate(row):
+                if bit == "#":
+                    cv.rect(x + (n * 6 + gx) * k, y + gy * k, k, k, c)
+
+
+def title_screen(cv, name, tagline, items, sel, best=None, extra=(), keys=None, help_lines=None, show_help=False,
+                 dim=0.55):
+    """Draw the ASCII ARCADE title layout over the game's scene already painted into cv.
+
+    items: menu lines (sel is highlighted); extra: dim lines under the items inside the panel;
+    best: a line in gold under the panel; keys: the footer's key hints."""
+    cols, rows = cv.cols, cv.rows
+    if dim:
+        for y in range(cv.H):
+            cv.px[y] = [mix(c, TITLE_DIM, dim) for c in cv.px[y]]
+    top, bottom = ACCENTS.get(name, ((240, 240, 250), (160, 160, 190)))
+    need = len(items) * 2 + len(extra) + 9            # rows below the title
+    k = 2 if cols >= title_width("X" * TITLE_LONGEST, 2) + 4 and (5 * 2 + 6) // 2 + need <= rows else 1
+    y0 = 3
+    block_title(cv, name, (cols - title_width(name, k)) // 2, y0, k, top, bottom)
+    row = (y0 + 5 * k) // 2 + 2
+    cv.center(row, tagline, (205, 205, 220))
+    gap = 2 if row + 3 + len(items) * 2 + len(extra) + 4 < rows else 1
+    w = max([len(s) for s in items] + [len(s) for s in extra] + [20]) + 8
+    x0 = max(0, (cols - w) // 2)
+    r = row + 2
+    height = len(items) * gap + len(extra) + (1 if gap == 2 else 0) + 1
+    for j in range(height):
+        cv.put(x0, r + j, " " * w, PANEL_FG, PANEL_BG)
+    for i, s in enumerate(items):
+        y = r + 1 + i * gap if gap == 2 else r + i
+        if i == sel:
+            cv.put(x0 + 2, y, (" > " + s).ljust(w - 4), (14, 14, 20), mix(top, bottom, 0.3))
+        else:
+            cv.put(x0 + 2, y, ("   " + s).ljust(w - 4), PANEL_FG, PANEL_BG)
+    ey = r + (1 + len(items) * gap if gap == 2 else len(items))
+    for j, s in enumerate(extra):
+        cv.put(x0 + 2, ey + j, ("   " + s).ljust(w - 4), (150, 154, 184), PANEL_BG)
+    if best:
+        cv.center(r + height + 1, best, GOLD_TEXT)
+    footer(cv, keys or "Up/Down choose   Enter start   ? help   Esc back")
+    if show_help and help_lines:
+        overlay(cv, help_lines)
+
+
+def footer(cv, keys):
+    """The bottom bar every title screen shares."""
+    cols, r = cv.cols, cv.rows - 1
+    label = " ASCII ARCADE "
+    cv.put(0, r, " " * cols, FOOTER_FG, FOOTER_BG)
+    cv.put(0, r, label, (14, 14, 20), (200, 200, 215))
+    k = " %s " % keys
+    cv.put(max(len(label) + 1, cols - len(k)), r, k[:max(0, cols - len(label) - 1)], FOOTER_FG, FOOTER_BG)

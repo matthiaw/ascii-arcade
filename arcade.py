@@ -33,6 +33,22 @@ GAMES = [
          info=["Only your sonar shows the trench - and every", "ping can be heard. Find air, salvage and the",
                "Source at the bottom. Keep the deep quiet."],
          keys="arrows steer   Space ping   F focus   L lamp   E flare", size=(60, 20), score="deepcall"),
+    dict(file="lightkeeper.py", name="LIGHTKEEPER", tag="one beam, many ships, a long night",
+         info=["Keep the lighthouse through a stormy night:", "light the ships past the reefs, sound the horn,",
+               "send the rescue boat. Alone or as two keepers."],
+         keys="arrows beam   Space horn   R oil   B boat", size=(70, 22), score="lightkeeper"),
+    dict(file="skyshot.py", name="SKYSHOT", tag="an artillery duel on crumbling hills",
+         info=["Turn-based cannon duel on ground that breaks", "apart: craters, sliding tanks, wind. Two players",
+               "at one keyboard, or alone against the computer."],
+         keys="Left/Right angle  Up/Down power  Tab shell  Space fire", size=(70, 22), score="skyshot"),
+    dict(file="nightdrive.py", name="NIGHTDRIVE", tag="a race against the clock, after dark",
+         info=["Night racing on a winding, hilly highway:", "neon city, coast, forest, desert, mountain",
+               "pass and storm. Reach every checkpoint in time."],
+         keys="arrows steer   Up gas   Down brake   Esc pause", size=(70, 22), score="nightdrive"),
+    dict(file="orbital.py", name="ORBITAL", tag="a calm gravity puzzle among the planets",
+         info=["Set angle and power, launch the probe and let", "the planets' gravity bend its path to the dock.",
+               "Moons, asteroid belts, wormholes; fewer tries."],
+         keys="arrows aim/power   Space launch   R retry   N/B level", size=(70, 22), score="orbital"),
     dict(file="stackfall.py", name="STACKFALL", tag="falling blocks, ten wide, twenty deep",
          info=["Turn and drop seven kinds of pieces, fill rows", "to melt them away. Marathon, Sprint (40 rows)",
                "and Rising, where rubble pushes up from below."],
@@ -189,7 +205,67 @@ def thumb_deep(cv, x, y, w, h, t):
             cv.px[y + yy][x:x + w] = sub.px[yy][:max(0, min(w, cv.W - x))]
 
 
-THUMBS = {"deepcall.py": thumb_deep, "hoverdrift.py": thumb_hover, "emberfall.py": thumb_ember, "stackfall.py": thumb_stack,
+_LK = []
+
+
+def thumb_light(cv, x, y, w, h, t):
+    """A little stretch of LIGHTKEEPER coast with the beam sweeping round."""
+    import lightkeeper
+    if not _LK or _LK[0].n.W != w:
+        demo = lightkeeper.TitleDemo(w, (h + 1) // 2 + 1)
+        _LK[:] = [demo, t]
+    demo = _LK[0]
+    n = demo.n
+    dt = min(0.1, max(0.0, t - _LK[1]))
+    _LK[1] = t
+    n.spin, n.oil = 0.55, 100
+    n.update(dt)
+    n.msgs, n.lives, n.over, n.dawn = [], 3, False, False
+    if n.t > n.length * 0.6:
+        n.t = 10
+        n.schedule = sorted(n.rnd.uniform(11, 40) for _ in range(4))
+        n.ships = [s for s in n.ships if s.state == "sailing"]
+    sub = lightkeeper.render(n, demo.p, w, (h + 1) // 2, title_mode=True)
+    for yy in range(h):
+        if 0 <= y + yy < cv.H:
+            cv.px[y + yy][x:x + w] = sub.px[yy][:max(0, min(w, cv.W - x))]
+
+
+def thumb_sky(cv, x, y, w, h, t):
+    import skyshot
+    skyshot.preview(cv, x, y, w, h, t)
+
+
+_ND, _OR = [], []
+
+
+def blit_scene(cv, x, y, w, h, sub):
+    for yy in range(h):
+        if 0 <= y + yy < cv.H:
+            cv.px[y + yy][x:x + w] = sub.px[yy][:max(0, min(w, cv.W - x))]
+
+
+def thumb_night(cv, x, y, w, h, t):
+    """NIGHTDRIVE's autopilot on the road."""
+    import nightdrive
+    if not _ND:
+        _ND[:] = [nightdrive.TitleDemo(), t]
+    dt = min(0.1, max(0.0, t - _ND[1]))
+    _ND[1] = t
+    blit_scene(cv, x, y, w, h, _ND[0].scene(w, (h + 1) // 2, dt))
+
+
+def thumb_orbital(cv, x, y, w, h, t):
+    """A probe looping round ORBITAL's ringed planet."""
+    import orbital
+    if not _OR:
+        _OR[:] = [orbital.TitleDemo(), t]
+    dt = min(0.1, max(0.0, t - _OR[1]))
+    _OR[1] = t
+    blit_scene(cv, x, y, w, h, _OR[0].scene(w, (h + 1) // 2, dt))
+
+
+THUMBS = {"nightdrive.py": thumb_night, "orbital.py": thumb_orbital, "skyshot.py": thumb_sky, "lightkeeper.py": thumb_light, "deepcall.py": thumb_deep, "hoverdrift.py": thumb_hover, "emberfall.py": thumb_ember, "stackfall.py": thumb_stack,
           "depthwell.py": thumb_depth, "blockfire.py": thumb_block}
 
 
@@ -286,7 +362,7 @@ def menu(sel, note):
                     sel = (sel - 1) % len(GAMES)
                 elif k in ("down", "s", "j", "tab"):
                     sel = (sel + 1) % len(GAMES)
-                elif k in ("1", "2", "3", "4", "5", "6"):
+                elif k in tuple("123456789"):
                     sel = min(len(GAMES) - 1, int(k) - 1)
                 elif k in ("enter", " "):
                     return sel

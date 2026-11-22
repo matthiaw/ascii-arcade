@@ -7,12 +7,13 @@ clock) and Rising (the floor keeps pushing up rubble).
 
 Part of the ASCII ARCADE. Pure Python 3, no dependencies (macOS / Linux, truecolor terminal recommended).
 """
+import math
 import random
 import sys
 import time
 
 from arcadekit import (PAUSE_LINES, Canvas, Terminal, clamp, draw_title, load_scores, mix, overlay, shade,
-                       shared_key, submit, title_width)
+                       shared_key, submit, title_screen, title_width)
 
 W, H = 10, 20
 HID = 2                  # spawn rows above the visible well
@@ -51,6 +52,9 @@ HELP = [
     "Down  (S)                drop faster",
     "Space                    slam down",
     "C / Tab                  hold the piece for later",
+    "",
+    "The outlined piece at the bottom shows where it will land.",
+    "The well's frame turns red when the stack nears the top.",
     "",
     "Esc / P                  pause menu (Q there: quit)",
     "?                        this help",
@@ -280,8 +284,9 @@ class Stack:
 # Drawing
 # =============================================================================================
 def block(cv, x, y, k, c, ghost=False):
-    if ghost:
-        cv.frame(x, y, k, k, shade(c, 0.55))
+    if ghost:   # where the piece will land: a light fill and a clear coloured outline
+        cv.rect(x, y, k, k, mix((14, 15, 26), c, 0.22))
+        cv.frame(x, y, k, k, shade(c, 0.95))
         return
     if k <= 2:
         cv.rect(x, y, k, k, c)
@@ -320,8 +325,11 @@ def render(g, cols, rows):
     bw, bh = W * K, H * K
     bx = (cols - bw) // 2
     by = ((PH - bh) // 2) & ~1
-    # the well
-    cv.rect(bx - 2, by - 2, bw + 4, bh + 4, (64, 72, 112))
+    # the well; its frame pulses red when the stack gets close to the top
+    top = next((y for y in range(H + HID) if any(c is not None for c in g.board[y])), H + HID)
+    danger = clamp((HID + 5 - top) / 5, 0, 1) if not g.over else 0
+    frame = mix((64, 72, 112), (230, 60, 60), danger * (0.6 + 0.4 * math.sin(g.t * 8)))
+    cv.rect(bx - 2, by - 2, bw + 4, bh + 4, frame)
     cv.rect(bx - 1, by - 1, bw + 2, bh + 2, (30, 34, 58))
     cv.rect(bx, by, bw, bh, (14, 15, 26))
     for gy in range(1, H):
@@ -359,8 +367,8 @@ def render(g, cols, rows):
     if g.hold:
         mini(cv, g.hold, lx, by + 3, KP, dim=g.held)
     cv.put(rx, row, "NEXT", (170, 176, 210))
-    for i, kind in enumerate(g.queue):
-        mini(cv, kind, rx, by + 3 + i * (2 * KP + 3), KP if i == 0 else max(2, KP - 1))
+    for i, kind in enumerate(g.queue[:3]):          # three is plenty, and calmer than five
+        mini(cv, kind, rx, by + 3 + i * (2 * KP + 4), KP if i == 0 else max(2, KP - 1), dim=i > 0)
     srow = row + (2 * KP + 8) // 2
     stats = [("MODE", g.mode), ("SCORE", "%d" % g.score), ("ROWS", "%d%s" % (g.lines, "/40" if g.mode == "Sprint" else "")),
              ("LEVEL", "%d" % g.level), ("TIME", fmt_time(g.t))]
@@ -406,27 +414,16 @@ def render_menu(cols, rows, sel, level, t, help_=False):
         x = rnd.randrange(cols)
         sp = rnd.uniform(4, 12)
         y = int((rnd.uniform(0, cv.H) + t * sp) % (cv.H + 8)) - 4
-        block(cv, x, y, 3, mix(rnd.choice(cols_), (16, 12, 28), 0.6))
-    k = 3 if cols >= title_width("STACKFALL", 3) + 4 else 2
-    tw = title_width("STACKFALL", k)
-    draw_title(cv, "STACKFALL", (cols - tw) // 2, 4, k, cols_)
-    row = (4 + 5 * k) // 2 + 3
-    cv.center(row, "falling blocks, ten wide, twenty deep", (190, 190, 210))
+        block(cv, x, y, 3, mix(rnd.choice(cols_), (16, 12, 28), 0.3))
     rec = load_scores().get(GAME, {})
-    for i, (name, desc) in enumerate(MODES):
-        r = rec.get(name)
-        best = "" if r is None else ("best " + (fmt_time(r) if name == "Sprint" else str(r)))
-        s = "  %-9s %-40s %12s  " % (name, desc, best)
-        if i == sel:
-            cv.center(row + 3 + i * 2, s, (14, 14, 20), (236, 192, 64))
-        else:
-            cv.center(row + 3 + i * 2, s, (220, 220, 232), (22, 22, 40))
-    cv.center(row + 10, "  start level:  < %2d >  " % level, (220, 220, 232), (22, 22, 40))
-    cv.center(row + 13, "Up/Down choose   Left/Right level   Enter start   ? help   Esc quit", (150, 154, 184))
-    cv.center(row + 15, "in game:  arrows move  Up turn  Z turn back  Space slam  C hold  Esc pause",
-              (120, 124, 150))
-    if help_:
-        overlay(cv, HELP)
+    name = MODES[sel][0]
+    r = rec.get(name)
+    best = None if r is None else "best %s: %s" % (name, fmt_time(r) if name == "Sprint" else r)
+    items = ["%-9s %s" % m for m in MODES]
+    title_screen(cv, "STACKFALL", "falling blocks, ten wide, twenty deep", items, sel, best,
+                 extra=["", "start level   < %d >" % level],
+                 keys="Up/Down mode   Left/Right level   Enter start   ? help   Esc back",
+                 help_lines=HELP, show_help=help_)
     return cv
 
 

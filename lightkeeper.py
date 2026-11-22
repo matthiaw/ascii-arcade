@@ -1,0 +1,1094 @@
+#!/usr/bin/env python3
+"""LIGHTKEEPER - one beam, many ships, a long night.
+
+You keep the lighthouse on a rocky island. Night falls, a storm comes in, and ships from every side are making
+for the harbour - each with only a small lantern. Your beam is the only light on the coast: a ship that sees it
+steers clear of the reefs; a ship left in the dark sails on blindly. Turn the beam, focus it, sound the horn in
+the fog, refill the oil, and send the rescue boat when someone runs aground.
+
+Alone you do it all; with a second player at the keyboard, one keeps the light and the other steers the
+rescue boat.
+
+Part of the ASCII ARCADE. Pure Python 3, no dependencies (macOS / Linux, truecolor terminal recommended).
+Run:        python3 lightkeeper.py
+Self-test:  python3 lightkeeper.py --selftest
+Benchmark:  python3 lightkeeper.py --bench
+"""
+import math
+import random
+import sys
+import time
+from collections import deque
+
+from arcadekit import Canvas, Terminal, clamp, load_scores, mix, overlay, shade, shared_key, submit, title_screen
+
+GAME = "lightkeeper"
+WATER, ROCK, LAND, HARBOUR = 0, 1, 2, 3
+TAU = 2 * math.pi
+
+SHIPS = {  # speed px/s, length, hull colour, points, label
+    "fishing": (9.0, 4, (150, 110, 70), 100, "fishing boat"),
+    "sail": (7.5, 4, (190, 170, 130), 150, "sailing boat"),
+    "freighter": (5.0, 7, (120, 70, 60), 250, "freighter"),
+}
+UPGRADES = [
+    ("lens", "Fresnel lens", "the beam reaches 15% further"),
+    ("tank", "Bigger oil tank", "40% more oil before a refill"),
+    ("gear", "Geared mechanism", "the beam turns 30% faster"),
+    ("horn", "Louder horn", "reaches further, ready sooner"),
+    ("boat", "Motor launch", "the rescue boat is 30% faster"),
+    ("pier", "Pier lanterns", "ships near the harbour find it alone"),
+    ("buoy", "Spare lifebuoy", "one more life"),
+]
+WEATHER = ["calm", "breezy", "fog banks", "rain and lightning", "storm"]
+
+
+def wrap(a):
+    return (a + math.pi) % TAU - math.pi
+
+
+# =============================================================================================
+# The coast
+# =============================================================================================
+class Coast:
+    """A stretch of coast sized to the screen: shore, harbour channel, the lighthouse island and reefs."""
+
+    def __init__(self, W, H, seed, night=1):
+        self.W, self.H = W, H
+        rnd = self.rnd = random.Random(seed * 7 + night)
+        for attempt in range(40):
+            if self.generate(rnd, night):
+                return
+        raise RuntimeError("could not chart a navigable coast")
+
+    def generate(self, rnd, night):
+        W, H = self.W, self.H
+        g = self.g = bytearray(W * H)
+        ph = [rnd.uniform(0, 6.3) for _ in range(4)]
+        base = H * 0.80
+        self.coast = []
+        for x in range(W):
+            c = base - (math.sin(x * 0.045 + ph[0]) * 3.5 + math.sin(x * 0.11 + ph[1]) * 1.8
+                        + math.sin(x * 0.019 + ph[2]) * 4)
+            self.coast.append(c)
+            for y in range(int(c), H):
+                g[y * W + x] = LAND
+        # the harbour channel: a gap in the shore, its basin is the goal
+        hx = int(W * rnd.uniform(0.3, 0.7))
+        self.harbour = (hx, int(self.coast[hx]) + 3)
+        hw = 6
+        for x in range(hx - hw, hx + hw + 1):
+            for y in range(int(min(self.coast[max(0, hx - hw - 2):hx + hw + 3])) - 1, H):
+                if 0 <= x < W:
+                    g[y * W + x] = HARBOUR if y >= self.coast[x] - 1 else WATER
+        # the lighthouse island, away from the channel
+        side = rnd.choice((-1, 1))
+        lx = int(clamp(hx + side * W * rnd.uniform(0.22, 0.32), 14, W - 14))
+        if abs(lx - hx) < 18:
+            lx = int(clamp(hx - side * W * 0.27, 14, W - 14))
+        ly = int(H * rnd.uniform(0.45, 0.55))
+        self.island = (lx, ly)
+        self.blob(lx, ly, 4.5, LAND)
+        for _ in range(5):
+            a = rnd.uniform(0, TAU)
+            self.blob(lx + math.cos(a) * 6, ly + math.sin(a) * 5, rnd.uniform(1, 2), ROCK)
+        self.lamp = (lx, ly - 5)                      # the lamp on top of the tower
+        self.dock = (lx, ly - 8) if ly > H * 0.3 else (lx, ly + 8)
+        dx, dy = self.dock
+        self.dock = (dx, dy)
+        for yy in range(dy - 2, dy + 3):              # keep the jetty water clear
+            for xx in range(dx - 3, dx + 4):
+                if 0 <= xx < W and 0 <= yy < H and g[yy * W + xx] == ROCK:
+                    g[yy * W + xx] = WATER
+        # reefs: clusters of rocks, more each night, never inside the harbour approach
+        for _ in range(7 + night):
+            for _ in range(30):
+                rx = rnd.uniform(6, W - 6)
+                ry = rnd.uniform(H * 0.12, min(self.coast[int(rx)] - 8, H * 0.74))
+                if math.hypot(rx - hx, ry - self.harbour[1]) > 16 and math.hypot(rx - lx, ry - ly) > 10:
+                    break
+            for _ in range(rnd.randint(3, 7)):
+                self.blob(rx + rnd.gauss(0, 3.5), ry + rnd.gauss(0, 2.2), rnd.uniform(0.8, 2.2), ROCK)
+        self.nav = self.field([(x, y) for y in range(H) for x in range(W) if g[y * W + x] == HARBOUR])
+        # every spawn edge must have a way in
+        self.spawns = [(x, 1) for x in range(4, W - 4, 3)] + [(1, y) for y in range(3, int(H * 0.55), 3)] \
+            + [(W - 2, y) for y in range(3, int(H * 0.55), 3)]
+        self.spawns = [p for p in self.spawns if self.nav[p[1] * W + p[0]] < 10 ** 6]
+        dock_ok = self.nav[self.dock[1] * W + self.dock[0]] < 10 ** 6
+        return len(self.spawns) > 20 and dock_ok
+
+    def blob(self, cx, cy, r, kind):
+        W, H, g = self.W, self.H, self.g
+        for y in range(int(cy - r), int(cy + r) + 1):
+            for x in range(int(cx - r), int(cx + r) + 1):
+                if 0 <= x < W and 0 <= y < H and (x - cx) ** 2 + (y - cy) ** 2 <= r * r and g[y * W + x] != HARBOUR:
+                    g[y * W + x] = kind
+
+    def field(self, goals, keep_off=1):
+        """BFS distance to the goals through water, keeping a little distance from rock where possible."""
+        W, H, g = self.W, self.H, self.g
+        INF = 10 ** 7
+        near = bytearray(W * H)
+        for y in range(H):
+            for x in range(W):
+                if g[y * W + x] in (ROCK, LAND):
+                    for yy in range(max(0, y - keep_off), min(H, y + keep_off + 1)):
+                        for xx in range(max(0, x - keep_off), min(W, x + keep_off + 1)):
+                            near[yy * W + xx] = 1
+        dist = [INF] * (W * H)
+        q = deque()
+        for x, y in goals:
+            dist[y * W + x] = 0
+            q.append((x, y))
+        while q:
+            x, y = q.popleft()
+            d = dist[y * W + x] + 1
+            for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                if 0 <= nx < W and 0 <= ny < H:
+                    i = ny * W + nx
+                    if dist[i] > d and g[i] in (WATER, HARBOUR) and (not near[i] or g[i] == HARBOUR):
+                        dist[i] = d
+                        q.append((nx, ny))
+        # cells right next to rock get a value too (higher), so nobody is ever "lost"
+        for _ in range(3):
+            for y in range(H):
+                for x in range(W):
+                    i = y * W + x
+                    if dist[i] >= INF and g[i] in (WATER, HARBOUR):
+                        best = min((dist[yy * W + xx] for xx, yy in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1))
+                                    if 0 <= xx < W and 0 <= yy < H), default=INF)
+                        if best < INF:
+                            dist[i] = best + 6
+        return dist
+
+    def at(self, x, y):
+        ix, iy = int(x), int(y)
+        if ix < 0 or iy < 0 or ix >= self.W or iy >= self.H:
+            return WATER          # beyond the map: open sea
+        return self.g[iy * self.W + ix]
+
+    def downhill(self, dist, x, y):
+        """Direction to the neighbouring water pixel with the smallest distance value (never through rock)."""
+        W, H = self.W, self.H
+        ix, iy = int(clamp(x, 0, W - 1)), int(clamp(y, 0, H - 1))
+        here = dist[iy * W + ix]
+        best, bv = None, here
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)):
+            nx, ny = ix + dx, iy + dy
+            if 0 <= nx < W and 0 <= ny < H:
+                v = dist[ny * W + nx] + (0.4 if dx and dy else 0)
+                if v < bv and self.g[ny * W + nx] in (WATER, HARBOUR):
+                    if dx and dy and (self.g[iy * W + nx] in (ROCK, LAND) or self.g[ny * W + ix] in (ROCK, LAND)):
+                        continue          # no squeezing diagonally between two rocks
+                    best, bv = (nx + 0.5, ny + 0.5), v
+        if best is None:
+            return None
+        return math.atan2(best[1] - y, best[0] - x)
+
+
+# =============================================================================================
+# The night
+# =============================================================================================
+class Ship:
+    def __init__(self, kind, x, y, heading):
+        self.kind = kind
+        self.x, self.y = x, y
+        self.h = heading
+        self.speed, self.length, self.col, self.points, self.label = SHIPS[kind]
+        self.aware = 0.0          # seconds it can still see well (lit, horn, lightning)
+        self.slow = 0.0
+        self.state = "sailing"    # sailing, saved, wrecked, rescued, lost
+        self.crew = {"fishing": 3, "sail": 2, "freighter": 6}[kind]
+        self.timer = 0.0          # distress time left once wrecked
+        self.wake = deque(maxlen=10)
+
+
+class Boat:
+    def __init__(self, x, y):
+        self.x, self.y = x, y
+        self.home = (x, y)
+        self.vx = self.vy = 0.0
+        self.state = "docked"     # docked, out, carrying
+        self.target = None
+        self.field = None
+        self.crew = 0
+        self.pick = 0.0
+
+
+class Night:
+    def __init__(self, W, H, seed, night=1, keepers=1, up=None, lives=3, score=0):
+        self.W, self.H = W, H
+        self.seed, self.night, self.keepers = seed, night, keepers
+        self.up = dict(up or {})
+        self.c = Coast(W, H, seed, night)
+        self.rnd = random.Random(seed * 31 + night)
+        self.t = 0.0
+        self.length = 110 + 12 * night
+        self.beam = -math.pi / 2
+        self.spin = 0.0
+        self.half = 0.25           # beam half-width (rad): narrow = far, wide = near
+        self.oil = self.tank()
+        self.refill = 0.0          # seconds of refilling left (light off)
+        self.horn_cd = 0.0
+        self.horn_ring = None
+        self.lives, self.score = lives, score
+        self.ships = []
+        self.boat = Boat(*self.c.dock)
+        self.msgs = []
+        self.flash = 0.0
+        self.over = self.dawn = False
+        self.paused = self.help = False
+        self.saved = self.wrecks = self.rescued = self.lost = 0
+        n = 3 + 2 * night + max(0, night - 3) * 2
+        self.schedule = sorted(self.rnd.uniform(4, self.length * 0.72) for _ in range(n))
+        w = WEATHER[min(night - 1, len(WEATHER) - 1)]
+        self.weather = w
+        self.wind = (self.rnd.uniform(-1, 1) * (0.5 + 0.4 * night), self.rnd.uniform(-0.3, 0.6) * (0.4 + 0.3 * night))
+        self.fog = 0.0 if night < 3 else min(0.85, 0.35 + 0.12 * (night - 3))
+        self.rain = night >= 4
+        self.lightning = 0.0 if night < 4 else 0.05 + 0.02 * (night - 4)
+        self.fog_seed = [[self.rnd.random() for _ in range(17)] for _ in range(17)]
+        self.drops = [[self.rnd.uniform(0, W), self.rnd.uniform(0, H)] for _ in range(int(W * H / 90))] if self.rain else []
+        self.say("Night %d - %s. %d ships expected." % (night, w, n), 5)
+
+    # --- numbers that upgrades change ---------------------------------------------------------
+    def range_max(self):
+        return max(self.W, self.H) * 0.75 * (1.15 ** self.up.get("lens", 0))
+
+    def beam_range(self):
+        narrow = (0.45 - self.half) / 0.33
+        rain = 0.8 if self.rain else 1.0
+        return self.range_max() * (0.45 + 0.55 * narrow) * rain
+
+    def tank(self):
+        return 100.0 * (1.4 ** self.up.get("tank", 0))
+
+    def horn_radius(self):
+        return 34 * (1.35 ** self.up.get("horn", 0))
+
+    def boat_speed(self):
+        return 20 * (1.3 ** self.up.get("boat", 0))
+
+    def pier_radius(self):
+        return 14 + 18 * self.up.get("pier", 0)
+
+    def say(self, s, ttl=3.0):
+        self.msgs.append([s, self.t + ttl])
+        self.msgs = self.msgs[-3:]
+
+    # --- the light --------------------------------------------------------------------------------
+    def fog_at(self, x, y):
+        if self.fog <= 0:
+            return 0.0
+        fx = (x / 22.0 + self.t * self.wind[0] * 0.05) % 16
+        fy = (y / 22.0 + self.t * self.wind[1] * 0.05) % 16
+        ix, iy = int(fx), int(fy)
+        tx, ty = fx - ix, fy - iy
+        s = self.fog_seed
+        a = s[iy][ix] + (s[iy][ix + 1] - s[iy][ix]) * tx
+        b = s[iy + 1][ix] + (s[iy + 1][ix + 1] - s[iy + 1][ix]) * tx
+        v = a + (b - a) * ty
+        return clamp((v - 0.35) * 1.8, 0, 1) * self.fog
+
+    def light_at(self, x, y):
+        """How brightly the beam lights the point (0..1)."""
+        if self.refill > 0 or self.oil <= 0:
+            return 0.0
+        lx, ly = self.c.lamp
+        dx, dy = x - lx, y - ly
+        d = math.hypot(dx, dy)
+        R = self.beam_range()
+        if d > R or d < 0.5:
+            return 1.0 if d < 0.5 else 0.0
+        da = abs(wrap(math.atan2(dy, dx) - self.beam))
+        if da > self.half:
+            return 0.0
+        return (1 - d / R) ** 0.6 * (1 - (da / self.half) ** 2) * (1 - self.fog_at(x, y) * 0.8)
+
+    # --- controls ----------------------------------------------------------------------------------
+    def key(self, k):
+        if self.over or self.dawn:
+            return
+        coop = self.keepers == 2
+        spin_max = 3.0 * (1.3 ** self.up.get("gear", 0))
+        if k in ("left",) or (k == "a" and not coop):
+            self.spin = max(-spin_max, self.spin - 1.0)
+        elif k in ("right",) or (k == "d" and not coop):
+            self.spin = min(spin_max, self.spin + 1.0)
+        elif k in ("up",) or (k == "w" and not coop):
+            self.half = max(0.12, self.half - 0.03)
+        elif k in ("down",) or (k == "s" and not coop):
+            self.half = min(0.45, self.half + 0.03)
+        elif k == " ":
+            self.horn()
+        elif k == "r":
+            if self.refill <= 0 and self.oil < self.tank() - 1:
+                self.refill = 4.0
+                self.say("Refilling the lamp - the coast goes dark for a moment.", 3)
+        elif k == "b" and not coop:
+            self.send_boat()
+        elif coop and k in ("w", "a", "s", "d"):
+            b = self.boat
+            dx, dy = {"w": (0, -1), "a": (-1, 0), "s": (0, 1), "d": (1, 0)}[k]
+            b.vx += dx * 7
+            b.vy += dy * 5
+            if b.state == "docked":
+                b.state = "out"
+
+    def horn(self):
+        if self.horn_cd > 0:
+            self.say("The horn needs a moment (%.0f s)." % self.horn_cd, 1.2)
+            return
+        self.horn_cd = max(3.0, 8.0 - 2.0 * self.up.get("horn", 0))
+        self.horn_ring = self.t
+        R = self.horn_radius()
+        n = 0
+        for s in self.ships:
+            if s.state == "sailing" and math.hypot(s.x - self.c.lamp[0], s.y - self.c.lamp[1]) < R:
+                s.aware = max(s.aware, 3.5)
+                s.slow = 3.0
+                n += 1
+        self.say("HOOOOONK - %d ship%s heard it." % (n, "" if n == 1 else "s"), 2)
+
+    def send_boat(self):
+        b = self.boat
+        wrecks = [s for s in self.ships if s.state == "wrecked"]
+        if b.state != "docked":
+            self.say("The rescue boat is already out.", 1.5)
+            return
+        if not wrecks:
+            self.say("Nobody needs rescuing right now.", 1.5)
+            return
+        w = min(wrecks, key=lambda s: math.hypot(s.x - b.x, s.y - b.y))
+        self.boat_to(w)
+        self.say("Rescue boat away - light its way, it is slow in the dark.", 3)
+
+    def boat_to(self, wreck):
+        b = self.boat
+        b.state, b.target = "out", wreck
+        goals = [(int(wreck.x + dx), int(wreck.y + dy)) for dx in range(-3, 4) for dy in range(-3, 4)
+                 if self.c.at(wreck.x + dx, wreck.y + dy) in (WATER, HARBOUR)
+                 and 0 <= int(wreck.x + dx) < self.W and 0 <= int(wreck.y + dy) < self.H]
+        b.field = self.c.field(goals or [(int(b.x), int(b.y))], keep_off=0)
+
+    # --- time ----------------------------------------------------------------------------------------
+    def update(self, dt):
+        if self.over or self.dawn or self.paused:
+            return
+        self.t += dt
+        c = self.c
+        # the beam
+        self.beam = (self.beam + self.spin * dt) % TAU
+        self.spin *= 0.06 ** dt
+        if self.refill > 0:
+            self.refill -= dt
+            self.oil = min(self.tank(), self.oil + self.tank() / 4.0 * dt)
+            if self.refill <= 0:
+                self.say("The lamp burns again.", 1.5)
+        else:
+            narrow = (0.45 - self.half) / 0.33
+            self.oil -= dt * (0.9 + 1.2 * narrow)      # a bigger tank simply lasts longer
+            if self.oil <= 0:
+                self.oil = 0
+                if int(self.t * 2) % 8 == 0:
+                    self.say("The lamp is out of oil! Press R to refill.", 1.5)
+        self.horn_cd = max(0.0, self.horn_cd - dt)
+        # lightning
+        self.flash = max(0.0, self.flash - dt * 4)
+        if self.lightning and self.rnd.random() < self.lightning * dt:
+            self.flash = 1.0
+            for s in self.ships:
+                if s.state == "sailing":
+                    s.aware = max(s.aware, 1.2)
+        for drop in self.drops:
+            drop[0] = (drop[0] + (self.wind[0] * 6 - 4) * dt) % self.W
+            drop[1] = (drop[1] + 38 * dt) % self.H
+        # arrivals
+        while self.schedule and self.schedule[0] <= self.t:
+            self.schedule.pop(0)
+            self.spawn()
+        for s in self.ships:
+            self.update_ship(s, dt)
+        self.update_boat(dt)
+        self.msgs = [m for m in self.msgs if m[1] > self.t]
+        if self.lives <= 0:
+            self.over = True
+        elif self.t >= self.length and not self.schedule and not any(
+                s.state in ("sailing", "wrecked") for s in self.ships) and self.boat.state != "carrying":
+            self.dawn = True
+            self.score += 300 * self.night
+            self.say("Dawn.", 3)
+
+    def spawn(self):
+        c, rnd = self.c, self.rnd
+        x, y = rnd.choice(c.spawns)
+        kind = rnd.choice(["fishing", "fishing", "sail", "freighter"] if self.night > 1 else ["fishing", "sail"])
+        hx, hy = c.harbour
+        h = math.atan2(hy - y, hx - x) + rnd.gauss(0, 0.28)
+        s = Ship(kind, x + 0.5, y + 0.5, h)
+        self.ships.append(s)
+
+    def update_ship(self, s, dt):
+        c = self.c
+        if s.state == "wrecked":
+            s.timer -= dt
+            if s.timer <= 0:
+                s.state = "lost"
+                self.lives -= 1
+                self.lost += 1
+                self.say("The crew of the %s was lost." % s.label, 4)
+            return
+        if s.state != "sailing":
+            return
+        lit = self.light_at(s.x, s.y)
+        if lit > 0.18:
+            s.aware = 2.6
+        near_harbour = math.hypot(s.x - c.harbour[0], s.y - c.harbour[1]) < self.pier_radius()
+        s.aware = max(0.0, s.aware - dt)
+        s.slow = max(0.0, s.slow - dt)
+        turn = (1.6 if s.kind != "freighter" else 0.8) * dt
+        if s.aware > 0 or near_harbour:
+            want = c.downhill(c.nav, s.x, s.y)
+            if want is not None:
+                s.h += clamp(wrap(want - s.h), -turn, turn)
+        else:
+            fog = self.fog_at(s.x, s.y)
+            storm = 0.03 * max(0, self.night - 2)
+            s.h += self.rnd.gauss(0, (0.12 + storm + 0.35 * fog) * math.sqrt(dt))
+            # in the dark they still head roughly for the harbour lights, if they can see them
+            if fog < 0.5:
+                hx, hy = c.harbour
+                want = math.atan2(hy - s.y, hx - s.x)
+                s.h += clamp(wrap(want - s.h), -0.15 * dt, 0.15 * dt)
+        sp = s.speed * (0.5 if s.slow > 0 else 1.0) * (1 + 0.06 * (self.night - 1))
+        wx, wy = self.wind
+        if s.kind == "sail":
+            sp *= 1.0 + 0.15 * (math.cos(s.h) * wx + math.sin(s.h) * wy)
+        if not s.wake or math.hypot(s.wake[-1][0] - s.x, s.wake[-1][1] - s.y) > 1.2:
+            s.wake.append((s.x, s.y))
+        s.x += math.cos(s.h) * sp * dt + wx * 0.25 * dt
+        s.y += math.sin(s.h) * sp * dt + wy * 0.25 * dt
+        s.x = clamp(s.x, 0.5, self.W - 0.5)
+        s.y = max(0.5, s.y)
+        here = c.at(s.x, s.y)
+        bow = c.at(s.x + math.cos(s.h) * s.length * 0.4, s.y + math.sin(s.h) * s.length * 0.4)
+        if here == HARBOUR:
+            s.state = "saved"
+            self.saved += 1
+            pts = int(s.points * (1 + 0.1 * self.night))
+            self.score += pts
+            self.say("The %s is safe in harbour. +%d" % (s.label, pts), 2.5)
+        elif here in (ROCK, LAND) or bow in (ROCK, LAND):
+            s.state = "wrecked"
+            s.timer = max(20.0, 52.0 - 4 * self.night)
+            self.wrecks += 1
+            hint = "Press B for the rescue boat!" if self.keepers == 1 else "Rescue boat, go!"
+            self.say("The %s ran aground! %d aboard. %s" % (s.label, s.crew, hint), 4)
+
+    def update_boat(self, dt):
+        b, c = self.boat, self.c
+        lit = max(self.light_at(b.x, b.y), self.flash)
+        if b.state == "docked":
+            b.x, b.y = b.home
+            return
+        if self.keepers == 2:   # steered by the second player
+            sp = self.boat_speed() * (1.0 if lit > 0.15 else 0.55)
+            v = math.hypot(b.vx, b.vy)
+            if v > sp:
+                b.vx, b.vy = b.vx / v * sp, b.vy / v * sp
+            b.vx *= 0.5 ** dt
+            b.vy *= 0.5 ** dt
+            nx, ny = b.x + b.vx * dt, b.y + b.vy * dt
+            if c.at(nx, b.y) in (WATER, HARBOUR) and 0 <= nx < self.W:
+                b.x = nx
+            else:
+                b.vx = 0
+            if c.at(b.x, ny) in (WATER, HARBOUR) and 0 <= ny < self.H:
+                b.y = ny
+            else:
+                b.vy = 0
+        else:                   # sails itself, slowly unless lit
+            if b.field is None:
+                return
+            sp = self.boat_speed() * (1.0 if lit > 0.15 else 0.3)
+            want = c.downhill(b.field, b.x, b.y)
+            if want is not None:
+                nx, ny = b.x + math.cos(want) * sp * dt, b.y + math.sin(want) * sp * dt
+                if c.at(nx, ny) in (WATER, HARBOUR):
+                    b.x, b.y = nx, ny
+        # pick up survivors
+        if b.state == "out":
+            for s in self.ships:
+                if s.state == "wrecked" and math.hypot(s.x - b.x, s.y - b.y) < 5:
+                    b.pick += dt
+                    if b.pick > 1.2:
+                        b.pick = 0.0
+                        b.crew, s.state = s.crew, "rescued"
+                        b.state = "carrying"
+                        self.say("%d sailors aboard the rescue boat - bring them home." % b.crew, 3)
+                        if self.keepers == 1:
+                            b.field = c.field([b.home], keep_off=0)
+                    break
+            else:
+                b.pick = 0.0
+                if self.keepers == 1 and (b.target is None or b.target.state != "wrecked"):
+                    others = [s for s in self.ships if s.state == "wrecked"]
+                    if others:
+                        self.boat_to(min(others, key=lambda s: math.hypot(s.x - b.x, s.y - b.y)))
+                    else:
+                        b.state, b.field = "carrying", c.field([b.home], keep_off=0)
+                        b.crew = 0
+        if b.state == "carrying" and math.hypot(b.x - b.home[0], b.y - b.home[1]) < 4:
+            if b.crew:
+                pts = 60 * b.crew
+                self.score += pts
+                self.rescued += b.crew
+                self.say("%d sailors rescued. +%d" % (b.crew, pts), 3)
+            b.crew, b.state, b.target, b.field = 0, "docked", None, None
+        if self.keepers == 2 and b.state == "out" and b.crew == 0 and \
+                math.hypot(b.x - b.home[0], b.y - b.home[1]) < 3 and math.hypot(b.vx, b.vy) < 1:
+            b.state = "docked"
+
+
+# =============================================================================================
+# Drawing
+# =============================================================================================
+SEA_DARK, SEA_LIT = (4, 8, 20), (60, 120, 150)
+ROCK_DARK, ROCK_LIT = (14, 14, 18), (120, 110, 100)
+LAND_DARK, LAND_LIT = (8, 12, 10), (70, 100, 60)
+HARB_DARK, HARB_LIT = (6, 10, 24), (70, 110, 150)
+
+
+class Painter:
+    """Static per-pixel data for a coast (angles, distances, colours), so a frame is cheap."""
+
+    def __init__(self, night):
+        c = night.c
+        W, H = c.W, c.H
+        lx, ly = c.lamp
+        rnd = random.Random(night.seed)
+        self.ang = [math.atan2(y - ly, x - lx) for y in range(H) for x in range(W)]
+        self.dist = [math.hypot(x - lx, y - ly) for y in range(H) for x in range(W)]
+        # coherent swell: long wave bands bent by a slow second wave, plus a little sparkle
+        self.phase = [x * 0.33 + y * 0.52 + 1.6 * math.sin(y * 0.17 + x * 0.06) + rnd.uniform(0, 0.6)
+                      for y in range(H) for x in range(W)]
+        dark, lit = [], []
+        for i, k in enumerate(c.g):
+            j = rnd.uniform(-0.08, 0.08)
+            if k == WATER:
+                d, l = SEA_DARK, SEA_LIT
+            elif k == ROCK:
+                d, l = ROCK_DARK, shade(ROCK_LIT, 1 + j)
+            elif k == LAND:
+                d, l = LAND_DARK, shade(LAND_LIT, 1 + j * 2)
+            else:
+                d, l = HARB_DARK, HARB_LIT
+            dark.append(d)
+            lit.append(l)
+        self.dark, self.lit = dark, lit
+        self.water = [k in (WATER, HARBOUR) for k in c.g]
+
+
+def render(n, painter, cols, rows, title_mode=False):
+    cv = Canvas(cols, rows)
+    c = n.c
+    W, H = c.W, c.H
+    PW, PH = cols, (rows - (0 if title_mode else 1)) * 2
+    ox, oy = (PW - W) // 2, (PH - H) // 2
+    px = cv.px
+    t = n.t
+    on = n.refill <= 0 and n.oil > 0
+    R = n.beam_range()
+    half = n.half
+    beam = n.beam
+    flash = n.flash
+    ang, dist, phase, dark, lit, water = painter.ang, painter.dist, painter.phase, painter.dark, painter.lit, painter.water
+    fogc = n.fog > 0
+    # fog on a coarse grid
+    fg = {}
+    for y in range(0, H, 3):
+        for x in range(0, W, 3):
+            fg[(x // 3, y // 3)] = n.fog_at(x, y) if fogc else 0.0
+    moon = 0.06 if n.night <= 2 else 0.03
+    for y in range(H):
+        Y = y + oy
+        if not 0 <= Y < PH:
+            continue
+        row = px[Y]
+        base = y * W
+        for x in range(W):
+            X = x + ox
+            if not 0 <= X < PW:
+                continue
+            i = base + x
+            L = moon
+            d = dist[i]
+            if on and d < R:
+                da = ang[i] - beam
+                if da > math.pi:
+                    da -= TAU
+                elif da < -math.pi:
+                    da += TAU
+                if -half < da < half:
+                    q = da / half
+                    L += (1 - d / R) ** 0.6 * (1 - q * q)
+            if d < 6:                                  # the lamp's own glow
+                L += (1 - d / 6) * (0.7 if on else 0.15)
+            f = fg.get((x // 3, y // 3), 0.0)
+            if f:
+                L *= 1 - f * 0.8
+            L = L + flash * 0.9
+            if L > 1:
+                L = 1.0
+            if water[i]:
+                L *= 0.8 + 0.2 * math.sin(t * 1.5 + phase[i])
+            col = mix(dark[i], lit[i], L)
+            if f:
+                col = mix(col, (40, 46, 56) if L < 0.3 else (150, 160, 170), f * 0.45)
+            row[X] = col
+    # rain streaks, visible where there is light
+    for dx_, dy_ in n.drops:
+        x, y = int(dx_), int(dy_)
+        L = n.light_at(dx_, dy_) + flash
+        if L > 0.1 and 0 <= x + ox < PW and 0 <= y + oy < PH:
+            px[y + oy][x + ox] = mix(px[y + oy][x + ox], (170, 190, 210), min(0.6, L))
+
+    def put(x, y, col, k=1.0):
+        X, Y = int(x) + ox, int(y) + oy
+        if 0 <= X < PW and 0 <= Y < PH:
+            px[Y][X] = col if k >= 1 else mix(px[Y][X], col, k)
+
+    # harbour lanterns, red and green
+    hx, hy = c.harbour
+    for sx_, col in ((hx - 7, (255, 60, 60)), (hx + 7, (60, 255, 110))):
+        blink = 1.0 if int(t * 1.5) % 2 else 0.6
+        put(sx_, c.coast[int(clamp(sx_, 0, W - 1))] - 1, col, blink)
+    # the horn's ring
+    if n.horn_ring is not None and t - n.horn_ring < 1.0:
+        r = (t - n.horn_ring) * n.horn_radius()
+        for k in range(0, 360, 3):
+            a = math.radians(k)
+            put(c.lamp[0] + math.cos(a) * r, c.lamp[1] + math.sin(a) * r, (200, 210, 230), 0.5 * (1 - (t - n.horn_ring)))
+    # ships
+    for s in n.ships:
+        if s.state in ("saved", "rescued"):
+            continue
+        L = max(n.light_at(s.x, s.y), flash)
+        if s.state == "sailing":
+            for k, (wx_, wy_) in enumerate(s.wake):
+                put(wx_, wy_, (120, 150, 170), 0.12 * k / 10 + L * 0.2)
+        hcol = mix((20, 18, 18), s.col, max(0.15, L)) if s.state != "lost" else (30, 30, 34)
+        ca, sa = math.cos(s.h), math.sin(s.h)
+        tilt = 0.5 if s.state in ("wrecked", "lost") else 0.0
+        for k in range(s.length):
+            u = k - s.length / 2
+            put(s.x + ca * u - sa * tilt * u * 0.3, s.y + sa * u + ca * tilt * u * 0.3, hcol)
+            if s.kind == "freighter":
+                put(s.x + ca * u - sa, s.y + sa * u + ca, shade(hcol, 0.8))
+        if s.kind == "sail" and s.state == "sailing":
+            put(s.x - sa * 1.5, s.y + ca * 1.5, mix((40, 40, 44), (235, 235, 230), max(0.2, L)))
+        if s.state == "sailing":       # the lantern: always visible
+            put(s.x + ca * s.length * 0.3, s.y + sa * s.length * 0.3, (255, 220, 120))
+            if not title_mode and s.aware <= 0 and danger(n, s) > 0.45 and int(t * 4) % 2:
+                for ddy in (-4, -3, -1):    # "!" above a ship sailing blind towards rock
+                    put(s.x, s.y + ddy, (255, 70, 60))
+        elif s.state == "wrecked":     # distress flares
+            if int(t * 3) % 2:
+                for ddx, ddy in ((0, -1), (0, -2), (1, -2), (-1, -2)):
+                    put(s.x + ddx, s.y + ddy, (255, 70, 60))
+    # the rescue boat
+    b = n.boat
+    bl = max(n.light_at(b.x, b.y), flash)
+    put(b.x, b.y, mix((80, 40, 20), (255, 140, 40), max(0.4, bl)))
+    put(b.x + 1, b.y, mix((80, 40, 20), (255, 140, 40), max(0.4, bl)))
+    put(b.x - 1, b.y, (255, 240, 200) if b.state != "docked" else (160, 120, 80))
+    # the lighthouse: tower and lamp
+    lx, ly = c.island
+    for k in range(5):
+        put(lx, ly - k, (230, 230, 230) if k % 2 == 0 else (200, 40, 40))
+    put(lx, ly - 5, (255, 250, 210) if on else (90, 80, 60))
+    if not title_mode:
+        hud(cv, n, cols, rows)
+    return cv
+
+
+def bar(v, n=8):
+    f = int(round(clamp(v, 0, 1) * n))
+    return "█" * f + "░" * (n - f)
+
+
+def hud(cv, n, cols, rows):
+    r = rows - 1
+    left = max(0, n.length - n.t)
+    tank = n.tank()
+    oil_col = (255, 110, 90) if n.oil < tank * 0.2 else (240, 200, 90)
+    boat = {"docked": "boat: home", "out": "boat: out", "carrying": "boat: %d aboard" % n.boat.crew}[n.boat.state]
+    segs = [(" LIGHTKEEPER ", (16, 14, 10), (240, 200, 90)),
+            ("  night %d " % n.night, (230, 230, 240), None),
+            (" dawn in %d:%02d " % (left // 60, left % 60) if left > 0 else " dawn soon ", (170, 176, 200), None),
+            ("  OIL %s" % (bar(n.oil / tank) if n.refill <= 0 else "refilling."), oil_col, None),
+            ("  HORN %s" % ("ready" if n.horn_cd <= 0 else "%.0fs" % n.horn_cd), (190, 200, 230), None),
+            ("  %s" % boat, (255, 160, 80), None),
+            ("  lifebuoys %s" % ("o" * max(0, n.lives)), (255, 120, 100), None),
+            ("  safe %d  score %d " % (n.saved, n.score), (240, 220, 140), None)]
+    x = 0
+    for s, fg, bg in segs:
+        cv.put(x, r, s, fg, bg or (12, 12, 20))
+        x += len(s)
+    if x < cols:
+        cv.put(x, r, " " * (cols - x), (10, 10, 16), (12, 12, 20))
+    right = " ? help  Esc menu "
+    if x + len(right) <= cols:
+        cv.put(cols - len(right), r, right, (130, 136, 170), (12, 12, 20))
+    for i, (s, _) in enumerate(n.msgs[-2:]):
+        cv.center(i, " %s " % s, (236, 236, 240), (14, 16, 30))
+
+
+HELP_SOLO = [
+    "LIGHTKEEPER - keys (one keeper)",
+    "",
+    "Left / Right  (A / D)    turn the beam (hold to turn faster)",
+    "Up / Down  (W / S)       focus: narrow reaches far, wide lights near",
+    "Space                    horn: ships nearby slow down and see their way",
+    "R                        refill the oil (the light is off for a moment)",
+    "B                        send the rescue boat to a wreck",
+    "",
+    "Ships in your light steer clear of the reefs; ships in the dark sail",
+    "on blindly - a blinking red ! warns of one heading for rock.",
+    "Wrecks fire red flares - rescue the crew before time runs out.",
+    "The rescue boat is slow in the dark: keep it in the light.",
+    "",
+    "Esc / P                  pause menu (Q there: quit)",
+    "?                        this help",
+]
+HELP_COOP = [
+    "LIGHTKEEPER - keys (two keepers)",
+    "",
+    "Keeper (arrows):   Left / Right turn the beam   Up / Down focus",
+    "                   Space horn   R refill the oil",
+    "Rescue boat (WASD): steer it to a wreck, wait a moment beside it,",
+    "                   then bring the crew home to the jetty.",
+    "",
+    "The boat is slower in the dark - the keeper should light its way.",
+    "",
+    "Esc / P            pause menu (Q there: quit)",
+    "?                  this help",
+]
+PAUSE = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "Q                 quit to the menu"]
+
+
+# =============================================================================================
+# Game flow
+# =============================================================================================
+class Campaign:
+    """Night after night until the lifebuoys are gone."""
+
+    def __init__(self, keepers, W, H, seed=None):
+        self.keepers = keepers
+        self.seed = seed if seed is not None else random.randrange(1 << 30)
+        self.W, self.H = W, H
+        self.up = {}
+        self.lives, self.score = 3, 0
+        self.night_no = 0
+        self.next_night()
+
+    def next_night(self):
+        self.night_no += 1
+        self.n = Night(self.W, self.H, self.seed, self.night_no, self.keepers, self.up, self.lives, self.score)
+        self.p = Painter(self.n)
+        self.offer = random.Random(self.seed + self.night_no).sample(UPGRADES, 3)
+        self.pick = 0
+
+    def take_upgrade(self):
+        key = self.offer[self.pick][0]
+        if key == "buoy":
+            self.lives = min(5, self.n.lives + 1)
+        else:
+            self.up[key] = self.up.get(key, 0) + 1
+            self.lives = self.n.lives
+        self.score = self.n.score
+        self.next_night()
+
+
+def render_dawn(cv, camp):
+    n = camp.n
+    lines = ["D A W N   -   night %d survived" % n.night, "",
+             "ships safe in harbour  %d" % n.saved, "ran aground  %d   sailors rescued  %d" % (n.wrecks, n.rescued),
+             "score  %d" % n.score, "", "Choose an improvement for the lighthouse:", ""]
+    for i, (_, name, desc) in enumerate(camp.offer):
+        lines.append(("> " if i == camp.pick else "  ") + "%-18s %s" % (name, desc))
+    lines += ["", "Up / Down choose   Enter take it"]
+    w = max(len(l) for l in lines) + 4
+    cv.box(max(0, (cv.cols - w) // 2), max(0, cv.rows // 2 - len(lines) // 2 - 1), lines, (240, 236, 220), (40, 30, 30))
+
+
+def render_over(cv, camp, record):
+    n = camp.n
+    lines = ["T H E   L I G H T   G O E S   O U T", "", "You kept the light for %d night%s." % (
+        n.night - 1, "" if n.night == 2 else "s") if n.night > 1 else "The first night was too much.", "",
+        "final score  %d" % n.score]
+    if record:
+        lines += ["", "** NEW RECORD **"]
+    lines += ["", "Enter: a new watch   Esc / Q: menu"]
+    w = max(len(l) for l in lines) + 4
+    cv.box(max(0, (cv.cols - w) // 2), max(0, cv.rows // 2 - len(lines) // 2 - 1), [l.center(w - 4) for l in lines],
+           (240, 240, 246), (30, 16, 24))
+
+
+def map_size(cols, rows):
+    return max(60, min(cols, 200)), max(36, min((rows - 1) * 2, 110))
+
+
+class TitleDemo:
+    def __init__(self, cols, rows):
+        W, H = map_size(cols, rows)
+        self.size = (cols, rows)
+        self.n = Night(W, H, 11, 2)
+        self.n.msgs = []
+        self.p = Painter(self.n)
+        self.n.half = 0.2
+
+    def frame(self, cols, rows, dt, help_, sel):
+        if (cols, rows) != self.size:
+            self.__init__(cols, rows)
+        n = self.n
+        n.spin = 0.55
+        n.oil = 100
+        n.update(dt)
+        n.msgs = []
+        n.lives = 3
+        n.over = n.dawn = False
+        if n.t > n.length * 0.6:      # keep the demo going forever
+            n.t = 10
+            n.schedule = sorted(n.rnd.uniform(11, 40) for _ in range(4))
+            n.ships = [s for s in n.ships if s.state == "sailing"]
+        cv = render(n, self.p, cols, rows, title_mode=True)
+        best = load_scores().get(GAME, {})
+        rec = " / ".join("%s %d" % (m, v) for m, v in sorted(best.items()))
+        title_screen(cv, "LIGHTKEEPER", "one beam, many ships, a long night",
+                     ["One keeper (solo)", "Two keepers (co-op: the second steers the rescue boat)"], sel,
+                     "best: " + rec if rec else None, help_lines=HELP_COOP if sel == 1 else HELP_SOLO,
+                     show_help=help_, dim=0.4)
+        return cv
+
+
+def main():
+    with Terminal() as term:
+        cols, rows = term.size()
+        demo = TitleDemo(cols, rows)
+        sel = 0
+        while True:
+            help_, go = False, False
+            last = time.time()
+            while not go:
+                now = time.time()
+                cols, rows = term.size()
+                if cols < 70 or rows < 22:
+                    term.write("\x1b[0m\x1b[2J\x1b[HPlease make the window larger (70x22).")
+                    term.keys(0.3)
+                    continue
+                term.write(demo.frame(cols, rows, min(0.1, now - last), help_, sel).emit())
+                last = now
+                for k in term.keys(1 / 30):
+                    if help_:
+                        help_ = False
+                    elif k == "?":
+                        help_ = True
+                    elif k in ("q", "esc"):
+                        return
+                    elif k in ("up", "w", "down", "s"):
+                        sel = 1 - sel
+                    elif k in ("1", "2"):
+                        sel = int(k) - 1
+                    elif k in ("enter", " "):
+                        go = True
+            keepers = sel + 1
+            mode = "solo" if keepers == 1 else "co-op"
+            while True:                                    # one watch; Enter on the end screen starts another
+                camp = Campaign(keepers, *map_size(cols, rows))
+                last = time.time()
+                record = None
+                back = again = False
+                while not (back or again):
+                    now = time.time()
+                    n = camp.n
+                    for k in term.keys(0):
+                        if n.over:
+                            if k in ("q", "esc"):
+                                back = True
+                            elif record is not None and k in ("enter", " "):
+                                again = True
+                            continue
+                        if n.dawn:
+                            if k in ("up", "w"):
+                                camp.pick = (camp.pick - 1) % 3
+                            elif k in ("down", "s"):
+                                camp.pick = (camp.pick + 1) % 3
+                            elif k in ("enter", " "):
+                                camp.take_upgrade()
+                                n = camp.n
+                            elif k in ("q", "esc"):
+                                back = True
+                            continue
+                        a = shared_key(k, n.paused, pause_keys=("esc", "p", "q"))
+                        if a == "pause":
+                            n.paused = True
+                        elif a == "resume":
+                            n.paused = n.help = False
+                        elif a == "quit":
+                            back = True
+                        elif a == "help":
+                            n.help = not n.help
+                            n.paused = True
+                        elif a is None:
+                            n.key(k)
+                    n.update(min(0.1, now - last))
+                    last = now
+                    if n.over and record is None:
+                        record = submit(GAME, mode, n.score)
+                    cols, rows = term.size()
+                    if cols < 70 or rows < 22:
+                        term.write("\x1b[0m\x1b[2J\x1b[HPlease make the window larger (70x22).")
+                        time.sleep(0.2)
+                        continue
+                    cv = render(n, camp.p, cols, rows)
+                    if n.paused:
+                        overlay(cv, (HELP_COOP if keepers == 2 else HELP_SOLO) if n.help else PAUSE)
+                    if n.dawn:
+                        render_dawn(cv, camp)
+                    if n.over:
+                        render_over(cv, camp, record)
+                    term.write(cv.emit())
+                    time.sleep(max(0.0, 1 / 30 - (time.time() - now)))
+                if back:
+                    break
+
+
+# =============================================================================================
+# Tests
+# =============================================================================================
+def keeper(n, asleep=False):
+    """An attentive keeper for the tests: lights the ship in most danger, sends the boat, refills in time."""
+    if asleep:
+        return
+    c = n.c
+    lx, ly = c.lamp
+    sailing = [s for s in n.ships if s.state == "sailing"]
+    wrecks = [s for s in n.ships if s.state == "wrecked"]
+    if wrecks and n.boat.state == "docked":
+        n.key("b")
+    if n.oil < n.tank() * 0.12 and n.refill <= 0:
+        danger_now = any(s.aware <= 0 and danger(n, s) > 0.6 for s in sailing)
+        if not danger_now or n.oil <= 0:
+            n.key("r")
+            return
+    target = None
+    if n.boat.state != "docked" and wrecks or n.boat.state == "carrying":
+        target = n.boat
+    worst = max(sailing, key=lambda s: danger(n, s) - (1.5 if s.aware > 0.8 else 0), default=None)
+    if worst is not None and (target is None or danger(n, worst) > 0.5 and worst.aware <= 0.3):
+        target = worst
+    near = [s for s in sailing if math.hypot(s.x - lx, s.y - ly) < n.horn_radius() and s.aware <= 0 and danger(n, s) > 0.3]
+    if len(near) >= 2 and n.horn_cd <= 0:
+        n.key(" ")
+    if target is None:
+        return
+    want = math.atan2(target.y - ly, target.x - lx)
+    d = wrap(want - n.beam)
+    dist = math.hypot(target.x - lx, target.y - ly)
+    if abs(d) > 0.05:
+        if (d > 0 and n.spin < min(3.0, abs(d) * 6)) or (d < 0 and n.spin > -min(3.0, abs(d) * 6)):
+            n.key("right" if d > 0 else "left")
+    else:
+        n.spin *= 0.3
+    # focus: narrow for far targets, wide for near ones
+    want_half = clamp(0.45 - (dist / n.range_max()) * 0.5, 0.14, 0.4)
+    if n.half > want_half + 0.03:
+        n.key("up")
+    elif n.half < want_half - 0.03:
+        n.key("down")
+
+
+def danger(n, s):
+    """How soon a ship in the dark is likely to hit something (0..1)."""
+    c = n.c
+    for k in range(1, 30):
+        x, y = s.x + math.cos(s.h) * k, s.y + math.sin(s.h) * k
+        a = c.at(x, y)
+        if a == HARBOUR:
+            return 0.0
+        if a in (ROCK, LAND):
+            return 1.0 - k / 30
+    return 0.1
+
+
+def play_nights(seed, nights=3, asleep=False, W=150, H=80, keepers=1):
+    camp = Campaign(keepers, W, H, seed)
+    results = []
+    while True:
+        n = camp.n
+        steps = 0
+        while not n.over and not n.dawn and steps < 40 * 600:
+            if steps % 3 == 0:
+                keeper(n, asleep)
+            n.update(1 / 40)
+            steps += 1
+        results.append((n.night, n.saved, n.wrecks, n.rescued, n.lost, n.lives))
+        if n.over or n.night >= nights:
+            return camp, results
+        camp.pick = 0
+        camp.take_upgrade()
+
+
+def selftest():
+    t0 = time.time()
+    for seed in range(20):              # every coast must be navigable from every spawn point
+        for W, H in ((70, 42), (150, 80), (200, 110)):
+            c = Coast(W, H, seed, 1 + seed % 6)
+            assert len(c.spawns) > 20, "seed %d %dx%d: too few ways in" % (seed, W, H)
+            assert c.nav[c.dock[1] * W + c.dock[0]] < 10 ** 6, "seed %d: the jetty is cut off" % seed
+    wins, sleepy_losses = 0, 0
+    for seed in range(8):
+        camp, res = play_nights(seed, nights=3)
+        survived = not camp.n.over
+        wins += survived
+        saved = sum(r[1] for r in res)
+        assert saved > 0, "seed %d: the keeper saved nobody" % seed
+        _, res2 = play_nights(seed, nights=1, asleep=True)
+        sleepy_losses += res2[0][2] > res[0][2] or res2[0][4] > 0
+    assert wins >= 6, "an attentive keeper survived 3 nights only %d of 8 times" % wins
+    assert sleepy_losses >= 5, "the light hardly matters: a sleeping keeper did as well %d of 8 times" % (8 - sleepy_losses)
+    # two keepers: the boat can be steered
+    n = Night(120, 70, 3, 1, keepers=2)
+    x0 = n.boat.x
+    for _ in range(30):
+        n.key("d")
+        n.update(1 / 40)
+    assert n.boat.x != x0, "the second player cannot steer the rescue boat"
+    p = Painter(n)
+    render(n, p, 120, 36)
+    print("Self-test ok: 60 coasts navigable, the attentive keeper got through 3 nights %d of 8 times,"
+          " a sleeping keeper did worse %d of 8 times, co-op boat steers (%.1fs)" % (wins, sleepy_losses, time.time() - t0))
+
+
+def bench():
+    camp, _ = play_nights(5, nights=1)
+    n = Night(160, 88, 5, 4)
+    for _ in range(400):
+        keeper(n)
+        n.update(1 / 40)
+    p = Painter(n)
+    for cols, rows in ((160, 45), (200, 56)):
+        t = time.time()
+        for _ in range(15):
+            render(n, p, cols, rows).emit(True)
+        print("frame %.1f ms at %dx%d" % ((time.time() - t) / 15 * 1000, cols, rows))
+
+
+if __name__ == "__main__":
+    if "--selftest" in sys.argv:
+        selftest()
+    elif "--bench" in sys.argv:
+        bench()
+    else:
+        main()

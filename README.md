@@ -33,6 +33,10 @@ kitty, Ghostty); 256 colours work too. Bigger windows give bigger pictures.
 | **EMBERFALL** | A party role-playing adventure: create a hero, recruit companions, fight turn by turn with d20 rules, descend beneath the Ashpeaks. | 100x30+ |
 | **BLOCKFIRE** | A first-person arena shooter: raycast 3D with textured walls, lit floors and pixel-art robots that come in waves. | 60x18+ |
 | **DEEPCALL** | A submarine alone in the dark: only the sonar shows the trench, and every ping can be heard. Find air vents and salvage, keep the noise down, reach the Source at the bottom. | 60x20+ |
+| **LIGHTKEEPER** | Keep the lighthouse through stormy nights: light ships past the reefs, sound the horn in the fog, refill the oil and send the rescue boat. Alone, or two keepers at one keyboard. | 70x22+ |
+| **SKYSHOT** | An artillery duel on ground that breaks apart: set angle and power, read the wind, carve craters under the other tank. Four shells, best of three rounds. Two players at one keyboard or one against the computer (easy / normal / hard). | 70x22+ |
+| **NIGHTDRIVE** | Race through the night against the clock: winding hilly roads, headlights and street lamps, traffic and oncoming cars, six stages from neon city to a rainstorm. | 70x22+ |
+| **ORBITAL** | A calm gravity puzzle: launch a probe past planets, moons, asteroid belts and wormholes to the dock ring. Fewer launches, more stars. | 70x22+ |
 | **STACKFALL** | Falling blocks in a well ten wide and twenty deep. Modes: Marathon, Sprint (40 rows), Rising (rubble pushes up from below). | 40x20+ |
 | **DEPTHWELL** | Falling blocks in three dimensions: look down into a well, turn cube pieces about all three axes, fill whole layers. Four well sizes, three piece sets. | 70x24+ |
 
@@ -51,6 +55,75 @@ kitty, Ghostty); 256 colours work too. Bigger windows give bigger pictures.
 Rising bubbles mark air vents. Gold glints are salvage; blue, green and orange ones are oxygen, batteries and
 flares. Jellyfish glow and sting; lurkers carry a blinking lure and swim towards every sound; in the deep zones a
 leviathan listens, and the NOISE bar shows how loud you have been.
+
+## LIGHTKEEPER keys
+
+| Key | One keeper | Two keepers |
+|---|---|---|
+| Left / Right | turn the beam | keeper: turn the beam |
+| Up / Down | focus: narrow reaches far, wide lights near | keeper: focus |
+| Space | horn: ships nearby slow down and see their way | keeper: horn |
+| `R` | refill the oil (the light is off for a moment) | keeper: refill |
+| `B` | send the rescue boat to the nearest wreck | - |
+| `W` `A` `S` `D` | same as the arrows | second player: steer the rescue boat |
+| Esc / `P` | pause menu (`Q` there: back to the menu) | |
+| `?` | help | |
+
+Ships in the beam steer clear of the reefs; ships in the dark sail on blindly. A wreck fires red flares: get the
+crew home before its time runs out, or a lifebuoy is lost. The rescue boat is slow in the dark, so keep it in the
+light. Each night brings more ships and worse weather (wind, fog, rain and lightning, storm); at dawn the
+lighthouse gets one improvement of your choice.
+
+## SKYSHOT keys
+
+| Key | |
+|---|---|
+| Left / Right (`A` / `D`) | turn the barrel (angle) |
+| Up / Down (`W` / `S`) | power (PgUp / PgDn: +-10) |
+| Tab or `1`-`4` | choose the shell: shell, heavy shell (3 per round), splitter (2), dirt ball (2) |
+| Space / Enter | fire |
+| Esc / `P` | pause menu (`Q` there: back to the menu) |
+| `?` | help |
+
+Players take turns at the same keys; the coloured banner at the top says whose turn it is, and the dotted line
+at the barrel shows the aim (longer means more power). The wind changes every turn and pushes the shells. Craters
+swallow tanks and falling hurts. The splitter bursts in three at the top of its arc, and the dirt ball buries the
+other tank in fresh earth.
+
+## NIGHTDRIVE keys
+
+| Key | |
+|---|---|
+| Left / Right (`A` / `D`) | steer: a tap is a small correction, holding the key turns |
+| Up (`W`) | accelerate (with manual throttle each press adds gas, which slowly fades) |
+| Down (`S`) / Space | brake |
+| Esc / `P` | pause menu (`Q` there: back to the menu) |
+| `?` | help |
+
+Six stages through the night (neon city, coastline, pine forest, desert highway, mountain pass, storm run), each
+with a time limit: every checkpoint adds time, and time left over carries on. Overtake the traffic; on the forest,
+desert and mountain stages cars come towards you in the left-hand lanes. Curves push you outwards, the verge slows
+you down, and lamps, trees and rocks spin you round. On the title screen choose the start stage (stages unlock as
+you reach them) and the throttle: auto (the default, you only steer and brake) or manual.
+
+## ORBITAL keys
+
+| Key | |
+|---|---|
+| Left / Right (`A` / `D`) | aim: a tap turns 0.5 degrees, holding turns faster |
+| Up / Down (`W` / `S`) | launch power: a tap is 0.5 %, holding is faster |
+| Space / Enter | launch |
+| Space (in flight) | nudge: one short push forward, on levels with fuel |
+| Enter (in flight) | fast forward on / off |
+| `R` | abort the flight / play the level again |
+| `N` or `]` / `B` or `[` | next / previous unlocked level |
+| Esc / `P` | pause menu (`Q` there: back to the menu) |
+| `?` | help |
+
+Every planet pulls on the probe according to its mass; the dotted line shows only the first part of the flight,
+and your last three paths stay on screen as faint lines. Reach the gold dock ring (passing numbered beacons in
+order first): one launch earns three stars, two or three launches two stars. Eight lessons come first, then
+generated levels add moving moons, asteroid belts, wormholes, a fuel nudge and waypoints.
 
 ## STACKFALL keys
 
@@ -82,9 +155,10 @@ well. The level rises every 10 rows.
 | Esc / `P` | pause menu (`Q` there: back to the menu) |
 | `?` | help |
 
-The falling piece is drawn as a white wire frame. The colour of a settled cube tells its depth, and the gauge
-on the left shows how high the stack has grown. Fill every cell of a layer to clear it; the level rises every
-4 layers.
+The falling piece is the bright block; the outlined spot below it shows where it will land. The map
+FROM ABOVE on the right colours every column by its height and outlines the landing cells, and the gauge on
+the left shows how high the stack has grown and where your piece is. Fill every cell of a layer to clear it;
+the level rises every 4 layers.
 
 High scores of STACKFALL and DEPTHWELL are kept in `~/.ascii_arcade_scores.json`.
 
@@ -94,5 +168,5 @@ High scores of STACKFALL and DEPTHWELL are kept in `~/.ascii_arcade_scores.json`
 |---|---|
 | `arcade.py` | the launcher |
 | `arcadekit.py` | shared toolkit: raw terminal input, half-block pixel canvas, block font, high scores |
-| `stackfall.py`, `depthwell.py`, `deepcall.py` | the games written for the arcade (use `arcadekit.py`) |
+| `stackfall.py`, `depthwell.py`, `deepcall.py`, `lightkeeper.py`, `skyshot.py`, `nightdrive.py`, `orbital.py` | the games written for the arcade (use `arcadekit.py`) |
 | `hoverdrift.py`, `emberfall.py`, `blockfire.py` | standalone copies of the HOVERDRIFT, EMBERFALL and BLOCKFIRE repositories |

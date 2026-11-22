@@ -532,9 +532,13 @@ class Game:
         self.hits = 0
         self.drift = False
         self.hud = True
-        self.help = True       # shown at the start until the first key
+        self.help = False
         self.paused = False
         self.quit = False
+        self.title = True      # the title screen: the land drifts by behind the menu
+        self.tsel = 0
+        self.tworld = 0        # 0 = random, else 1 + index in THEME_ORDER
+        self.drift, self.armed, self.hud = True, False, False
         self.msg, self.msg_t = "", 0.0
         self.fps = 0.0
         self.amb_acc = 0.0
@@ -573,7 +577,38 @@ class Game:
         self.msg, self.msg_t = s, self.t + 3.0
 
     # --- controls ------------------------------------------------------------------------------
+    def title_key(self, k):
+        if self.help:                      # any key closes the help
+            self.help = False
+            return
+        if k == "?":
+            self.help = True
+        elif k in ("esc", "q"):
+            self.quit = True
+        elif k in ("up", "w"):
+            self.tsel = (self.tsel - 1) % 3
+        elif k in ("down", "s", "tab"):
+            self.tsel = (self.tsel + 1) % 3
+        elif k in ("left", "a", "right", "d"):
+            d = -1 if k in ("left", "a") else 1
+            if self.tsel == 1:
+                self.vi = (self.vi + d) % len(VEHICLES)
+                V = self.veh
+                self.throttle = min(self.throttle, V["vmax"])
+                self.hover = clamp(self.hover, V["hover"][0], V["hover"][1])
+            elif self.tsel == 2:
+                self.tworld = (self.tworld + d) % (len(THEME_ORDER) + 1)
+                if self.tworld:
+                    self.loading = (random.randrange(1 << 30), THEME_ORDER[self.tworld - 1])
+        elif k in ("enter", " "):
+            self.title = False
+            self.drift, self.armed, self.hud, self.help = False, True, True, True
+            self.say("")
+
     def key(self, k):
+        if self.title:
+            self.title_key(k)
+            return
         # the keys every ASCII ARCADE game shares: Esc / P pause menu, Q quits from it, ? help
         if self.paused:
             if k in ("esc", "p", "enter", " "):
@@ -941,6 +976,8 @@ def x256(c):
 
 
 def status_lines(g):
+    if g.title:
+        return 0
     return 2 if g.hud else 1
 
 
@@ -1108,6 +1145,9 @@ def render(g, scr, cols, rows):
             plot(pr[0], pr[1], pr[2], c)
             if pr[2] < 25:
                 plot(pr[0] + 1, pr[1], pr[2], c)
+    if g.title:
+        for i in range(PW):
+            colsbuf[i] = [mix(c, TITLE_DIM, 0.62) for c in colsbuf[i]]
     # the vehicle, banking into turns, with a shadow on the ground
     V = g.veh
     pc = project(g.x, g.y, g.alt)
@@ -1181,22 +1221,25 @@ def render(g, scr, cols, rows):
     # emit the frame
     out = ["\x1b[?2026h\x1b[H"]
     sfg, sbg = scr.fg, scr.bg
-    overlay = box_lines(HELP, cols, prow) if g.help else box_lines(PAUSE, cols, prow) if g.paused else {}
-    hstyle = sfg((235, 235, 240)) + sbg((20, 24, 40))
+    cells = {}   # (row) -> {col: (char, fg, bg)}: text drawn into the frame, so nothing is drawn twice
+    if g.title:
+        title_cells(g, colsbuf, cells, cols, prow)
+    if g.help:
+        box_cells(cells, HELP, cols, prow)
+    elif g.paused:
+        box_cells(cells, PAUSE, cols, prow)
     for j in range(prow):
         y0, y1 = 2 * j, 2 * j + 1
         lt = lb = None
         line = []
-        ov = overlay.get(j)
-        x0 = x1 = -1
-        if ov:  # the help box is part of the frame, so nothing is drawn twice
-            x0, text = ov
-            x1 = x0 + len(text)
+        rc = cells.get(j)
         for i in range(PW):
-            if x0 <= i < x1:
-                if i == x0:
-                    line.append(hstyle + text)
-                    lt = lb = None
+            if rc and i in rc:
+                ch, f, bg = rc[i]
+                if bg is None:
+                    bg = mix(colsbuf[i][y0], colsbuf[i][y1], 0.5)
+                line.append(sfg(f) + sbg(bg) + ch)
+                lt = lb = None
                 continue
             col = colsbuf[i]
             t, b = col[y0], col[y1]
@@ -1216,8 +1259,9 @@ def render(g, scr, cols, rows):
                 lb = b
             line.append("▀")
         out.append("".join(line))
-        out.append("\x1b[0m\r\n")
-    out.append(hud(g, cols, rows))
+        out.append("\x1b[0m" + ("\r\n" if j < prow - 1 or not g.title else ""))
+    if not g.title:
+        out.append(hud(g, cols, rows))
     out.append("\x1b[?2026l")
     return "".join(out)
 
@@ -1309,16 +1353,87 @@ PAUSE = [
 ]
 
 
-def box_lines(lines, cols, rows):
-    """A text box as {screen row: (column, text)}, merged into the picture while it is drawn."""
+BOX_FG, BOX_BG = (240, 240, 246), (22, 22, 42)
+
+
+def put_cells(cells, cols, rows, x, y, s, fg, bg=None):
+    if 0 <= y < rows:
+        row = cells.setdefault(y, {})
+        for j, ch in enumerate(s):
+            if 0 <= x + j < cols:
+                row[x + j] = (ch, fg, bg)
+
+
+def box_cells(cells, lines, cols, rows):
+    """A centred box like the collection's help and pause boxes."""
     w = min(cols, max(len(l) for l in lines) + 4)
-    x = max(0, (cols - w) // 2)
-    out = {}
-    for j, l in enumerate([""] + lines + [""]):
-        if 1 + j >= rows:
-            break
-        out[1 + j] = (x, ("  " + l).ljust(w)[:w])
-    return out
+    x0, y0 = max(0, (cols - w) // 2), max(0, rows // 2 - len(lines) // 2 - 1)
+    for j, l in enumerate([""] + list(lines) + [""]):
+        put_cells(cells, cols, rows, x0, y0 + j, ("  " + l).ljust(w)[:w], BOX_FG, BOX_BG)
+
+
+# The ASCII ARCADE title layout (same look as arcadekit.title_screen in the collection)
+TITLE_DIM, PANEL_BG, PANEL_FG = (6, 6, 14), (14, 14, 28), (220, 220, 232)
+FOOTER_BG, FOOTER_FG = (12, 10, 22), (150, 154, 184)
+ACCENT = ((150, 215, 255), (70, 140, 230))
+TITLE_FONT = {
+    "H": ["#...#", "#...#", "#####", "#...#", "#...#"], "O": [".###.", "#...#", "#...#", "#...#", ".###."],
+    "V": ["#...#", "#...#", "#...#", ".#.#.", "..#.."], "E": ["#####", "#....", "####.", "#....", "#####"],
+    "R": ["####.", "#...#", "####.", "#..#.", "#...#"], "D": ["####.", "#...#", "#...#", "#...#", "####."],
+    "I": ["#####", "..#..", "..#..", "..#..", "#####"], "F": ["#####", "#....", "####.", "#....", "#...."],
+    "T": ["#####", "..#..", "..#..", "..#..", "..#.."],
+}
+
+
+def title_cells(g, colsbuf, cells, cols, rows):
+    """Block title into the pixels, then tagline, menu panel and footer as text cells."""
+    name = "HOVERDRIFT"
+    PW, PH = cols, rows * 2
+    world = "Random (now %s)" % THEMES[g.world.theme]["name"] if g.tworld == 0 else THEMES[THEME_ORDER[g.tworld - 1]]["name"]
+    items = ["Fly", "Vehicle   < %s >" % g.veh["name"], "World     < %s >" % world]
+    extra = ["", "%s: %s" % (g.veh["name"], g.veh["desc"])]
+    # the same letter size as every ASCII ARCADE title (it fits the longest name, 11 letters)
+    k = 2 if cols >= 11 * 12 - 2 + 4 and 8 + len(items) * 2 + len(extra) + 9 <= rows else 1
+    x0, y0 = (cols - (len(name) * 6 * k - k)) // 2, 3
+    for shadow in (True, False):
+        for n, ch in enumerate(name):
+            for gy, line in enumerate(TITLE_FONT[ch]):
+                c = mix(ACCENT[0], ACCENT[1], gy / 4)
+                for gx, bit in enumerate(line):
+                    if bit != "#":
+                        continue
+                    for yy in range(k):
+                        for xx in range(k):
+                            x, y = x0 + (n * 6 + gx) * k + xx, y0 + gy * k + yy
+                            if shadow:
+                                x, y = x + 1, y + 1
+                                if k >= 2 and 0 <= x < PW and 0 <= y < PH:
+                                    colsbuf[x][y] = mix(colsbuf[x][y], (0, 0, 0), 0.7)
+                            elif 0 <= x < PW and 0 <= y < PH:
+                                colsbuf[x][y] = c
+    row = (y0 + 5 * k) // 2 + 2
+    tag = "glide over endless voxel worlds"
+    put_cells(cells, cols, rows, (cols - len(tag)) // 2, row, tag, (205, 205, 220))
+    gap = 2 if row + 3 + len(items) * 2 + len(extra) + 4 < rows else 1
+    w = max([len(x) for x in items + extra] + [20]) + 8
+    px0, r0 = max(0, (cols - w) // 2), row + 2
+    height = len(items) * gap + len(extra) + (1 if gap == 2 else 0) + 1
+    for j in range(height):
+        put_cells(cells, cols, rows, px0, r0 + j, " " * w, PANEL_FG, PANEL_BG)
+    for i, it in enumerate(items):
+        y = r0 + 1 + i * gap if gap == 2 else r0 + i
+        if i == g.tsel:
+            put_cells(cells, cols, rows, px0 + 2, y, (" > " + it).ljust(w - 4), (14, 14, 20), mix(ACCENT[0], ACCENT[1], 0.3))
+        else:
+            put_cells(cells, cols, rows, px0 + 2, y, ("   " + it).ljust(w - 4), PANEL_FG, PANEL_BG)
+    ey = r0 + (1 + len(items) * gap if gap == 2 else len(items))
+    for j, e in enumerate(extra):
+        put_cells(cells, cols, rows, px0 + 2, ey + j, ("   " + e).ljust(w - 4), FOOTER_FG, PANEL_BG)
+    label, keys = " ASCII ARCADE ", " Up/Down choose   Left/Right change   Enter fly   ? help   Esc back "
+    put_cells(cells, cols, rows, 0, rows - 1, " " * cols, FOOTER_FG, FOOTER_BG)
+    put_cells(cells, cols, rows, 0, rows - 1, label, (14, 14, 20), (200, 200, 215))
+    put_cells(cells, cols, rows, max(len(label) + 1, cols - len(keys)), rows - 1, keys[:max(0, cols - len(label) - 1)],
+              FOOTER_FG, FOOTER_BG)
 
 
 # =============================================================================================
@@ -1384,6 +1499,8 @@ def main():
         tty.setcbreak(fd)
         seed = int(arg("--seed")) if arg("--seed") else None
         g = Game(seed, theme, ids.index(veh) if veh else 0)
+        if theme:
+            g.tworld = 1 + THEME_ORDER.index(theme)
         scr = Screen()
         last = time.time()
         frame_t = []

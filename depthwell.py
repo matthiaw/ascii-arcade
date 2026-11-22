@@ -11,7 +11,7 @@ import random
 import time
 
 from arcadekit import (PAUSE_LINES, Canvas, Terminal, clamp, draw_title, load_scores, mix, overlay, shade,
-                       shared_key, submit, title_width)
+                       shared_key, submit, title_screen, title_width)
 
 GAME = "depthwell"
 
@@ -56,6 +56,10 @@ HELP = [
     "Space                    drop to the bottom",
     "Enter  (Z)               sink one layer",
     "G                        ghost on / off",
+    "",
+    "The bright block is your piece; the outlined spot below shows where it lands.",
+    "FROM ABOVE (right): every column coloured by its height, the landing cells",
+    "outlined in white. The gauge on the left marks your piece's depth.",
     "",
     "Esc / P                  pause menu (Q there: quit)",
     "?                        this help",
@@ -283,15 +287,15 @@ def draw_well(cv, v):
     p = v.p
     r = [p(0, 0, 0), p(W, 0, 0), p(W, H, 0), p(0, H, 0)]
     b = [p(0, 0, D), p(W, 0, D), p(W, H, D), p(0, H, D)]
-    cv.poly([r[0], r[1], b[1], b[0]], (22, 24, 46))   # far wall (top of screen)
-    cv.poly([r[1], r[2], b[2], b[1]], (16, 18, 36))
-    cv.poly([r[2], r[3], b[3], b[2]], (12, 14, 30))
-    cv.poly([r[3], r[0], b[0], b[3]], (19, 21, 42))
-    cv.poly(b, (9, 10, 22))
-    grid = (40, 58, 104)
+    cv.poly([r[0], r[1], b[1], b[0]], (15, 16, 30))   # far wall (top of screen)
+    cv.poly([r[1], r[2], b[2], b[1]], (12, 13, 25))
+    cv.poly([r[2], r[3], b[3], b[2]], (9, 10, 21))
+    cv.poly([r[3], r[0], b[0], b[3]], (13, 14, 28))
+    cv.poly(b, (8, 9, 19))
+    grid = (27, 34, 60)
     for z in range(D + 1):
         q = [p(0, 0, z), p(W, 0, z), p(W, H, z), p(0, H, z)]
-        c = grid if z < D else (54, 76, 130)
+        c = grid if z < D else (44, 56, 96)
         for i in range(4):
             cv.line(*q[i], *q[(i + 1) % 4], c)
     for i in range(W + 1):
@@ -302,7 +306,7 @@ def draw_well(cv, v):
         cv.line(*p(0, j, 0), *p(0, j, D), grid)
         cv.line(*p(W, j, 0), *p(W, j, D), grid)
         cv.line(*p(0, j, D), *p(W, j, D), grid)
-    cv.frame(int(r[0][0]) - 1, int(r[0][1]) - 1, int(r[2][0] - r[0][0]) + 3, int(r[2][1] - r[0][1]) + 3, (86, 100, 160))
+    cv.frame(int(r[0][0]) - 1, int(r[0][1]) - 1, int(r[2][0] - r[0][0]) + 3, int(r[2][1] - r[0][1]) + 3, (66, 76, 120))
 
 
 def draw_cubes(cv, v, flash=()):
@@ -347,6 +351,52 @@ def wire(cv, v, cubes, col):
             cv.line(*a[i], *a[(i + 1) % 4], col)
 
 
+def footprint(cv, v, cubes):
+    """Where the piece will land: the top faces at the landing spot, softly lit, with a pale outline."""
+    p = v.p
+    for x, y, z in cubes:
+        q = [p(x, y, z), p(x + 1, y, z), p(x + 1, y + 1, z), p(x, y + 1, z)]
+        cv.poly(q, (64, 70, 96))
+        for i in range(4):
+            cv.line(*q[i], *q[(i + 1) % 4], (190, 196, 150))
+
+
+def solid_piece(cv, v, cubes, g):
+    """The falling piece: bright filled tops with white edges and dim sides, deepest cubes first."""
+    p = v.p
+    occupied = set(cubes)
+    base = (232, 236, 250)
+    for x, y, z in sorted(cubes, key=lambda c: -c[2]):
+        for dx, dy, face in ((-1, 0, ((x, y), (x, y + 1))), (1, 0, ((x + 1, y), (x + 1, y + 1))),
+                             (0, -1, ((x, y), (x + 1, y))), (0, 1, ((x, y + 1), (x + 1, y + 1)))):
+            if (x + dx, y + dy, z) in occupied:
+                continue
+            (ax, ay), (bx, by) = face
+            cv.poly([p(ax, ay, z), p(bx, by, z), p(bx, by, z + 1), p(ax, ay, z + 1)], (110, 116, 140))
+        if (x, y, z - 1) not in occupied:
+            q = [p(x, y, z), p(x + 1, y, z), p(x + 1, y + 1, z), p(x, y + 1, z)]
+            cv.poly(q, base)
+            for i in range(4):
+                cv.line(*q[i], *q[(i + 1) % 4], (255, 255, 255))
+
+
+def height_map(cv, g, x0, y0, cell):
+    """A top-down map of the well: each column coloured by its stack height, the piece's landing cells outlined."""
+    W, H, D = g.W, g.H, g.D
+    land = set()
+    if not g.over and not g.clearing:
+        lz = g.landing()
+        land = {(x, y) for x, y, z in g.cubes_at(pz=lz)}
+    cv.rect(x0 - 1, y0 - 1, W * cell + 1, H * cell + 1, (40, 44, 70))
+    for y in range(H):
+        for x in range(W):
+            top = next((z for z in range(D) if g.cell[z][y][x]), None)
+            c = layer_col(g, top) if top is not None else (14, 15, 26)
+            cv.rect(x0 + x * cell, y0 + y * cell, cell - 1, cell - 1, c)
+            if (x, y) in land:
+                cv.frame(x0 + x * cell, y0 + y * cell, cell - 1, cell - 1, (255, 255, 255))
+
+
 def iso(cv, offs, ox, oy, k, col):
     """A small isometric picture of a piece (for the NEXT box)."""
     cubes = sorted(offs, key=lambda c: (c[2], c[0] + c[1]))
@@ -373,8 +423,8 @@ def render(g, cols, rows, ghost=True):
         if ghost:
             lz = g.landing()
             if lz != g.pz:
-                wire(cv, v, g.cubes_at(pz=lz), (70, 80, 120))
-        wire(cv, v, cubes, (240, 246, 255))
+                footprint(cv, v, g.cubes_at(pz=lz))
+        solid_piece(cv, v, cubes, g)
     # depth gauge: one box per layer, lit up to the stack height
     gx = 3
     gh = min(PH - 8, g.D * 4)
@@ -386,22 +436,24 @@ def render(g, cols, rows, ghost=True):
         y = gy + gh - (i + 1) * step
         c = layer_col(g, z) if i < hgt else (28, 30, 50)
         cv.rect(gx, int(y) + 1, 5, max(1, int(step) - 1), c)
+        if not g.over and any(cz == z for _, _, cz in g.cubes_at()):   # the falling piece's depth
+            cv.rect(gx + 6, int(y) + 1, 2, max(1, int(step) - 1), (255, 255, 255))
     # panel
     px = int(cx + size / 2) + 6
-    row = 2
+    row = 1
     cv.put(px, row, "DEPTHWELL", (236, 212, 70))
     stats = [("SCORE", "%d" % g.score), ("LEVEL", "%d" % g.level), ("LAYERS", "%d" % g.layers),
              ("CUBES", "%d" % g.cubes), ("WELL", "%dx%dx%d" % (g.W, g.H, g.D))]
-    for i, (a, b) in enumerate(stats):
-        cv.put(px, row + 2 + i * 2, a, (130, 136, 170))
-        cv.put(px + 8, row + 2 + i * 2, b, (240, 240, 250))
-    cv.put(px, row + 13, "NEXT", (130, 136, 170))
-    k = 3
-    iso(cv, g.offsets(g.next), px + 12, (row + 16) * 2 + 4, k, (200, 210, 240))
-    help_ = ["arrows  move", "Q / A   turn (x)", "W / S   turn (y)", "E / D   turn (z)", "Space   drop",
-             "Enter   sink one", "G       ghost", "Esc     pause", "?       help"]
-    for i, h in enumerate(help_):
-        cv.put(px, row + 24 + i, h, (120, 124, 150))
+    for i, (a, b) in enumerate(stats):           # one line each keeps room for the map below
+        cv.put(px, row + 2 + i, a, (130, 136, 170))
+        cv.put(px + 8, row + 2 + i, b, (240, 240, 250))
+    cv.put(px, row + 8, "NEXT", (130, 136, 170))
+    iso(cv, g.offsets(g.next), px + 12, (row + 10) * 2 + 4, 3, (200, 210, 240))
+    my = row + 16                                # the map from above fills what is left
+    cv.put(px, my, "FROM ABOVE", (130, 136, 170))
+    cell = max(2, min(6, (rows - 3 - my) * 2 // max(g.W, g.H)))
+    height_map(cv, g, px + 1, (my + 1) * 2 + 1, cell)
+    cv.put(px, rows - 2, "? keys   Esc pause", (110, 114, 140))
     for i, (txt, until, c) in enumerate(reversed(g.pops[-2:])):
         cv.center(int(cy / 2) - 2 + i * 2, " %s " % txt, (14, 14, 20), c, int(cx - size / 2), int(size))
     if g.paused:
@@ -435,30 +487,18 @@ def render_menu(cols, rows, sel, opts, t, help_=False):
                 demo.cell[z][y][x] = rnd.random() < 0.8 - (9 - z) * 0.12
     demo.t = t
     PH = rows * 2
-    size = min(PH - 10, cols // 2)
-    v = View(demo, cols / 2 + math.sin(t * 0.4) * cols * 0.02, PH / 2 + 8, size)
+    size = min(PH - 6, cols // 2)
+    v = View(demo, cols / 2 + math.sin(t * 0.4) * cols * 0.02, PH / 2 + 4, size)
     draw_well(cv, v)
     draw_cubes(cv, v)
-    for y in range(cv.H):  # dim it so the menu reads well
-        cv.px[y] = [mix(c, (6, 6, 14), 0.55) for c in cv.px[y]]
-    k = 3 if cols >= title_width("DEPTHWELL", 3) + 4 else 2
-    draw_title(cv, "DEPTHWELL", (cols - title_width("DEPTHWELL", k)) // 2, 4, k, LAYER[:9])
-    row = (4 + 5 * k) // 2 + 3
-    cv.center(row, "falling blocks in three dimensions", (190, 190, 210))
     pit, si, level = opts
-    items = ["  well:   < %dx%dx%d >  " % PITS[pit], "  pieces: < %s - %s >  " % (SETS[si][0], SETS[si][1]),
-             "  level:  < %d >  " % level, "  START  "]
-    for i, s in enumerate(items):
-        if i == sel:
-            cv.center(row + 3 + i * 2, s, (14, 14, 20), (236, 212, 70))
-        else:
-            cv.center(row + 3 + i * 2, s, (220, 220, 232), (22, 22, 40))
+    items = ["well     < %dx%dx%d >" % PITS[pit], "pieces   < %s - %s >" % (SETS[si][0], SETS[si][1]),
+             "level    < %d >" % level, "START"]
     rec = load_scores().get(GAME, {}).get(mode_key(PITS[pit], si))
-    cv.center(row + 12, "best for this well: %s" % (rec if rec is not None else "-"), (170, 176, 210))
-    cv.center(row + 15, "Up/Down choose   Left/Right change   Enter start   ? help   Esc quit", (150, 154, 184))
-    cv.center(row + 17, "in game: arrows move   Q/A W/S E/D turn   Space drop   Esc pause", (120, 124, 150))
-    if help_:
-        overlay(cv, HELP)
+    title_screen(cv, "DEPTHWELL", "falling blocks in three dimensions", items, sel,
+                 "best for this well: %d" % rec if rec is not None else None,
+                 keys="Up/Down choose   Left/Right change   Enter start   ? help   Esc back",
+                 help_lines=HELP, show_help=help_)
     return cv
 
 

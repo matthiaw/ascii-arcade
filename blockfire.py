@@ -1528,7 +1528,7 @@ class Renderer:
                      "R restart     Esc / Q quit", ""]
             self.box(text, cols, prow, lines, (255, 255, 255), (110, 20, 20))
         elif g.paused:
-            self.box(text, cols, prow, [""] + (HELP if self.help else PAUSE) + [""], (255, 255, 255), (24, 24, 40))
+            text_box(text, cols, prow, HELP if self.help else PAUSE)
         elif g.inter > 0 and not any(b.alive for b in g.bots):
             self.box(text, cols, prow, ["", "W A V E   %d" % (g.wave + 1), "starts in %d" % (int(g.inter) + 1), ""],
                      (255, 220, 90), (24, 24, 40))
@@ -1575,46 +1575,84 @@ HELP = [
 PAUSE = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "Q                 quit"]
 
 
+# The ASCII ARCADE title layout (same look as arcadekit.title_screen in the collection)
+TITLE_DIM, PANEL_BG, PANEL_FG = (6, 6, 14), (14, 14, 28), (220, 220, 232)
+GOLD_TEXT, FOOTER_BG, FOOTER_FG = (240, 210, 120), (12, 10, 22), (150, 154, 184)
+ACCENT = ((255, 165, 70), (215, 50, 40))
+BOX_FG, BOX_BG = (240, 240, 246), (22, 22, 42)
+
+
+def text_put(text, cols, rows, x, y, s, fg, bg=None):
+    for j, ch in enumerate(s):
+        if 0 <= x + j < cols and 0 <= y < rows:
+            text[(x + j, y)] = (ch, fg, bg)
+
+
+def text_box(text, cols, rows, lines):
+    """A centred box like the collection's help and pause boxes."""
+    w = max(len(l) for l in lines) + 4
+    x0, y0 = max(0, (cols - w) // 2), max(0, rows // 2 - len(lines) // 2 - 1)
+    for j, l in enumerate([""] + list(lines) + [""]):
+        text_put(text, cols, rows, x0, y0 + j, ("  " + l).ljust(w), BOX_FG, BOX_BG)
+
+
 def title_frame(r, cols, rows, t, help_=False):
     PH = rows * 2
     buf = r.scene(cols, PH, cam=(8.0 - math.cos(t * 0.06) * 6, 19.5, math.sin(t * 0.2) * 0.16))   # down the open hall
     for y in range(PH):
-        buf[y] = [mix(c, (6, 6, 12), 0.62) for c in buf[y]]
-    k = 3 if cols >= 9 * 6 * 3 + 4 else 2 if cols >= 9 * 12 else 1
+        buf[y] = [mix(c, TITLE_DIM, 0.55) for c in buf[y]]
+    items = ["Start the fight"]
+    extra = ["", "The arena is sealed. The bots keep coming.", "How many waves can you last?"]
+    # the same letter size as every ASCII ARCADE title (it fits the longest name, 11 letters)
+    k = 2 if cols >= 11 * 12 - 2 + 4 and 8 + len(items) * 2 + len(extra) + 9 <= rows else 1
     tw = 9 * 6 * k - k
-    x0, y0 = (cols - tw) // 2, 4
+    x0, y0 = (cols - tw) // 2, 3
     for n, ch in enumerate("BLOCKFIRE"):
         for gy, line in enumerate(BIGFONT[ch]):
+            c = mix(ACCENT[0], ACCENT[1], gy / 4)
+            for gx, bit in enumerate(line):
+                if bit != "#":
+                    continue
+                for yy in range(k):
+                    for xx in range(k):
+                        x, y = x0 + (n * 6 + gx) * k + xx, y0 + gy * k + yy
+                        if k >= 2 and x + 1 < cols and y + 1 < PH:   # soft shadow
+                            buf[y + 1][x + 1] = mix(buf[y + 1][x + 1], (0, 0, 0), 0.7)
+        for gy, line in enumerate(BIGFONT[ch]):
+            c = mix(ACCENT[0], ACCENT[1], gy / 4)
             for gx, bit in enumerate(line):
                 if bit == "#":
-                    c = mix((255, 210, 80), (230, 70, 40), gy / 4)
                     for yy in range(k):
                         for xx in range(k):
                             x, y = x0 + (n * 6 + gx) * k + xx, y0 + gy * k + yy
                             if 0 <= x < cols and 0 <= y < PH:
-                                buf[y][x] = shade(c, 1.15) if (xx == 0 or yy == 0) and k > 2 else c
+                                buf[y][x] = c
     text = {}
-    lines = [
-        "The arena is sealed. The bots keep coming. How many waves can you last?",
-        "",
-        "W / S  move      A / D  strafe      Left / Right  turn      Space  fire",
-        "M  map      Esc  pause menu      ?  help",
-        "",
-        "Bots:  green drone (fast)    orange sentinel (accurate)    red brute (tough)",
-        "Pickups:  white crate with red cross = health    yellow shells = ammo",
-        "Tip: keep moving - moving targets are harder to hit.",
-        "",
-        "[ Space or Enter to start     Esc quit ]",
-    ]
-    row0 = (y0 + 5 * k) // 2 + 3
-    for i, s in enumerate(lines):
-        x = max(0, (cols - len(s)) // 2)
-        f = (255, 220, 90) if s.startswith("[") else (230, 230, 240)
-        for j, ch in enumerate(s[:cols]):
-            if row0 + i < rows:
-                text[(x + j, row0 + i)] = (ch, f, None)
+    row = (y0 + 5 * k) // 2 + 2
+    tag = "a first-person arena shooter"
+    text_put(text, cols, rows, (cols - len(tag)) // 2, row, tag, (205, 205, 220))
+    gap = 2 if row + 3 + len(items) * 2 + len(extra) + 4 < rows else 1
+    w = max([len(s) for s in items + extra] + [20]) + 8
+    px0, r0 = max(0, (cols - w) // 2), row + 2
+    height = len(items) * gap + len(extra) + (1 if gap == 2 else 0) + 1
+    for j in range(height):
+        text_put(text, cols, rows, px0, r0 + j, " " * w, PANEL_FG, PANEL_BG)
+    sel_bg = mix(ACCENT[0], ACCENT[1], 0.3)
+    for i, s in enumerate(items):
+        y = r0 + 1 + i * gap if gap == 2 else r0 + i
+        text_put(text, cols, rows, px0 + 2, y, (" > " + s).ljust(w - 4), (14, 14, 20), sel_bg)
+    ey = r0 + (1 + len(items) * gap if gap == 2 else len(items))
+    for j, s in enumerate(extra):
+        text_put(text, cols, rows, px0 + 2, ey + j, ("   " + s).ljust(w - 4), FOOTER_FG, PANEL_BG)
+    if r.g.best:
+        b = "best score: %d" % r.g.best
+        text_put(text, cols, rows, (cols - len(b)) // 2, r0 + height + 1, b, GOLD_TEXT)
+    label, keys = " ASCII ARCADE ", " Enter start   ? help   Esc back "
+    text_put(text, cols, rows, 0, rows - 1, " " * cols, FOOTER_FG, FOOTER_BG)
+    text_put(text, cols, rows, 0, rows - 1, label, (14, 14, 20), (200, 200, 215))
+    text_put(text, cols, rows, max(len(label) + 1, cols - len(keys)), rows - 1, keys, FOOTER_FG, FOOTER_BG)
     if help_:
-        Renderer.box(text, cols, rows, [""] + HELP + [""], (255, 255, 255), (24, 24, 40))
+        text_box(text, cols, rows, HELP)
     out = r.emit(buf, cols, rows, text)
     out[-1] = "\x1b[0m"
     out.append("\x1b[?2026l")

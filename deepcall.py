@@ -16,8 +16,8 @@ import sys
 import time
 from collections import deque
 
-from arcadekit import (Canvas, Terminal, clamp, draw_title, load_scores, mix, overlay, shade, shared_key, submit,
-                       title_width)
+from arcadekit import (Canvas, Terminal, clamp, load_scores, mix, overlay, shade, shared_key, submit,
+                       title_screen)
 
 GAME = "deepcall"
 W, H = 320, 1700                 # world size in pixels (one pixel = one half-block)
@@ -979,8 +979,31 @@ def render(d, cols, rows, title_mode=False):
                 for x in list(range(4)) + list(range(PW - 4, PW)):
                     e = (4 - x) / 4 if x < 4 else (x - (PW - 5)) / 4
                     row[x] = mix(row[x], (220, 30, 30), min(0.8, red * e))
+        depth_gauge(cv, d, PW, PH)
         hud(cv, d, cols, rows)
     return cv
+
+
+def depth_gauge(cv, d, PW, PH):
+    """Where am I? Zones from the surface down to the Source, with the sub's depth marked."""
+    x = PW - 3
+    top, bot = 4, PH - 4
+    span = bot - top
+    for y in range(top, bot):
+        wy = (y - top) / span * H
+        z = zone_of(wy)
+        c = mix(ZONES[z][3], ZONES[z][2], 0.35)
+        cv.px[y][x] = c
+        cv.px[y][x + 1] = c
+    sy = top + int(clamp(d.y / H, 0, 1) * span)
+    for yy in (sy - 1, sy, sy + 1):
+        for xx in (x - 2, x - 1, x, x + 1):
+            if 0 <= yy < PH:
+                cv.px[yy][xx] = (255, 220, 110)
+    ty = top + int(d.w.source[1] / H * span)
+    for xx in (x - 1, x, x + 1, x + 2):
+        if 0 <= xx < PW:
+            cv.px[ty][xx] = (230, 255, 240)
 
 
 def bar(v, n=8):
@@ -1023,6 +1046,7 @@ HELP = [
     "",
     "Find air vents (rising bubbles), salvage and the Source at the bottom.",
     "Keep the NOISE bar low: loud dives wake what lives down there.",
+    "The gauge on the right edge shows your depth and the Source at the bottom.",
     "",
     "Esc / P                  pause menu (Q there: quit)",
     "?                        this help",
@@ -1065,22 +1089,11 @@ class TitleDemo:
         d.over = False
         d.msgs = []
         cv = render(d, cols, rows, title_mode=True)
-        for y in range(cv.H):   # keep the cave in the background
-            cv.px[y] = [mix(c, (4, 8, 16), 0.5) for c in cv.px[y]]
-        k = 3 if cols >= title_width("DEEPCALL", 3) + 4 else 2
-        draw_title(cv, "DEEPCALL", (cols - title_width("DEEPCALL", k)) // 2, 4, k,
-                   [ZONES[0][2], ZONES[1][2], ZONES[0][2], ZONES[3][2]], bevel=False)
-        row = (4 + 5 * k) // 2 + 3
-        cv.center(row, "a submarine alone in the dark", (180, 200, 220))
         best = load_scores().get(GAME, {}).get("dive")
-        lines = ["Enter / Space   dive", "?               help", "Esc             quit"]
-        for i, l in enumerate(lines):
-            cv.center(row + 3 + i * 2, "  %s  " % l, (230, 236, 240), (8, 14, 26))
-        if best is not None:
-            cv.center(row + 10, "best score: %d" % best, GOLD)
-        cv.center(rows - 2, "Every ping lights the way - and tells the deep where you are.", (120, 140, 170))
-        if help_:
-            overlay(cv, HELP, bg=(8, 14, 26))
+        title_screen(cv, "DEEPCALL", "a submarine alone in the dark", ["Dive"], 0,
+                     "best score: %d" % best if best is not None else None,
+                     extra=["", "Every ping lights the way -", "and tells the deep where you are."],
+                     keys="Enter dive   ? help   Esc back", help_lines=HELP, show_help=help_, dim=0.35)
         return cv
 
 
@@ -1150,7 +1163,7 @@ def main():
                         continue
                     cv = render(d, cols, rows)
                     if d.paused:
-                        overlay(cv, HELP if d.help else PAUSE, bg=(8, 14, 26))
+                        overlay(cv, HELP if d.help else PAUSE)
                     if d.over:
                         render_end(d, cv, record)
                     term.write(cv.emit())
