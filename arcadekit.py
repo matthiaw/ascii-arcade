@@ -7,6 +7,7 @@ Pure Python 3, no dependencies (macOS / Linux).
 """
 import json
 import os
+import re
 import select
 import sys
 import termios
@@ -426,7 +427,7 @@ def title_screen(cv, name, tagline, items, sel, best=None, extra=(), keys=None, 
     y0 = 3
     block_title(cv, name, (cols - title_width(name, k)) // 2, y0, k, top, bottom)
     row = (y0 + 5 * k) // 2 + 2
-    cv.center(row, tagline, (205, 205, 220))
+    cv.center(row, " %s " % tagline, (215, 215, 230), PANEL_BG)   # backed, so it reads over any scene
     gap = 2 if row + 3 + len(items) * 2 + len(extra) + 4 < rows else 1
     w = max([len(s) for s in items] + [len(s) for s in extra] + [20]) + 8
     x0 = max(0, (cols - w) // 2)
@@ -456,5 +457,10 @@ def footer(cv, keys):
     label = " ASCII ARCADE "
     cv.put(0, r, " " * cols, FOOTER_FG, FOOTER_BG)
     cv.put(0, r, label, (14, 14, 20), (200, 200, 215))
-    k = " %s " % keys
-    cv.put(max(len(label) + 1, cols - len(k)), r, k[:max(0, cols - len(label) - 1)], FOOTER_FG, FOOTER_BG)
+    room = cols - len(label) - 1
+    hints = [h for h in re.split(r"\s{3,}", keys.strip()) if h]
+    while hints and len("   ".join(hints)) + 2 > room:   # drop whole hints from the end, never cut one
+        hints.pop()
+    k = " %s " % "   ".join(hints) if hints else ""
+    if k:
+        cv.put(cols - len(k), r, k, FOOTER_FG, FOOTER_BG)

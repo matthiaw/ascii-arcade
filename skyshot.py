@@ -327,6 +327,8 @@ class Tank:
         self.ammo = [w[3] for w in WEAPONS]
         self.colour = colour
         self.slides, self.slide_t = 0, 0.0
+        self.shown = 100.0        # the HP bar drains towards hp, so a hit shows how much it took
+        self.hit_t = 0.0          # a hit tank flashes white
 
     def centre(self):
         return self.x + 0.5, self.y - 2.0
@@ -531,6 +533,8 @@ class Match:
         self.mult = 1
         self.acc = 0.0
         self.round_winner = None
+        self.last_path = [None, None]    # each player's previous shot, drawn faintly while they aim
+        self.path, self.volley_hit = [], False
         self.begin_turn()
 
     def begin_turn(self):
@@ -605,6 +609,7 @@ class Match:
         s = launch(self.world, t, w=t.weapon)
         self.shells = [s]
         self.whistled = False
+        self.path, self.volley_hit = [(s.x, s.y)], False
         self.sfx("fire_heavy" if t.weapon == 1 else "fire")
         self.flash = [s.x, s.y, 0.14]
         r = self.rnd
@@ -679,6 +684,8 @@ class Match:
                 elif self.aim_t > (0.4 if self.fast else 1.0):
                     self.fire()
         elif self.phase == "flight":
+            if self.shells and int(round(self.shells[0].age * 60)) % 3 == 0:
+                self.path.append((self.shells[0].x, self.shells[0].y))
             for s in list(self.shells):
                 s.trail.append((s.x, s.y))
                 vy0 = s.vy
@@ -702,7 +709,7 @@ class Match:
                     continue
                 self.shells.remove(s)
                 if hit == "off":
-                    if not self.shells:
+                    if not self.shells and not self.volley_hit:
                         self.say("Wide - that one left the field.")
                         self.sfx("miss")
                     continue
@@ -710,6 +717,7 @@ class Match:
             if not self.shells:
                 self.phase = "settle"
                 self.settle_t = 0.0
+                self.last_path[self.turn] = self.path
         if w.dirty:
             w.settle_step()
         for t in self.tanks:
@@ -730,6 +738,7 @@ class Match:
     def hurt(self, t, dmg, why=""):
         dmg = int(dmg * self.mult)
         t.hp = max(0, t.hp - dmg)
+        t.hit_t = 0.18
         cx, cy = t.centre()
         self.floats.append([cx, cy - 6, "-%d" % dmg, (255, 236, 120) if why != "fall" else (255, 190, 150), 1.8])
         if why == "fall":
@@ -750,6 +759,9 @@ class Match:
     def explode(self, x, y, widx, owner, water=False, direct=None):
         w, r = self.world, self.rnd
         name, rad, dmg, _, kind = WEAPONS[widx]
+        self.volley_hit = True
+        if self.path is not None:
+            self.path.append((x, y))
         if kind == "dirt":
             self.sfx("dirt")
             w.add_dirt(x, y, rad)
@@ -816,6 +828,10 @@ class Match:
             f[1] -= 7 * PH
             f[4] -= PH
         self.floats = [f for f in self.floats if f[4] > 0]
+        for t in self.tanks:
+            if t.shown > t.hp:      # hold the lost chunk for a moment, then let it drain away
+                t.shown = max(t.hp, t.shown - (0 if t.hit_t > 0 else 45 * PH))
+            t.hit_t = max(0.0, t.hit_t - PH)
         if self.flash:
             self.flash[2] -= PH
             if self.flash[2] <= 0:
@@ -867,10 +883,41 @@ def wind_text(w):
     return ("◀" * n + " %d" % abs(w)) if w < 0 else ("%d " % abs(w) + "▶" * n)
 
 
+def wind_colour(w):
+    return (200, 230, 255) if abs(w) <= 3 else (255, 230, 140) if abs(w) <= 7 else (255, 150, 120)
+
+
+def wind_gauge(cv, col, row, w, n):
+    """WIND  ····|▶▶▶·  6 : a centred scale, filled towards where the wind blows (n cells a side, 10 = full)."""
+    bg = (16, 16, 28)
+    wc = wind_colour(w)
+    cells = int(math.ceil(abs(w) * n / 10))
+    left = "".join("◀" if w < 0 and n - i <= cells else "·" for i in range(n))
+    right = "".join("▶" if w > 0 and i < cells else "·" for i in range(n))
+    num = "calm" if w == 0 else "%d" % abs(w)
+    cv.put(col, row, " WIND ", (150, 156, 190), bg)
+    x = col + 6
+    for ch in left:
+        cv.put(x, row, ch, wc if ch != "·" else (70, 74, 100), bg)
+        x += 1
+    cv.put(x, row, "|", (150, 156, 190), bg)
+    x += 1
+    for ch in right:
+        cv.put(x, row, ch, wc if ch != "·" else (70, 74, 100), bg)
+        x += 1
+    cv.put(x, row, " %-4s" % num, wc, bg)
+
+
+def wind_width(n):
+    return 6 + 2 * n + 1 + 5
+
+
 def draw_tank(px, t, W, H, now):
     x, y = t.x, int(t.y)
     alive = t.hp > 0
     c = t.colour if alive else (64, 60, 58)
+    if t.hit_t > 0 and int(t.hit_t * 30) % 2 == 0:   # struck: a white flash
+        c = (255, 255, 255)
     light, dark = shade(c, 1.22), shade(c, 0.7)
 
     def dot(xx, yy, col):
@@ -927,6 +974,16 @@ def render(m, cols, rows, title_mode=False):
     # aim indicator: a dotted line from the barrel, longer with more power
     t = m.active
     if m.phase == "aim" and t.hp > 0:
+        last = m.last_path[m.turn]
+        if last and not title_mode:     # your previous shot, faintly, with a cross where it ended
+            for i, (x, y) in enumerate(last[:-1]):
+                xi, yi = int(x), int(y)
+                if i % 2 == 0 and 0 <= xi < cols and 0 <= yi < WH:
+                    px[yi][xi] = mix(px[yi][xi], (255, 255, 255), 0.4)
+            ex, ey = int(last[-1][0]), int(last[-1][1])
+            for dx, dy in ((-1, -1), (1, 1), (-1, 1), (1, -1), (0, 0)):
+                if 0 <= ex + dx < cols and 0 <= ey + dy < WH:
+                    px[ey + dy][ex + dx] = mix(px[ey + dy][ex + dx], (255, 255, 255), 0.7)
         a = math.radians(t.angle)
         ca, sa = math.cos(a), math.sin(a)
         L = 6 + t.power * 0.16
@@ -937,6 +994,8 @@ def render(m, cols, rows, title_mode=False):
             xx, yy = int(t.x + 0.5 + ca * d), int(t.y - 3.5 - sa * d)
             if 0 <= xx < cols and 0 <= yy < WH:
                 px[yy][xx] = mix(lc, (255, 255, 255), 0.5 * (1 - k)) if int(now * 6) % 2 or k < 0.9 else lc
+                if yy + 1 < WH:          # a dark under-pixel keeps the dots readable on bright sky
+                    px[yy + 1][xx] = mix(px[yy + 1][xx], (16, 12, 24), 0.55)
             d += 2.4
     for b in m.booms:                                # fireballs
         bx, by, r, bt = b
@@ -950,6 +1009,13 @@ def render(m, cols, rows, title_mode=False):
                     core = mix((255, 255, 230), (255, 170, 60), min(1.0, d + k))
                     edge = mix(core, (200, 60, 30), k)
                     row[x] = mix(row[x], edge, (1 - k * 0.8) * (1 - d * d * 0.6))
+        if bt < 0.12:                                # the first instant: a white shock ring
+            sr = r * (1.0 + bt * 6)
+            for i in range(int(sr * 6) + 8):
+                aa = i * 6.283 / (int(sr * 6) + 8)
+                x, y = int(bx + math.cos(aa) * sr), int(by + math.sin(aa) * sr)
+                if 0 <= x < cols and 0 <= y < WH:
+                    px[y][x] = mix(px[y][x], (255, 255, 255), 0.8 * (1 - bt / 0.12))
     for p in m.parts:
         x, y = int(p[0]), int(p[1])
         if 0 <= x < cols and 0 <= y < WH:
@@ -960,10 +1026,13 @@ def render(m, cols, rows, title_mode=False):
         for i, (x, y) in enumerate(s.trail):
             xi, yi = int(x), int(y)
             if 0 <= xi < cols and 0 <= yi < WH:
-                px[yi][xi] = mix(px[yi][xi], (255, 220, 160), 0.15 + 0.6 * i / max(1, n))
+                px[yi][xi] = mix(px[yi][xi], (255, 196, 100), 0.2 + 0.7 * i / max(1, n))
         xi, yi = int(s.x), int(s.y)
         if 0 <= xi < cols:
             if 0 <= yi < WH:
+                for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):   # a dark rim: the shell reads on any sky
+                    if 0 <= xi + dx < cols and 0 <= yi + dy < WH:
+                        px[yi + dy][xi + dx] = mix(px[yi + dy][xi + dx], (24, 16, 28), 0.6)
                 px[yi][xi] = (255, 255, 240)
             elif yi < 0:
                 px[0][xi] = (255, 255, 120) if int(now * 10) % 2 else (255, 160, 60)
@@ -974,30 +1043,54 @@ def render(m, cols, rows, title_mode=False):
                 x, y = int(fx) + dx, int(fy) + dy
                 if 0 <= x < cols and 0 <= y < WH:
                     px[y][x] = (255, 255, 200) if dx == 0 or dy == 0 else (255, 200, 90)
-    for f in m.floats:
-        cv.put(int(f[0]) - len(f[2]) // 2, int(f[1]) // 2, f[2], f[3] if f[4] > 0.5 or int(now * 8) % 2 else
-               shade(f[3], 0.7))
+    for f in m.floats:                               # damage numbers on a dark backing
+        cv.put(int(f[0]) - len(f[2]) // 2 - 1, int(f[1]) // 2, " %s " % f[2],
+               f[3] if f[4] > 0.5 or int(now * 8) % 2 else shade(f[3], 0.7), (24, 14, 20))
     if not title_mode:
         overlay_texts(cv, m)
     return cv
 
 
+SHORT = ["Shell", "Heavy", "Splitter", "Dirt"]
+BAR_BG = (16, 16, 28)
+
+
+def hp_bar(t, n):
+    """The HP bar as (text, colour) runs: what is left, the chunk just lost (white, draining), what is gone."""
+    hpc = (120, 230, 110) if t.hp > 50 else (240, 210, 80) if t.hp > 25 else (255, 90, 80)
+    a = int(math.ceil(clamp(t.hp / 100, 0, 1) * n))
+    b = max(a, int(math.ceil(clamp(t.shown / 100, 0, 1) * n)))
+    return [("█" * a, hpc), ("█" * (b - a), (255, 236, 210)), ("░" * (n - b), (64, 68, 92))], hpc
+
+
+def put_runs(cv, x, row, runs, bg=BAR_BG):
+    for txt, fg in runs:
+        cv.put(x, row, txt, fg, bg)
+        x += len(txt)
+    return x
+
+
 def overlay_texts(cv, m):
     cols, rows = cv.cols, cv.rows
     now = m.t
-    # top: both players' panels and the wind
+    # top: both players' panels and the wind; the player whose turn it is has the bright name tag
+    n = 10 if cols >= 100 else 7
+    widths = []
     for i, t in enumerate(m.tanks):
-        name = " %s " % m.names[i]
-        hpc = (120, 230, 110) if t.hp > 50 else (240, 210, 80) if t.hp > 25 else (255, 90, 80)
-        pips = "●" * m.wins[i] + "○" * (2 - m.wins[i])
-        body = " %s %3d " % (bar(t.hp / 100, 10 if cols >= 90 else 7), t.hp)
-        x = 0 if i == 0 else cols - len(name) - len(body) - 3
-        cv.put(x, 0, name, (14, 14, 20), t.colour)
-        cv.put(x + len(name), 0, body, hpc, (16, 16, 28))
-        cv.put(x + len(name) + len(body), 0, pips + " ", (255, 214, 120), (16, 16, 28))
-    wt = " WIND %s " % wind_text(m.wind)
-    wc = (200, 230, 255) if abs(m.wind) <= 3 else (255, 230, 140) if abs(m.wind) <= 7 else (255, 150, 120)
-    cv.center(0, wt, wc, (16, 16, 28))
+        widths.append(len(m.names[i]) + 3 + 1 + n + 5 + 3)
+    wn = 10 if cols - sum(widths) >= wind_width(10) + 4 else 5 if cols - sum(widths) >= wind_width(5) + 2 else 3
+    for i, t in enumerate(m.tanks):
+        on = i == m.turn and m.phase in ("aim", "flight", "settle")
+        name = (" ▸%s " if on else "  %s ") % m.names[i]
+        runs, hpc = hp_bar(t, n)
+        x = 0 if i == 0 else cols - widths[i]
+        if on:
+            cv.put(x, 0, name, (14, 14, 20), t.colour)
+        else:
+            cv.put(x, 0, name, mix(t.colour, (255, 255, 255), 0.25), mix(t.colour, BAR_BG, 0.65))
+        x = put_runs(cv, x + len(name), 0, [(" ", hpc)] + runs + [(" %3d " % t.hp, hpc)])
+        cv.put(x, 0, "●" * m.wins[i] + "○" * (2 - m.wins[i]) + " ", (255, 214, 120), BAR_BG)
+    wind_gauge(cv, (cols - wind_width(wn)) // 2, 0, m.wind, wn)
     # whose turn
     t = m.active
     if m.phase in ("aim", "flight", "settle"):
@@ -1020,7 +1113,8 @@ def overlay_texts(cv, m):
     hud(cv, m)
     if m.phase == "roundover":
         wn = m.round_winner
-        lines = ["%s WINS THE ROUND" % m.names[wn], "", "rounds   %d : %d" % tuple(m.wins)]
+        who = m.names[wn]
+        lines = ["%s %s THE ROUND" % (who, "WIN" if who == "YOU" else "WINS"), "", "rounds   %d : %d" % tuple(m.wins)]
         if m.phase_t > 0.6:
             lines += ["", "Enter  continue"]
         wd = max(len(l) for l in lines) + 4
@@ -1028,30 +1122,50 @@ def overlay_texts(cv, m):
 
 
 def hud(cv, m):
+    """The bottom bar: who is aiming, angle, power, the shells (chosen one lit, used-up ones dim), key hints."""
     cols, r = cv.cols, cv.rows - 1
     t = m.active
     rel = t.angle if t.angle <= 90 else 180 - t.angle
     arrow = "↗" if t.angle < 88 else "↖" if t.angle > 92 else "↑"
+    human = not m.cpu[m.turn]
+    dim = (130, 136, 170)
+    chips = []
+    for i, (wname, _, _, ammo, _) in enumerate(WEAPONS):
+        left = t.ammo[i]
+        txt = " %d %s%s " % (i + 1, SHORT[i], "" if left is None else " %d" % left)
+        if i == t.weapon:
+            chips.append((txt, (20, 14, 10), (250, 214, 120)))
+        elif left == 0:
+            chips.append((txt, (78, 80, 100), HUD_BG))
+        else:
+            chips.append((txt, (200, 200, 214), HUD_BG))
     wname, _, _, ammo, _ = WEAPONS[t.weapon]
-    wl = "[%d] %s%s" % (t.weapon + 1, wname, "" if ammo is None else " x%d" % t.ammo[t.weapon])
-    segs = [(" SKYSHOT ", (20, 10, 16), (255, 140, 170), 0),
-            ("  round %d " % m.round_no, (200, 200, 216), None, 5),
-            ("  ANGLE %2d° %s " % (rel, arrow), (235, 235, 245), None, 1),
-            ("  POWER %3d " % t.power, (235, 235, 245), None, 1),
-            ("  %s " % wl, (255, 214, 130), None, 2),
-            ("  Tab weapon  Space fire ", (130, 136, 170), None, 4),
-            ("  ←→ angle  ↑↓ power ", (130, 136, 170), None, 3)]
+    single = [(" [%d] %s%s " % (t.weapon + 1, wname, "" if ammo is None else " x%d" % t.ammo[t.weapon]),
+               (255, 214, 130), HUD_BG)]
+    groups = [[[(" %s " % m.names[m.turn], (14, 14, 20), t.colour)], 0],
+              [[("  ANGLE %2d° %s " % (rel, arrow), (235, 235, 245), HUD_BG)], 1],
+              [[(" POWER %3d " % t.power, (235, 235, 245), HUD_BG)], 1],
+              [[(" ", HUD_BG, HUD_BG)] + chips, 2],
+              [[("  round %d " % m.round_no, (170, 174, 196), HUD_BG)], 6]]
+    if human:
+        groups += [[[("  Tab shell  Space fire ", dim, HUD_BG)], 4], [[("  ←→ angle  ↑↓ power ", dim, HUD_BG)], 3]]
     right = " ? help  Esc menu "
     room = cols - len(right)
-    while sum(len(s[0]) for s in segs) > room and len(segs) > 1:
-        segs.remove(max(segs, key=lambda s: s[3]))
+    width = lambda: sum(len(s) for g in groups for s, _, _ in g[0])
+    while width() > room and len(groups) > 1:
+        worst = max(groups, key=lambda g: g[1])
+        if worst[1] == 2 and worst[0] is not single:    # out of room for all four: show just the chosen shell
+            worst[0], worst[1] = single, 1.5
+            continue
+        groups.remove(worst)
     cv.put(0, r, " " * cols, HUD_BG, HUD_BG)
     x = 0
-    for s, fg, bg, _ in segs:
-        cv.put(x, r, s, fg, bg or HUD_BG)
-        x += len(s)
+    for segs, _ in groups:
+        for s, fg, bg in segs:
+            cv.put(x, r, s, fg, bg)
+            x += len(s)
     if x + len(right) <= cols:
-        cv.put(cols - len(right), r, right, (130, 136, 170), HUD_BG)
+        cv.put(cols - len(right), r, right, dim, HUD_BG)
 
 
 def render_over(cv, m, record, streak):
@@ -1065,7 +1179,9 @@ def render_over(cv, m, record, streak):
         lines.append("win streak vs computer (%s): %d%s" % (DIFFS[m.diff], streak, "   new record!" if record else ""))
     lines += ["", "Enter  play again      Esc / Q  back to the title"]
     wd = max(len(l) for l in lines) + 4
-    cv.box(max(0, (cv.cols - wd) // 2), max(2, cv.rows // 2 - 5), lines, (240, 240, 246), (22, 22, 42))
+    x, y = max(0, (cv.cols - wd) // 2), max(2, cv.rows // 2 - 5)
+    cv.frame(x - 1, y * 2 - 1, wd + 2, (len(lines) + 2) * 2 + 2, m.tanks[wn].colour)   # a rim in the winner's colour
+    cv.box(x, y, lines, (240, 240, 246), (22, 22, 42))
     cv.put(max(0, (cv.cols - wd) // 2) + 2, max(2, cv.rows // 2 - 5) + 1, head, m.tanks[wn].colour, (22, 22, 42))
 
 

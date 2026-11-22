@@ -14,7 +14,7 @@ import random
 import sys
 import time
 
-from arcadekit import (PAUSE_LINES, Canvas, Terminal, clamp, draw_title, load_scores, mix, overlay, shade,
+from arcadekit import (PAUSE_LINES, Canvas, Terminal, clamp, draw_title, footer, load_scores, mix, overlay, shade,
                        shared_key, submit, title_screen, title_width)
 from arcadesound import Sound
 
@@ -123,6 +123,7 @@ class Stack:
         self.paused = self.help = False
         self.rise_t = 0.0
         self.pops = []          # floating texts: [text, t_end, colour]
+        self.slam_t = 0.0
         self.spawn()
 
     # --- pieces ----------------------------------------------------------------------------------
@@ -199,6 +200,7 @@ class Stack:
         while self.fits(self.cells(y=self.y + 1)):
             self.y += 1
         self.score += 2 * (self.y - y0)
+        self.slam_t = self.t
         if self.y > y0:
             cols = sorted({x for x, _ in self.cells()})
             for x in cols:
@@ -242,10 +244,13 @@ class Stack:
             else:
                 SND.play("clear%d" % min(n, 4))
             self.score += pts
-            self.pops.append([["", "", "DOUBLE", "TRIPLE", "QUAD STACK!"][min(n, 4)] or "+%d" % pts,
-                              self.t + 1.1, col])
+            name = ["", "", "DOUBLE", "TRIPLE", "QUAD STACK!"][min(n, 4)]
+            # the newest text is drawn on top, so add them bottom-up: combo, points, name
             if self.combo > 0:
                 self.pops.append(["combo x%d" % self.combo, self.t + 1.1, (255, 220, 120)])
+            self.pops.append(["+%d" % pts, self.t + 1.1, (240, 240, 250) if name else col])
+            if name:
+                self.pops.append([name, self.t + 1.1, col])
             self.clearing = (full, self.t + 0.22)
         else:
             self.combo = -1
@@ -339,11 +344,17 @@ class Stack:
 # =============================================================================================
 # Drawing
 # =============================================================================================
-def block(cv, x, y, k, c, ghost=False):
-    if ghost:   # where the piece will land: a light fill and a clear coloured outline
-        cv.rect(x, y, k, k, mix((14, 15, 26), c, 0.22))
-        cv.frame(x, y, k, k, shade(c, 0.95))
-        return
+WELL_BG = (17, 19, 34)        # the well is a shade lighter than the room, so it reads as the play area
+WELL_LANE = (20, 22, 39)      # every other column a touch lighter: easy to count columns when aiming
+PANEL_BODY = (15, 16, 30)
+PANEL_HEAD = (30, 32, 58)
+PANEL_EDGE = (48, 52, 88)
+LABEL = (138, 144, 182)       # dim labels, bright values (both above 4.5:1 on the panel)
+VALUE = (240, 240, 250)
+SCORE_C = (250, 214, 120)
+
+
+def block(cv, x, y, k, c):
     if k <= 2:
         cv.rect(x, y, k, k, c)
         cv.set(x, y, shade(c, 1.25))
@@ -355,17 +366,53 @@ def block(cv, x, y, k, c, ghost=False):
         cv.set(x + 1, y + 1, shade(c, 1.5))
 
 
-def mini(cv, kind, x, y, k, dim=False):
-    """A piece preview centred in a 4k x 2k box."""
+def ghost(cv, cells, bx, by, k, c):
+    """Where the piece will land: a faint fill with one outline around the whole shape (never mistaken for a
+    real block, at any size)."""
+    occ = set(cells)
+    if k <= 2:   # too small for an outline: a dim, flat shadow of the piece
+        for x, y in cells:
+            cv.rect(bx + x * k, by + (y - HID) * k, k, k, mix(WELL_BG, c, 0.34))
+        return
+    fill, edge = mix(WELL_BG, c, 0.16), shade(c, 0.95)
+    for x, y in cells:
+        px, py = bx + x * k, by + (y - HID) * k
+        cv.rect(px, py, k, k, fill)
+        if (x - 1, y) not in occ:
+            cv.rect(px, py, 1, k, edge)
+        if (x + 1, y) not in occ:
+            cv.rect(px + k - 1, py, 1, k, edge)
+        if (x, y - 1) not in occ:
+            cv.rect(px, py, k, 1, edge)
+        if (x, y + 1) not in occ:
+            cv.rect(px, py + k - 1, k, 1, edge)
+
+
+def mini(cv, kind, x, y, k, dim=0.0):
+    """A piece preview centred in a 4k x 2k box; dim fades it into the panel."""
     cells = ROT[kind][0]
     xs, ys = [c[0] for c in cells], [c[1] for c in cells]
     w, h = max(xs) - min(xs) + 1, max(ys) - min(ys) + 1
     ox, oy = x + (4 - w) * k / 2 - min(xs) * k, y + (2 - h) * k / 2 - min(ys) * k
-    col = SHAPES[kind][2]
-    if dim:
-        col = mix(col, (60, 60, 70), 0.6)
+    col = mix(SHAPES[kind][2], PANEL_BODY, dim)
     for cx, cy in cells:
         block(cv, int(ox + cx * k), int(oy + cy * k), k, col)
+
+
+def panel(cv, col, row, w, h, title=None, title_fg=LABEL):
+    """A framed box in character cells, with an optional header strip."""
+    cv.rect(col, row * 2, w, h * 2, PANEL_BODY)
+    cv.frame(col, row * 2, w, h * 2, PANEL_EDGE)
+    if title:
+        cv.put(col + 1, row, (" " + title).ljust(w - 2)[:w - 2], title_fg, PANEL_HEAD)
+
+
+def stat(cv, col, row, w, label, value, fg=VALUE):
+    """One HUD line inside a panel: the label dim on the left, the value bright and right-aligned."""
+    value = value[:w - 3]
+    room = w - 5 - len(value)                    # the label gives way first when the panel is narrow
+    cv.put(col + 1, row, (" " + label[:max(0, room)]).ljust(w - 2)[:w - 2], LABEL, PANEL_BODY)
+    cv.put(col + w - 2 - len(value), row, value, fg, PANEL_BODY)
 
 
 def fmt_time(t):
@@ -374,75 +421,116 @@ def fmt_time(t):
 
 def render(g, cols, rows):
     cv = Canvas(cols, rows)
-    cv.vgradient((10, 10, 22), (22, 14, 30))
-    PH = rows * 2
-    K = clamp(min((PH - 6) // H, (cols - 44) // W), 2, 8)
-    KP = max(2, K * 2 // 3)
+    cv.vgradient((8, 8, 18), (18, 12, 26))
+    PH = (rows - 1) * 2                               # the footer bar keeps the last row
+    K = clamp(min((PH - 4) // H, (cols - 44) // W), 2, 8)
+    fw = 2 if PH - H * K >= 4 else 1                  # frame thickness; thin when the well only just fits
     bw, bh = W * K, H * K
     bx = (cols - bw) // 2
-    by = ((PH - bh) // 2) & ~1
-    # the well; its frame pulses red when the stack gets close to the top
+    by = (PH - bh) // 2
+    if g.slam_t and g.t - g.slam_t < 0.07:            # a hard drop nudges the well
+        by += 1
+    # danger: how close the stack is to the top (0 calm .. 1 about to top out)
     top = next((y for y in range(H + HID) if any(c is not None for c in g.board[y])), H + HID)
-    danger = clamp((HID + 5 - top) / 5, 0, 1) if not g.over else 0
-    frame = mix((64, 72, 112), (230, 60, 60), danger * (0.6 + 0.4 * math.sin(g.t * 8)))
-    cv.rect(bx - 2, by - 2, bw + 4, bh + 4, frame)
-    cv.rect(bx - 1, by - 1, bw + 2, bh + 2, (30, 34, 58))
-    cv.rect(bx, by, bw, bh, (14, 15, 26))
-    for gy in range(1, H):
-        for gx in range(1, W):
-            cv.set(bx + gx * K, by + gy * K, (30, 33, 52))
-    flash = g.clearing[0] if g.clearing else ()
+    danger = clamp((HID + 6 - top) / 6, 0, 1) if not g.over else 0
+    pulse = 0.6 + 0.4 * math.sin(g.t * 8)
+    frame = mix((70, 78, 122), (236, 64, 64), danger * pulse)
+    cv.rect(bx - fw, by - fw, bw + 2 * fw, bh + 2 * fw, frame)
+    if fw == 2:
+        cv.rect(bx - 1, by - 1, bw + 2, bh + 2, mix((34, 38, 64), (90, 26, 34), danger))
+    for x in range(W):
+        cv.rect(bx + x * K, by, K, bh, WELL_LANE if x % 2 else WELL_BG)
+    if danger > 0:   # the top rows glow red as the stack climbs into them
+        for i in range(4):
+            a = danger * (0.30 - i * 0.06) * pulse
+            for x in range(W):
+                cv.rect(bx + x * K, by + i * K, K, K, mix(WELL_LANE if x % 2 else WELL_BG, (200, 40, 48), a))
+    clear_rows, clear_p = (), 0.0
+    if g.clearing:
+        clear_rows = g.clearing[0]
+        clear_p = clamp(1 - (g.clearing[1] - g.t) / 0.22, 0, 1)
     for y in range(HID, H + HID):
         for x in range(W):
             c = g.board[y][x]
-            if c is not None:
-                if y in flash:
-                    c = mix(c, (255, 255, 255), 0.75 if int(g.t * 30) % 2 else 0.4)
-                if g.over and not g.won:
-                    c = mix(c, (70, 70, 80), 0.7)
-                block(cv, bx + x * K, by + (y - HID) * K, K, c)
+            if c is None:
+                continue
+            if y in clear_rows:   # a white wipe runs out from the middle, then the row is gone
+                d = abs(x + 0.5 - W / 2) / (W / 2)
+                c = (255, 255, 255) if d <= clear_p * 1.15 else mix(c, (255, 255, 255), 0.45)
+            elif g.over and not g.won:
+                c = mix(c, (70, 70, 80), 0.7)
+            block(cv, bx + x * K, by + (y - HID) * K, K, c)
+    for y in clear_rows:          # the frame lights up beside each row that clears
+        if y >= HID:
+            glow = mix(frame, (255, 255, 255), 1 - clear_p * 0.6)
+            cv.rect(bx - fw, by + (y - HID) * K, fw, K, glow)
+            cv.rect(bx + bw, by + (y - HID) * K, fw, K, glow)
     for x, y0, y1, c, _ in g.trails:
         for y in range(max(HID, y0), y1):
-            cv.rect(bx + x * K + K // 3, by + (y - HID) * K, max(1, K // 3), K, mix(c, (14, 15, 26), 0.6))
+            cv.rect(bx + x * K + K // 3, by + (y - HID) * K, max(1, K // 3), K, mix(c, WELL_BG, 0.6))
     if not g.over and not g.clearing:
         col = SHAPES[g.kind][2]
         gy = g.y
         while g.fits(g.cells(y=gy + 1)):
             gy += 1
-        for x, y in g.cells(y=gy):
-            if y >= HID:
-                block(cv, bx + x * K, by + (y - HID) * K, K, col, ghost=True)
+        if gy > g.y:
+            ghost(cv, [(x, y) for x, y in g.cells(y=gy) if y >= HID], bx, by, K, col)
         for x, y in g.cells():
             if y >= HID:
                 block(cv, bx + x * K, by + (y - HID) * K, K, col)
-    # side panels
-    lx = max(1, bx - 4 * KP - 6)
-    rx = bx + bw + 5
-    row = by // 2
-    cv.put(lx, row, "HOLD", (170, 176, 210))
+    # --- side panels: HOLD + stats on the left, NEXT on the right, each in its own frame ----------------
+    gap = 2 + fw
+    LW = min(clamp(bx - gap - 2, 12, 24), bx - gap)              # never over the well, even when narrow
+    lx = max(0, bx - gap - LW)
+    RW = min(clamp(cols - (bx + bw + gap) - 2, 12, 24), cols - (bx + bw + gap))
+    rx = bx + bw + gap
+    KP = clamp(min(K, (min(LW, RW) - 4) // 4), 2, 6)
+    r0 = max(0, by // 2)
+    hh = KP + 2
+    panel(cv, lx, r0, LW, hh, "HOLD" if not g.held else "HOLD  (used)", LABEL if not g.held else (110, 114, 146))
     if g.hold:
-        mini(cv, g.hold, lx, by + 3, KP, dim=g.held)
-    cv.put(rx, row, "NEXT", (170, 176, 210))
-    for i, kind in enumerate(g.queue[:3]):          # three is plenty, and calmer than five
-        mini(cv, kind, rx, by + 3 + i * (2 * KP + 4), KP if i == 0 else max(2, KP - 1), dim=i > 0)
-    srow = row + (2 * KP + 8) // 2
-    stats = [("MODE", g.mode), ("SCORE", "%d" % g.score), ("ROWS", "%d%s" % (g.lines, "/40" if g.mode == "Sprint" else "")),
-             ("LEVEL", "%d" % g.level), ("TIME", fmt_time(g.t))]
+        mini(cv, g.hold, lx + (LW - 4 * KP) // 2, (r0 + 1) * 2 + 1, KP, dim=0.6 if g.held else 0.0)
+    # stats: score first and in gold; a bar shows how close the next level (or the Sprint goal) is
     rec = load_scores().get(GAME, {}).get(g.mode)
+    sprint = g.mode == "Sprint"
+    if sprint:
+        lines = [("TIME", fmt_time(g.t), SCORE_C), ("ROWS", "%d/40" % g.lines, VALUE), None,
+                 ("SCORE", "%d" % g.score, VALUE)]
+    else:
+        lines = [("SCORE", "%d" % g.score, SCORE_C), ("LEVEL", "%d" % g.level, VALUE), None,
+                 ("ROWS", "%d" % g.lines, VALUE), ("TIME", fmt_time(g.t), VALUE)]
     if rec is not None:
-        stats.append(("BEST", fmt_time(rec) if g.mode == "Sprint" else "%d" % rec))
-    sx = max(1, min(lx, bx - 14))
-    for i, (a, b) in enumerate(stats):
-        cv.put(sx, srow + i * 2, a, (130, 136, 170))
-        cv.put(sx, srow + i * 2 + 1, b, (240, 240, 250))
-    # floating texts over the well
+        lines.append(("BEST", fmt_time(rec) if sprint else "%d" % rec, (196, 182, 124)))
+    sr = r0 + hh + 1
+    sh = len(lines) + 2
+    if sr + sh > rows - 1:                          # tight terminal: tuck the stats right under HOLD
+        sr = r0 + hh
+    panel(cv, lx, sr, LW, sh, g.mode.upper(), (200, 204, 232))
+    for i, ln in enumerate(lines):
+        r = sr + 1 + i
+        if ln is None:   # a bar: rows towards the next level (Marathon / Rising) or towards 40 (Sprint)
+            frac = g.lines / 40 if sprint else (g.lines % 10) / 10
+            n = LW - 4
+            cv.rect(lx + 2, r * 2, n, 1, (38, 42, 70))
+            cv.rect(lx + 2, r * 2, int(round(n * clamp(frac, 0, 1))), 1, (90, 190, 230) if sprint else (110, 204, 120))
+        else:
+            stat(cv, lx, r, LW, *ln)
+    # NEXT: the coming piece full size, two more after it smaller and faded
+    KS = max(2, KP - 1)
+    nh = 1 + (KP + 1) + 2 * (KS + 1) + 1
+    panel(cv, rx, r0, RW, nh, "NEXT")
+    y = (r0 + 1) * 2 + 1
+    for i, kind in enumerate(g.queue[:3]):          # three is plenty, and calmer than five
+        k = KP if i == 0 else KS
+        mini(cv, kind, rx + (RW - 4 * k) // 2, y, k, dim=0.0 if i == 0 else 0.35 + 0.1 * i)
+        y += 2 * k + 2
+    # floating texts over the well, with a dark backing so they always read
     for i, (txt, until, c) in enumerate(reversed(g.pops[-3:])):
         r = by // 2 + H * K // 4 - 2 + i * 2 - int((1 - (until - g.t)) * 2)
-        cv.center(r, " %s " % txt, (14, 14, 20), c, bx, bw)
+        cv.center(r, "  %s  " % txt, (14, 14, 20), c, bx, bw)
     if g.paused:
         overlay(cv, HELP if g.help else PAUSE_LINES + ["", SND.label()])
-    cv.put(0, rows - 1, " <- -> move  Up/X turn  Z turn back  Down drop  Space slam  C hold  Esc menu  ? help "
-           [:cols], (140, 144, 170), (12, 12, 22))
+    footer(cv, "<- -> move  Up turn  Space slam  C hold  ? help")
     return cv
 
 
@@ -457,8 +545,10 @@ def render_over(g, cv, record):
         lines += ["", "** NEW RECORD **"]
     lines += ["", "Enter: again   Esc / Q: menu"]
     w = max(len(l) for l in lines) + 4
-    cv.box(max(0, (cv.cols - w) // 2), max(0, cv.rows // 2 - len(lines) // 2 - 1), [l.center(w - 4) for l in lines],
-           (240, 240, 246), (24, 22, 44))
+    x, y = max(0, (cv.cols - w) // 2), max(0, cv.rows // 2 - len(lines) // 2 - 1)
+    edge = SCORE_C if record else (110, 204, 120) if g.won else (200, 76, 86)
+    cv.frame(x - 1, y * 2 - 1, w + 2, (len(lines) + 2) * 2 + 2, edge)   # a coloured rim lifts it off the well
+    cv.box(x, y, [l.center(w - 4) for l in lines], (240, 240, 246), (24, 22, 44))
 
 
 def render_menu(cols, rows, sel, level, t, help_=False):

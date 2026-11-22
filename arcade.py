@@ -11,11 +11,13 @@ import os
 import random
 import subprocess
 import sys
+import textwrap
 import time
 
 import depthwell
 from arcadesound import Sound
-from arcadekit import COPYRIGHT, VERSION, Canvas, Terminal, draw_title, load_scores, mix, overlay, shade, title_width
+from arcadekit import (ACCENTS, COPYRIGHT, VERSION, Canvas, Terminal, draw_title, footer, load_scores, mix, overlay, shade,
+                       title_width)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -35,7 +37,7 @@ GAMES = [
     dict(file="emberfall.py", name="EMBERFALL", tag="a party role-playing adventure",
          info=["Create a hero, gather companions in a tavern,", "fight turn by turn with d20 rules and descend",
                "beneath a mountain where something is waking."],
-         keys="arrows move   walk into things   f attack   ? help", size=(100, 30)),
+         keys="arrows move   walk into things   f attack   ? help", size=(70, 22)),
     dict(file="blockfire.py", name="BLOCKFIRE", tag="first-person arena shooter",
          info=["The arena is sealed and the combat bots keep", "coming in waves: drones, sentinels, brutes.",
                "Textured 3D, lit floors, pixel-art robots."],
@@ -71,12 +73,16 @@ GAMES = [
     dict(file="depthwell.py", name="DEPTHWELL", tag="falling blocks in three dimensions",
          info=["Look down into a well and sink cube pieces.", "Turn them about all three axes, fill whole",
                "floor layers. Four well sizes, three piece sets."],
-         keys="arrows move   Q/A W/S E/D turn   Space drop", size=(70, 24), score="depthwell"),
+         keys="arrows move   Q/A W/S E/D turn   Space drop", size=(70, 22), score="depthwell"),
 ]
+GENRE = {"hoverdrift.py": "flight", "emberfall.py": "role-playing", "blockfire.py": "shooter", "deepcall.py": "exploration",
+         "lightkeeper.py": "action", "skyshot.py": "artillery", "nightdrive.py": "racing", "orbital.py": "puzzle",
+         "leafling.py": "platformer", "stackfall.py": "blocks", "depthwell.py": "3D blocks"}
 HELP = [
     "ASCII ARCADE - keys",
     "",
     "Up / Down            choose a game",
+    "1 - 9, 0             jump to a game (0 again: game 11)",
     "Enter / Space        play",
     "M                    sound on / off",
     "Esc / Q              quit",
@@ -314,6 +320,38 @@ def record_line(g):
     return "best: " + ",  ".join(parts[:3])
 
 
+LIST_BG = ((18, 16, 34), (24, 21, 44))      # alternating row bands keep entries apart without extra lines
+DIM = (150, 150, 178)                        # secondary text: >= 4.5:1 on the list bands
+BADGE_BG = (44, 40, 76)
+PANEL, PANEL_FG = (16, 14, 30), (222, 222, 234)                         # backing for the details text, so stars never run through it
+
+
+def badge(i):
+    """The key that reaches game i: 1-9, then 0 for the tenth and 00 (0 pressed twice) for the eleventh."""
+    return str(i + 1) if i < 9 else "0" if i == 9 else "00" if i == 10 else " "
+
+
+def accent(g):
+    top, bottom = ACCENTS.get(g["name"], ((240, 240, 250), (160, 160, 190)))
+    return mix(top, bottom, 0.3)
+
+
+def draw_logo(cv, cols, t):
+    """ASCII ARCADE in block letters; on narrow windows the two words close up so the logo still fits."""
+    wave = [ACCENT[(i + int(t * 3)) % len(ACCENT)] for i in range(12)]
+    k = 3
+    while k > 1 and title_width("ASCII ARCADE", k) > cols - 4:
+        k -= 1
+    if title_width("ASCII ARCADE", k) <= cols - 2:
+        draw_title(cv, "ASCII ARCADE", (cols - title_width("ASCII ARCADE", k)) // 2, 3, k, wave)
+    else:
+        w1, w2, gap = title_width("ASCII", 1), title_width("ARCADE", 1), 2
+        x = max(0, (cols - (w1 + gap + w2)) // 2)
+        draw_title(cv, "ASCII", x, 3, 1, wave[:5])
+        draw_title(cv, "ARCADE", x + w1 + gap, 3, 1, wave[6:])
+    return k
+
+
 def render(cols, rows, sel, t, note, help_=False):
     cv = Canvas(cols, rows)
     cv.vgradient((8, 6, 18), (24, 10, 30))
@@ -322,53 +360,94 @@ def render(cols, rows, sel, t, note, help_=False):
         sx = (rnd.uniform(0, cols) + t * rnd.uniform(1, 4)) % cols
         sy = rnd.uniform(0, cv.H)
         cv.set(sx, sy, mix((60, 60, 90), (220, 220, 255), rnd.random() * (0.6 + 0.4 * math.sin(t * 2 + i))))
-    k = 3
-    while k > 1 and title_width("ASCII ARCADE", k) > cols - 4:
-        k -= 1
-    tw = title_width("ASCII ARCADE", k)
-    wave = [ACCENT[(i + int(t * 3)) % len(ACCENT)] for i in range(12)]
-    draw_title(cv, "ASCII ARCADE", (cols - tw) // 2, 3, k, wave)
+    k = draw_logo(cv, cols, t)
     top = (3 + 5 * k) // 2 + 2
     cv.center(top, "a little game collection for your terminal", (180, 180, 204))
     # list on the left, preview and details on the right
-    lw = 40
+    lw = 46 if cols >= 116 else 40 if cols >= 96 else 34
     tw2 = min(60, cols - lw - 8)
     lx = max(2, (cols - lw - tw2 - 4) // 2)
     rx = lx + lw + 4
-    ly = top + 3
+    ly = top + 3 if rows >= 30 else top + 2
     # tighter list on small windows: names with taglines and gaps, then without gaps, then names only
     step = next((k for k in (3, 2) if ly + k * len(GAMES) < rows - 1), 1)
     for i, g in enumerate(GAMES):
         r = ly + i * step
-        if i == sel:
-            cv.put(lx, r, (" > %s" % g["name"]).ljust(lw), (14, 14, 20), ACCENT[(i * 2 + 2) % len(ACCENT)])
-            if step > 1:
-                cv.put(lx, r + 1, ("   " + g["tag"]).ljust(lw)[:lw], (230, 230, 240), (30, 26, 52))
-        else:
-            cv.put(lx, r, ("   %s" % g["name"]).ljust(lw), (220, 220, 232), (20, 18, 36))
-            if step > 1:
-                cv.put(lx, r + 1, ("   " + g["tag"]).ljust(lw)[:lw], (140, 140, 166), (20, 18, 36))
+        on = i == sel
+        acc = accent(g)
+        band = acc if on else LIST_BG[i % 2]
+        genre = GENRE.get(g["file"], "")
+        b = badge(i)
+        cv.put(lx, r, " " * lw, (14, 14, 20), band)
+        cv.put(lx + 1, r, b.center(4), acc if on else (220, 220, 236), (14, 14, 22) if on else BADGE_BG)
+        cv.put(lx + 6, r, g["name"], (14, 14, 20) if on else (236, 236, 246), band)
+        if genre and lw - 6 - len(g["name"]) - len(genre) > 3:
+            cv.put(lx + lw - len(genre) - 2, r, genre, shade(acc, 0.32) if on else DIM, band)
+        if step > 1:
+            tb = mix(LIST_BG[i % 2], acc, 0.18) if on else LIST_BG[i % 2]
+            cv.put(lx, r + 1, " " * lw, (14, 14, 20), tb)
+            cv.put(lx + 6, r + 1, g["tag"][:lw - 7], (240, 240, 248) if on else DIM, tb)
+            if on:
+                cv.put(lx, r + 1, " ", acc, acc)
+        if step > 2 and i < len(GAMES) - 1:
+            cv.put(lx, r + 2, " " * lw, (14, 14, 20), (14, 12, 28))
     g = GAMES[sel]
-    th = max(8, min(2 * (rows - ly - 9), 30))
+    acc = accent(g)
+    list_bot = ly + len(GAMES) * step - (1 if step > 2 else 0)
+    th = max(8, min(2 * (rows - ly - 11), 30, tw2 * 9 // 16 * 2 // 2))
     if tw2 >= 20:
         THUMBS[g["file"]](cv, rx, ly * 2, tw2, th, t)
-        cv.frame(rx - 1, ly * 2 - 1, tw2 + 2, th + 2, (90, 90, 140))
+        cv.frame(rx - 1, ly * 2 - 1, tw2 + 2, th + 2, shade(acc, 0.7))
         r = ly + th // 2 + 2
-        for j, line in enumerate(g["info"]):
-            cv.put(rx, r + j, line[:tw2], (220, 220, 232))
-        cv.put(rx, r + 4, g["keys"][:tw2], (150, 154, 184))
-        rec = record_line(g)
-        if rec:
-            cv.put(rx, r + 6, rec[:tw2], (236, 212, 70))
+        bottom = max(list_bot, rows - 3)
+        lines = []                                           # (text, fg, indent) in priority order of the space
         mc, mr = g["size"]
+        name = g["name"]
+        genre = GENRE.get(g["file"], "")
+        lines.append(("%s%s" % (name, ("  -  " + genre) if genre and len(name) + len(genre) + 5 <= tw2 else ""), None))
         if cols < mc or rows < mr:
-            cv.put(rx, r + 7, ("needs a %dx%d window (now %dx%d)" % (mc, mr, cols, rows))[:tw2], (255, 120, 100))
+            warn = "needs a %dx%d window (now %dx%d)" % (mc, mr, cols, rows)
+            if len(warn) > tw2:
+                warn = "needs %dx%d (now %dx%d)" % (mc, mr, cols, rows)
+            lines.append((warn[:tw2], (255, 130, 110)))
+        info = textwrap.wrap(" ".join(g["info"]), tw2)
+        keys = textwrap.wrap(g["keys"] if tw2 >= 44 else g["keys"].replace("   ", "  "), tw2 - 6)
+        rec = record_line(g)
+        room = bottom - r
+        extra = len(keys) + 1 + (2 if rec else 0)
+        if len(lines) + len(info) + extra > room:            # small window: shorter description first
+            info = info[:max(1, room - len(lines) - extra)]
+        lines += [(l, (222, 222, 234)) for l in info]
+        lines.append(("", None))
+        for j, l in enumerate(keys):
+            lines.append((("keys  " if j == 0 else "      ") + l, "keys"))
+        if rec:
+            lines += [("", None), (rec[:tw2], (236, 212, 70))]
+        shown = lines[:max(0, room + 1)]
+        while shown and not shown[-1][0]:
+            shown.pop()
+        for j in range(len(shown) + 2):
+            cv.put(rx - 1, r - 1 + j, " " * (tw2 + 2), PANEL_FG, PANEL)
+        for j, (l, fg) in enumerate(shown):
+            if j == 0:
+                cv.put(rx, r, name, acc, PANEL)
+                if len(l) > len(name):
+                    cv.put(rx + len(name), r, l[len(name):], DIM, PANEL)
+            elif fg == "keys":
+                cv.put(rx, r + j, l[:6], DIM, PANEL)
+                cv.put(rx + 6, r + j, l[6:], (206, 208, 230), PANEL)
+            elif fg:
+                cv.put(rx, r + j, l, fg, PANEL)
     if note:
         cv.center(rows - 3, " %s " % note, (14, 14, 20), (255, 150, 100))
-    cv.put(0, rows - 1, (" Up/Down choose   Enter play   M %s   ? help   Esc quit " % SND.label().lower()).ljust(cols)[:cols], (150, 154, 184), (12, 10, 22))
-    sig = " v%s  %s " % (VERSION, COPYRIGHT)
-    if cols >= 50 + len(sig):
-        cv.put(cols - len(sig), rows - 1, sig, (96, 100, 128), (12, 10, 22))
+    snd = SND.label().lower()
+    if cols >= 96:
+        footer(cv, "Up/Down choose   1-9 0 jump   Enter play   M %s   ? help   Esc quit" % snd)
+    else:
+        footer(cv, "Up/Down choose  Enter play  M %s  ? help  Esc quit" % snd.split(":")[0])
+    sig = "v%s" % VERSION
+    if cols >= 110:
+        cv.put(16, rows - 1, sig, (110, 114, 144), (12, 10, 22))
     if help_:
         overlay(cv, HELP)
     return cv
@@ -406,6 +485,9 @@ def menu(sel, note):
                     SND.play("move")
                 elif k in tuple("123456789"):
                     sel = min(len(GAMES) - 1, int(k) - 1)
+                    SND.play("move")
+                elif k == "0" and len(GAMES) > 9:        # 0 reaches game 10; pressed again, the ones after it
+                    sel = sel + 1 if 9 <= sel < len(GAMES) - 1 else 9
                     SND.play("move")
                 elif k in ("enter", " "):
                     SND.play("start")

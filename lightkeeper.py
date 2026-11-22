@@ -625,6 +625,9 @@ SEA_DARK, SEA_LIT = (4, 8, 20), (60, 120, 150)
 ROCK_DARK, ROCK_LIT = (14, 14, 18), (120, 110, 100)
 LAND_DARK, LAND_LIT = (8, 12, 10), (70, 100, 60)
 HARB_DARK, HARB_LIT = (6, 10, 24), (70, 110, 150)
+SURF = (190, 210, 225)             # breakers around the reefs
+LANTERN = (255, 220, 120)
+DISTRESS = (255, 70, 60)
 
 
 class Painter:
@@ -655,6 +658,14 @@ class Painter:
             lit.append(l)
         self.dark, self.lit = dark, lit
         self.water = [k in (WATER, HARBOUR) for k in c.g]
+        # surf: water touching a reef breaks white, so reefs read even in the dark and in fog
+        g = c.g
+        self.surf = [False] * (W * H)
+        for y in range(1, H - 1):
+            for x in range(1, W - 1):
+                i = y * W + x
+                if g[i] == WATER and ROCK in (g[i - 1], g[i + 1], g[i - W], g[i + W]):
+                    self.surf[i] = True
 
 
 def render(n, painter, cols, rows, title_mode=False):
@@ -671,6 +682,7 @@ def render(n, painter, cols, rows, title_mode=False):
     beam = n.beam
     flash = n.flash
     ang, dist, phase, dark, lit, water = painter.ang, painter.dist, painter.phase, painter.dark, painter.lit, painter.water
+    surf = painter.surf
     fogc = n.fog > 0
     # fog on a coarse grid
     fg = {}
@@ -711,6 +723,8 @@ def render(n, painter, cols, rows, title_mode=False):
             if water[i]:
                 L *= 0.8 + 0.2 * math.sin(t * 1.5 + phase[i])
             col = mix(dark[i], lit[i], L)
+            if surf[i]:
+                col = mix(col, SURF, 0.1 + 0.07 * math.sin(t * 2.2 + phase[i] * 2) + 0.3 * L)
             if f:
                 col = mix(col, (40, 46, 56) if L < 0.3 else (150, 160, 170), f * 0.45)
             row[X] = col
@@ -755,18 +769,34 @@ def render(n, painter, cols, rows, title_mode=False):
                 put(s.x + ca * u - sa, s.y + sa * u + ca, shade(hcol, 0.8))
         if s.kind == "sail" and s.state == "sailing":
             put(s.x - sa * 1.5, s.y + ca * 1.5, mix((40, 40, 44), (235, 235, 230), max(0.2, L)))
-        if s.state == "sailing":       # the lantern: always visible
-            put(s.x + ca * s.length * 0.3, s.y + sa * s.length * 0.3, (255, 220, 120))
+        if s.state == "sailing":       # the lantern: always visible, with a small glow so ships never read as rock
+            lx_, ly_ = s.x + ca * s.length * 0.3, s.y + sa * s.length * 0.3
+            for ddx, ddy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                put(lx_ + ddx, ly_ + ddy, LANTERN, 0.22)
+            put(lx_, ly_, LANTERN)
             if not title_mode and s.aware <= 0 and danger(n, s) > 0.45 and int(t * 4) % 2:
                 for ddy in (-4, -3, -1):    # "!" above a ship sailing blind towards rock
                     put(s.x, s.y + ddy, (255, 70, 60))
-        elif s.state == "wrecked":     # distress flares
-            if int(t * 3) % 2:
+        elif s.state == "wrecked":     # distress flares, and the time the crew can still hold on
+            urgent = s.timer < 10
+            if int(t * (6 if urgent else 3)) % 2:
                 for ddx, ddy in ((0, -1), (0, -2), (1, -2), (-1, -2)):
-                    put(s.x + ddx, s.y + ddy, (255, 70, 60))
+                    put(s.x + ddx, s.y + ddy, DISTRESS)
+                put(s.x, s.y - 3, (255, 200, 160))
+            if not (title_mode or n.over or n.dawn):
+                tag = " %d " % max(0, math.ceil(s.timer))
+                col_, row_ = int(s.x) + ox - len(tag) // 2, (int(s.y) + oy - 4) // 2
+                if 0 <= row_ < rows - 1:
+                    cv.put(max(0, min(cols - len(tag), col_)), row_, tag, (255, 255, 255) if urgent else (255, 210, 190),
+                           (170, 30, 30) if urgent and int(t * 4) % 2 else (90, 20, 24))
     # the rescue boat
     b = n.boat
     bl = max(n.light_at(b.x, b.y), flash)
+    if b.state != "docked":
+        for ddx in range(-2, 3):
+            for ddy in (-1, 0, 1):
+                if abs(ddx) + abs(ddy) <= 2:
+                    put(b.x + ddx, b.y + ddy, (255, 150, 60), 0.18 + 0.08 * math.sin(t * 5))
     put(b.x, b.y, mix((80, 40, 20), (255, 140, 40), max(0.4, bl)))
     put(b.x + 1, b.y, mix((80, 40, 20), (255, 140, 40), max(0.4, bl)))
     put(b.x - 1, b.y, (255, 240, 200) if b.state != "docked" else (160, 120, 80))
@@ -780,36 +810,85 @@ def render(n, painter, cols, rows, title_mode=False):
     return cv
 
 
-def bar(v, n=8):
-    f = int(round(clamp(v, 0, 1) * n))
-    return "█" * f + "░" * (n - f)
+HUD_BG = (12, 12, 20)
+HUD_LABEL = (132, 136, 162)      # dim labels (4.7:1 on the bar); the values carry the colour
+WARN = (255, 96, 80)
+OIL_COL = (240, 200, 90)
+WEATHER_SHORT = {"calm": "calm", "breezy": "breezy", "fog banks": "fog", "rain and lightning": "rain", "storm": "storm"}
+
+
+def gauge(cv, x, r, v, n, col):
+    """A gauge of coloured cells with half-cell resolution: full = col, empty = a dark trace of it."""
+    v = clamp(v, 0.0, 1.0) * n
+    empty = mix(HUD_BG, col, 0.22)
+    for i in range(n):
+        f = v - i
+        cv.put(x + i, r, "▌" if 0.25 <= f < 0.75 else " ", col, col if f >= 0.75 else empty)
+    return x + n
 
 
 def hud(cv, n, cols, rows):
     r = rows - 1
-    left = max(0, n.length - n.t)
+    t = n.t
+    blink = int(t * 4) % 2 == 0
+    left = int(max(0, n.length - n.t))
     tank = n.tank()
-    oil_col = (255, 110, 90) if n.oil < tank * 0.2 else (240, 200, 90)
-    boat = {"docked": "boat: home", "out": "boat: out", "carrying": "boat: %d aboard" % n.boat.crew}[n.boat.state]
-    segs = [(" LIGHTKEEPER ", (16, 14, 10), (240, 200, 90)),
-            ("  night %d " % n.night, (230, 230, 240), None),
-            (" dawn in %d:%02d " % (left // 60, left % 60) if left > 0 else " dawn soon ", (170, 176, 200), None),
-            ("  OIL %s" % (bar(n.oil / tank) if n.refill <= 0 else "refilling."), oil_col, None),
-            ("  HORN %s" % ("ready" if n.horn_cd <= 0 else "%.0fs" % n.horn_cd), (190, 200, 230), None),
-            ("  %s" % boat, (255, 160, 80), None),
-            ("  lifebuoys %s" % ("o" * max(0, n.lives)), (255, 120, 100), None),
-            ("  safe %d  score %d " % (n.saved, n.score), (240, 220, 140), None)]
+    low = n.oil < tank * 0.2
+    b = n.boat
+    # every segment as a list of (text, colour) pieces, in a long and a short form; the bar picks what fits
+    lives = max(0, n.lives)
+    buoys = [("o" * lives or "-", (255, 120, 100))]
+    oil_n = 10 if cols >= 120 else 6
+    horn = ("ready", (150, 230, 170)) if n.horn_cd <= 0 else ("%.0fs" % n.horn_cd, (190, 196, 220))
+    boat = {"docked": ("home", (200, 160, 120)), "out": ("out", (255, 160, 80)),
+            "carrying": ("%d aboard" % b.crew, (255, 200, 120))}[b.state]
+    dawn = ("%d:%02d" % (left // 60, left % 60), (220, 222, 236)) if left > 0 else ("soon", (255, 220, 140))
+    wx = n.weather
+    segs = [  # (long pieces, short pieces); "GAUGE" is the oil gauge
+        ([(" LIGHTKEEPER ", None)], []),
+        ([(" NIGHT ", HUD_LABEL), ("%d " % n.night, (236, 238, 246)), (wx, (170, 190, 220))],
+         [(" N", HUD_LABEL), ("%d " % n.night, (236, 238, 246)), (WEATHER_SHORT[wx], (170, 190, 220))]),
+        ([("  dawn ", HUD_LABEL), dawn], [(" ", None), dawn]),
+        ([("  OIL ", WARN if low and blink else HUD_LABEL), "GAUGE"], [(" OIL ", WARN if low and blink else HUD_LABEL), "GAUGE"]),
+        ([("  HORN ", HUD_LABEL), horn], [(" HORN ", HUD_LABEL), horn]),
+        ([("  boat ", HUD_LABEL), boat], [(" boat ", HUD_LABEL), boat]),
+        ([("  lifebuoys ", HUD_LABEL)] + buoys, [(" ", None)] + buoys),
+        ([("  safe ", HUD_LABEL), ("%d" % n.saved, (150, 230, 170))], []),
+        ([("  score ", HUD_LABEL), ("%d " % n.score, (240, 220, 140))], [(" ", None), ("%d" % n.score, (240, 220, 140))]),
+    ]
+
+    def width(pieces):
+        return sum(oil_n if p == "GAUGE" else len(p[0]) for p in pieces)
+
+    right = " ? help "
+    choice = [s[0] for s in segs]
+    for i in (0, 7, 2, 1, 4, 5, 6, 8, 3):     # shorten the least important first
+        if sum(width(p) for p in choice) + len(right) <= cols:
+            break
+        choice[i] = segs[i][1]
+    if sum(width(p) for p in choice) > cols:
+        oil_n = 5
+    cv.put(0, r, " " * cols, HUD_LABEL, HUD_BG)
     x = 0
-    for s, fg, bg in segs:
-        cv.put(x, r, s, fg, bg or (12, 12, 20))
-        x += len(s)
-    if x < cols:
-        cv.put(x, r, " " * (cols - x), (10, 10, 16), (12, 12, 20))
-    right = " ? help  Esc menu "
+    for i, pieces in enumerate(choice):
+        for p in pieces:
+            if p == "GAUGE":
+                if n.refill > 0:
+                    x = gauge(cv, x, r, n.oil / tank, oil_n, (120, 190, 255))
+                else:
+                    x = gauge(cv, x, r, n.oil / tank, oil_n, WARN if low else OIL_COL)
+            elif i == 0:
+                cv.put(x, r, p[0], (16, 14, 10), OIL_COL)
+                x += len(p[0])
+            else:
+                cv.put(x, r, p[0], p[1] or HUD_LABEL, HUD_BG)
+                x += len(p[0])
     if x + len(right) <= cols:
-        cv.put(cols - len(right), r, right, (130, 136, 170), (12, 12, 20))
-    for i, (s, _) in enumerate(n.msgs[-2:]):
-        cv.center(i, " %s " % s, (236, 236, 240), (14, 16, 30))
+        cv.put(cols - len(right), r, right, HUD_LABEL, HUD_BG)
+    for i, (s, _) in enumerate([] if (n.dawn or n.over) else n.msgs[-2:]):
+        s = s if len(s) <= cols - 4 else s[:cols - 7] + "..."
+        alarm = "aground" in s or "lost" in s or "out of oil" in s
+        cv.center(i, " %s " % s, (255, 236, 230) if alarm else (236, 236, 240), (70, 18, 22) if alarm else (14, 16, 30))
 
 
 HELP_SOLO = [
@@ -880,15 +959,36 @@ class Campaign:
 
 
 def render_dawn(cv, camp):
+    """The dawn screen: the night's tally, then three improvements - the chosen one clearly highlighted."""
     n = camp.n
-    lines = ["D A W N   -   night %d survived" % n.night, "",
-             "ships safe in harbour  %d" % n.saved, "ran aground  %d   sailors rescued  %d" % (n.wrecks, n.rescued),
-             "score  %d" % n.score, "", "Choose an improvement for the lighthouse:", ""]
-    for i, (_, name, desc) in enumerate(camp.offer):
-        lines.append(("> " if i == camp.pick else "  ") + "%-18s %s" % (name, desc))
-    lines += ["", "Up / Down choose   Enter take it"]
-    w = max(len(l) for l in lines) + 4
-    cv.box(max(0, (cv.cols - w) // 2), max(0, cv.rows // 2 - len(lines) // 2 - 1), lines, (240, 236, 220), (40, 30, 30))
+    bg, fg, dim, gold = (36, 26, 30), (240, 236, 224), (176, 160, 156), (255, 214, 120)
+    stats = [("ships safe in harbour", "%d" % n.saved), ("ran aground", "%d" % n.wrecks),
+             ("sailors rescued", "%d" % n.rescued), ("score", "%d" % n.score)]
+    opts = ["%-18s %s" % (name, desc) for _, name, desc in camp.offer]
+    inner = max([len(o) + 4 for o in opts] + [36])
+    w = inner + 4
+    h = 9 + len(stats) + len(opts)
+    x0 = max(0, (cv.cols - w) // 2)
+    y0 = max(0, (cv.rows - 1 - h) // 2)
+    for j in range(h):
+        cv.put(x0, y0 + j, " " * w, fg, bg)
+    cv.put(x0, y0, " " * w, (30, 20, 10), (240, 180, 90))          # a dawn-coloured header band
+    cv.center(y0, "D A W N  -  night %d survived" % n.night, (30, 20, 10), (240, 180, 90), col0=x0, width=w)
+    y = y0 + 2
+    for label, val in stats:
+        cv.put(x0 + 4, y, label, dim, bg)
+        cv.put(x0 + w - 4 - len(val), y, val, gold if label == "score" else fg, bg)
+        y += 1
+    y += 1
+    cv.put(x0 + 4, y, "Choose an improvement for the lighthouse:", fg, bg)
+    y += 2
+    for i, o in enumerate(opts):
+        if i == camp.pick:
+            cv.put(x0 + 2, y, (" > " + o).ljust(w - 4), (30, 20, 10), gold)
+        else:
+            cv.put(x0 + 2, y, ("   " + o).ljust(w - 4), dim, bg)
+        y += 1
+    cv.put(x0 + 4, y + 1, "Up / Down choose   Enter take it", (150, 140, 136), bg)
 
 
 def render_over(cv, camp, record):

@@ -532,6 +532,9 @@ SND = Sound("hoverdrift", {
                dict(w="sine", f=587, d=0.8, v=0.12, a=0.15, r="lin", at=0)],
     "bump": [dict(w="sine", f=90, f2=50, d=0.12, v=0.35), dict(w="noise", f=400, d=0.08, v=0.14, at=0)],
 })
+POPUP_LIFE = 1.1
+LOCK_COL, POP_BG = (255, 236, 150), (14, 14, 28)
+TOWER_A, TOWER_B = (226, 74, 62), (236, 236, 242)   # radio-mast stripes: readable on every world
 TARGETS = {  # radius, vertical half size, points
     "balloon": (2.4, 2.8, 1), "crystal": (2.0, 3.0, 3), "drone": (2.4, 1.4, 5), "tower": (1.8, 6.0, 4),
 }
@@ -575,6 +578,8 @@ class Game:
         self.tworld = 0        # 0 = random, else 1 + index in THEME_ORDER
         self.drift, self.armed, self.hud = True, False, False
         self.msg, self.msg_t = "", 0.0
+        self.popups = []       # floating "+points" over popped targets: [x, y, z, text, born, colour]
+        self.score_t = -9.0    # when the score last went up (the HUD flashes it)
         self.fps = 0.0
         self.amb_acc = 0.0
         self.loading = None
@@ -936,6 +941,8 @@ class Game:
             self.targets.remove(tg)
             self.score += tg["pts"]
             self.hits += 1
+            self.score_t = self.t
+            self.popups.append([tg["x"], tg["y"], tg["z"] + tg["rz"], "+%d" % tg["pts"], self.t, tg["col"]])
             snd = {"balloon": "pop", "crystal": "crystal", "drone": "drone", "tower": "tower"}[tg["kind"]]
             SND.play(snd, 0.8, 0.06)
             self.boom(tg["x"], tg["y"], tg["z"], tg["col"], big=tg["kind"] in ("drone", "tower"))
@@ -975,6 +982,8 @@ class Game:
                 p[5] -= p[9] * dt
                 keep.append(p)
         self.parts = keep[-1100:]
+        if self.popups:
+            self.popups = [p for p in self.popups if self.t - p[4] < POPUP_LIFE][-12:]
 
     @staticmethod
     def wrap(d):
@@ -1038,6 +1047,15 @@ def status_lines(g):
     if g.title:
         return 0
     return 2 if g.hud else 1
+
+
+def shadow_pts(colsbuf, pts, PW, PH):
+    """A dark drop shadow one pixel down-right of a marker, so it reads on bright and dark ground alike."""
+    for x, y in pts:
+        x, y = x + 1, y + 1
+        if 0 <= x < PW and 0 <= y < PH:
+            c = colsbuf[x][y]
+            colsbuf[x][y] = (c[0] // 4, c[1] // 4, c[2] // 4)
 
 
 def render(g, scr, cols, rows):
@@ -1121,60 +1139,77 @@ def render(g, scr, cols, rows):
                 if e <= 1:
                     plot(sx + xx, sy + yy, d, cin if e < 0.35 else cout)
 
-    # targets
+    # targets: a dark outline and a light top edge so they read against any ground, and only part of
+    # the land's haze, so they stand out a little in front of it
     for tg in g.targets:
         pr = project(tg["x"], tg["y"], tg["z"])
         if not pr:
             continue
         sx, sy, d = pr
         kind = tg["kind"]
-        f = min(1.0, (d / FAR) ** 1.4)
+        f = min(1.0, (d / FAR) ** 1.4) * 0.6
         rad = tg["r"] / d * S
+        col = tg["col"]
+        rim = mix(mix(col, (8, 8, 14), 0.72), fog, f)
         if kind == "tower":
             pb = project(tg["x"], tg["y"], tg["base"])
             ptop = project(tg["x"], tg["y"], tg["base"] + tg["rz"] * 2)
             if pb and ptop:
-                hw = max(0.6, rad * 0.5)
-                for yy in range(int(ptop[1]), int(pb[1]) + 1):
-                    stripe = (yy - int(ptop[1])) % 4 < 2
-                    for xx in range(-int(hw), int(hw) + 1):
-                        c = (96, 98, 116) if stripe else (60, 62, 76)
-                        if xx < 0:
-                            c = mix(c, (190, 190, 210), 0.3)
-                        plot(sx + xx, yy, d, mix(c, P["fog"], f))
+                hw = max(0, int(rad * 0.5))
+                y0 = int(ptop[1])
+                for yy in range(y0, int(pb[1]) + 1):
+                    c = TOWER_A if (yy - y0) % 4 < 2 else TOWER_B
+                    for xx in range(-hw, hw + 1):
+                        plot(sx + xx, yy, d, mix(c if xx >= 0 or hw == 0 else mix(c, (255, 255, 255), 0.3), fog, f))
+                    plot(sx - hw - 1, yy, d, rim)
+                    plot(sx + hw + 1, yy, d, rim)
                 blink = (255, 80, 80) if int(g.t * 3 + tg["ph"]) % 2 else (255, 200, 120)
-                disc(ptop[0], ptop[1], d, max(0.8, rad * 0.9), (255, 255, 230), mix(blink, P["fog"], f))
+                disc(ptop[0], ptop[1], d, max(0.8, rad * 0.9), (255, 255, 230), mix(blink, fog, f))
             continue
-        if rad < 0.6:
-            plot(sx, sy, d, tg["col"])
+        if rad < 0.6:  # far away: a two-pixel dot in its own colour
+            plot(sx, sy, d, col)
+            plot(sx, sy - 1, d, rim)
             continue
         if kind == "drone":
             spin = int(g.t * 20) % 2
+            fw, fh = int(rad * 0.9), int(rad * 0.45)
             for xx in range(-int(rad * 1.5), int(rad * 1.5) + 1):  # rotor blur
-                plot(sx + xx, sy - rad * 0.7, d, mix((150, 150, 160) if spin else (90, 90, 100), P["fog"], f))
-            for yy in range(-int(rad * 0.45), int(rad * 0.45) + 1):
-                for xx in range(-int(rad * 0.9), int(rad * 0.9) + 1):
-                    plot(sx + xx, sy + yy, d, mix((70, 74, 86) if yy < 0 else (44, 46, 56), P["fog"], f))
+                plot(sx + xx, sy - rad * 0.7, d, mix((190, 190, 200) if spin else (110, 110, 120), fog, f))
+            for yy in range(-fh - 1, fh + 2):
+                for xx in range(-fw - 1, fw + 2):
+                    if yy < -fh or yy > fh or xx < -fw or xx > fw:
+                        plot(sx + xx, sy + yy, d, rim)
+                    else:
+                        plot(sx + xx, sy + yy, d, mix((150, 156, 172) if yy == -fh else (84, 88, 104) if yy < 0
+                                                      else (52, 54, 66), fog, f))
             plot(sx, sy, d * 0.999, (255, 60, 50) if int(g.t * 4 + tg["ph"]) % 2 else (120, 30, 30))
             continue
-        R = int(rad) + 1
-        for yy in range(-R - (1 if kind == "balloon" else R), R + 1):
+        balloon = kind == "balloon"
+        R = int(rad) + 2
+        lit_t = 0.9 + 0.2 * math.sin(g.t * 5 + tg["ph"])
+        ro, rv = rad + 1.0, (rad * 1.15 if balloon else rad * 1.5)
+        rvo = rv + (1.0 if balloon else 1.4)
+        yr = int(rvo) + 1
+        for yy in range(-yr, yr + 1):
             for xx in range(-R, R + 1):
-                if kind == "balloon":
-                    e = (xx / rad) ** 2 + (yy / (rad * 1.15)) ** 2
+                if balloon:
+                    e = (xx / rad) ** 2 + (yy / rv) ** 2
                     if e > 1:
+                        if (xx / ro) ** 2 + (yy / rvo) ** 2 <= 1:
+                            plot(sx + xx, sy + yy, d, rim)
                         continue
-                    lit = 1.25 if (xx + yy) < -rad * 0.6 else 1.0 if e < 0.7 else 0.75
+                    lit = 1.3 if (xx + yy) < -rad * 0.6 else 1.0 if e < 0.7 else 0.75
                 else:
-                    e = abs(xx) / rad + abs(yy) / (rad * 1.5)
+                    e = abs(xx) / rad + abs(yy) / rv
                     if e > 1:
+                        if abs(xx) / ro + abs(yy) / rvo <= 1:
+                            plot(sx + xx, sy + yy, d, rim)
                         continue
-                    lit = 1.3 if xx < 0 and yy < 0 else 1.0 if xx < 0 else 0.7
-                    lit *= 0.9 + 0.2 * math.sin(g.t * 5 + tg["ph"])
-                c = tuple(min(255, int(v * lit)) for v in tg["col"])
-                plot(sx + xx, sy + yy, d, mix(c, P["fog"], f))
-        if kind == "balloon":
-            for k in range(int(rad * 1.1) + 1, int(rad * 2.4) + 1):
+                    lit = (1.3 if xx < 0 and yy < 0 else 1.0 if xx < 0 else 0.7) * lit_t
+                c = (min(255, int(col[0] * lit)), min(255, int(col[1] * lit)), min(255, int(col[2] * lit)))
+                plot(sx + xx, sy + yy, d, mix(c, fog, f))
+        if balloon:
+            for k in range(int(rad * 1.1) + 2, int(rad * 2.4) + 2):
                 plot(sx + math.sin(k * 0.6 + g.t * 2) * 0.6, sy + k, d, (60, 60, 64))
     # shots and particles
     for s in g.shots:
@@ -1273,16 +1308,42 @@ def render(g, scr, cols, rows):
                     ax, ay = int(pa[0]), int(pa[1])
                     tgt = g.aim_target(0.22)
                     cc = (255, 80, 80) if tgt else (255, 255, 255)
-                    for k in (2, 3, 4):
-                        for x, y in ((ax - k, ay), (ax + k, ay), (ax, ay - k), (ax, ay + k)):
+                    pts = [(ax - k, ay) for k in (2, 3, 4)] + [(ax + k, ay) for k in (2, 3, 4)] + \
+                          [(ax, ay - k) for k in (2, 3, 4)] + [(ax, ay + k) for k in (2, 3, 4)]
+                    shadow_pts(colsbuf, pts, PW, PH)
+                    for x, y in pts:
+                        if 0 <= x < PW and 0 <= y < PH:
+                            colsbuf[x][y] = cc
+                    # lock-on brackets round the target the shots will go to (rockets home in on a wider cone)
+                    if WEAPONS[g.weapon]["kind"] == "rocket":
+                        tgt = g.aim_target(0.6)
+                    pt = tgt and project(tgt["x"], tgt["y"], tgt["z"])
+                    if pt:
+                        hx = max(4, int(tgt["r"] / pt[2] * S * 1.2) + 3)
+                        hy = max(4, int(tgt["rz"] / pt[2] * S * 1.15) + 3)
+                        bx, by = int(pt[0]), int(pt[1])
+                        pts = []
+                        for xs in (-1, 1):
+                            for ys in (-1, 1):
+                                X, Y = bx + xs * hx, by + ys * hy
+                                pts += [(X, Y), (X - xs, Y), (X, Y - ys)]
+                        shadow_pts(colsbuf, pts, PW, PH)
+                        for x, y in pts:
                             if 0 <= x < PW and 0 <= y < PH:
-                                colsbuf[x][y] = cc
+                                colsbuf[x][y] = LOCK_COL
     # emit the frame
     out = ["\x1b[?2026h\x1b[H"]
     sfg, sbg = scr.fg, scr.bg
     cells = {}   # (row) -> {col: (char, fg, bg)}: text drawn into the frame, so nothing is drawn twice
     if g.title:
         title_cells(g, colsbuf, cells, cols, prow)
+    else:  # "+points" rising from what was just hit, on a small dark chip so it reads on any ground
+        for px_, py_, pz_, text, born, pcol in g.popups:
+            age = g.t - born
+            pr = project(px_, py_, pz_ + age * 7)
+            if pr:
+                fgc = mix(mix(pcol, (255, 255, 255), 0.45), POP_BG, clamp((age / POPUP_LIFE - 0.6) * 2.5, 0, 1))
+                put_cells(cells, cols, prow, int(pr[0]) - 2, int(pr[1]) // 2, " %s " % text, fgc, POP_BG)
     if g.help:
         box_cells(cells, HELP, cols, prow)
     elif g.paused:
@@ -1328,80 +1389,120 @@ def render(g, scr, cols, rows):
 COMPASS = "N . . NE . . E . . SE . . S . . SW . . W . . NW . . "
 
 
+TRUECOLOR = os.environ.get("COLORTERM", "").lower() in ("truecolor", "24bit")
+
+
 def rgb(fg, bg):
-    return "\x1b[0;38;2;%d;%d;%d;48;2;%d;%d;%dm" % (fg + bg)
+    if TRUECOLOR:
+        return "\x1b[0;38;2;%d;%d;%d;48;2;%d;%d;%dm" % (fg + bg)
+    return "\x1b[0;38;5;%d;48;5;%dm" % (x256(fg), x256(bg))
 
 
-def weapon_bar(g, cols):
-    """All six weapons, the current one lit up."""
-    base = (12, 14, 24)
-    segs = []
-    if not g.armed:
-        segs.append((" Weapons off - press X (or Space) to arm ", (230, 200, 120), base))
-    else:
-        for i, w in enumerate(WEAPONS):
-            label = " %d %s " % (i + 1, w["name"])
-            if i == g.weapon:
-                segs.append((label, (10, 10, 16), w["col"]))
-            else:
-                segs.append((label, mix(w["col"], (120, 120, 130), 0.5), base))
-            segs.append((" ", base, base))
-        segs.append(("  Space fire  Tab next  Enter autofire%s " % (" [ON]" if g.autofire else ""),
-                     (255, 120, 100) if g.autofire else (170, 172, 186), base))
+HUD_BG, HUD_FG, HUD_DIM = (18, 20, 30), (225, 225, 235), (140, 144, 168)
+SCORE_FG = (255, 214, 110)
+
+
+def fit(segs, cols):
+    """Drop the least important segments (highest priority number, rightmost first) until the line fits."""
+    segs = list(segs)
+    while segs and sum(len(x[0]) for x in segs) > cols:
+        worst = max(range(len(segs)), key=lambda i: (segs[i][3], i))
+        if segs[worst][3] <= 0:   # priority 0 is never dropped: cut the line instead
+            break
+        del segs[worst]
+    return segs
+
+
+def paint(segs, cols, fill):
     out, n = [], 0
-    for text, fg, bg in segs:
+    for text, fg, bg, _ in segs:
         text = text[:max(0, cols - n)]
         if text:
             out.append(rgb(fg, bg) + text)
             n += len(text)
-    out.append(rgb(base, base) + " " * max(0, cols - n) + "\x1b[0m\r\n")
+    out.append(rgb(fill, fill) + " " * max(0, cols - n))
     return "".join(out)
+
+
+def weapon_bar(g, cols):
+    """All six weapons, the current one lit up; narrow windows show only the numbers of the others."""
+    base = (12, 14, 24)
+    if not g.armed:
+        segs = [(" Weapons off - press X (or Space) to arm ", (230, 200, 120), base, 0)]
+    else:
+        hint = ("  Space fire  Tab next  Enter autofire%s " % (" [ON]" if g.autofire else ""),
+                (255, 120, 100) if g.autofire else HUD_DIM, base, 2)
+        for short in (False, True):
+            segs = []
+            for i, w in enumerate(WEAPONS):
+                if i == g.weapon:
+                    segs.append((" %d %s " % (i + 1, w["name"]), (10, 10, 16), w["col"], 0))
+                else:
+                    segs.append((" %d " % (i + 1) if short else " %d %s " % (i + 1, w["name"]),
+                                 mix(w["col"], (120, 120, 130), 0.5), base, 1))
+                segs.append((" ", base, base, 1))
+            if sum(len(x[0]) for x in segs) <= cols:
+                break
+        if g.autofire:
+            hint = ("  AUTOFIRE ", (255, 120, 100), base, 0) if sum(len(x[0]) for x in segs) + len(hint[0]) > cols else hint
+        segs.append(hint)
+    return paint(fit(segs, cols), cols, base) + "\x1b[0m\r\n"
 
 
 def hud(g, cols, rows):
     out = []
     if g.hud:
         out.append(weapon_bar(g, cols))
-    out.append("\x1b[0;38;2;225;225;235;48;2;18;20;30m")
-    deg = int(math.degrees(-g.heading)) % 360
-    ci = int(deg / 360 * len(COMPASS))
-    comp = (COMPASS * 3)[ci + len(COMPASS) - 8: ci + len(COMPASS) + 9]
-    parts = [" HOVERDRIFT ", " %s | %s " % (g.veh["name"], THEMES[g.world.theme]["name"]), "[%s]" % comp,
-             " speed %3d" % int(g.speed * 3.6), " hover %2d" % int(g.hover), " %s" % g.tod]
-    if g.drift:
-        parts.append(" DRIFT")
-    if g.armed:
-        parts.append("  score %d" % g.score)
-    parts.append("  %2.0f fps" % g.fps)
-    s = "".join(parts) if g.hud else ""
-    if g.msg and g.t < g.msg_t:
-        s = (s + "   " + g.msg) if g.hud else " " + g.msg
-    right = "? help  Esc menu "
-    s = s[:max(0, cols - len(right))]
-    out.append(s + " " * max(0, cols - len(s) - len(right)) + (right if len(s) + len(right) <= cols else ""))
-    out.append("\x1b[0m")
+    msg = g.msg if g.msg and g.t < g.msg_t else ""
+    right = (" ? help  Esc menu ", HUD_DIM, HUD_BG, 1)
+    if g.hud:
+        deg = int(math.degrees(-g.heading)) % 360
+        ci = int(deg / 360 * len(COMPASS))
+        comp = (COMPASS * 3)[ci + len(COMPASS) - 8: ci + len(COMPASS) + 9]
+        flash = g.t - g.score_t < 0.35
+        segs = [(" HOVERDRIFT ", (14, 14, 20), ACCENT[0], 4)]
+        if g.armed:
+            segs.append((" SCORE %d " % g.score, (14, 14, 20) if flash else SCORE_FG,
+                         SCORE_FG if flash else HUD_BG, 0))
+        if g.drift:
+            segs.append((" DRIFT ", (14, 14, 20), (150, 230, 170), 1))
+        if msg:
+            segs.append(("  " + msg + " ", (240, 220, 150), HUD_BG, 1))
+        segs += [(" [%s] " % comp, HUD_FG, HUD_BG, 3), (" %d km/h " % int(g.speed * 3.6), HUD_FG, HUD_BG, 2),
+                 (" hover %d " % int(g.hover), HUD_FG, HUD_BG, 3),
+                 (" %s | %s " % (g.veh["name"], THEMES[g.world.theme]["name"]), HUD_DIM, HUD_BG, 5),
+                 (" %s " % g.tod, HUD_DIM, HUD_BG, 6), (" %2.0f fps " % g.fps, HUD_DIM, HUD_BG, 7)]
+    else:
+        segs = [(" " + msg + " ", (240, 220, 150), HUD_BG, 1)] if msg else []
+    segs = fit(segs + [right], cols)
+    if segs and segs[-1] is right:  # the help hint sits at the right edge
+        segs = segs[:-1]
+        used = sum(len(x[0]) for x in segs)
+        segs.append((" " * max(0, cols - used - len(right[0])), HUD_BG, HUD_BG, 0))
+        segs.append(right)
+    out.append(paint(segs, cols, HUD_BG) + "\x1b[0m")
     return "".join(out)
 
 
 HELP = [
-    "HOVERDRIFT",
+    "HOVERDRIFT  -  keys",
     "",
-    "Left / Right  or  A / D    steer",
-    "Up / Down     or  W / S    throttle",
-    "R / F                      hover higher / lower",
-    "V                          next vehicle",
-    "L                          next world: meadows, ice, desert, planets",
-    "N                          a new land of the same kind",
-    "T                          time of day: day, sunset, night",
-    "C                          drift autopilot (sit back)",
+    "Left/Right  A/D     steer",
+    "Up/Down     W/S     throttle",
+    "R / F               hover higher / lower",
+    "V                   next vehicle",
+    "L                   next world: meadows, ice, desert, planets",
+    "N                   a new land of the same kind",
+    "T                   time of day: day, sunset, night",
+    "C                   drift autopilot (sit back)",
     "",
-    "Space                      FIRE (hold it)   Enter: autofire",
-    "1-6  or  Tab               laser, twin, spread, plasma, rockets, bombs",
-    "X                          weapons off / on",
-    "H                          hide the status lines",
+    "Space               FIRE (hold it)    Enter: autofire",
+    "1-6  or  Tab        laser, twin, spread, plasma, rockets, bombs",
+    "X                   weapons off / on",
+    "H                   hide the status lines",
     "",
-    "Esc / P                    pause menu (Q there: quit, M: sound on / off)",
-    "?                          show / hide this help",
+    "Esc / P             pause menu (Q there: quit, M: sound)",
+    "?                   show / hide this help",
 ]
 PAUSE = [
     "P A U S E D",
@@ -1429,7 +1530,7 @@ def box_cells(cells, lines, cols, rows):
     w = min(cols, max(len(l) for l in lines) + 4)
     x0, y0 = max(0, (cols - w) // 2), max(0, rows // 2 - len(lines) // 2 - 1)
     for j, l in enumerate([""] + list(lines) + [""]):
-        put_cells(cells, cols, rows, x0, y0 + j, ("  " + l).ljust(w)[:w], BOX_FG, BOX_BG)
+        put_cells(cells, cols, rows, x0, y0 + j, ("  " + l).ljust(w)[:w], ACCENT[0] if j == 1 else BOX_FG, BOX_BG)
 
 
 # The ASCII ARCADE title layout (same look as arcadekit.title_screen in the collection)
@@ -1489,7 +1590,11 @@ def title_cells(g, colsbuf, cells, cols, rows):
     ey = r0 + (1 + len(items) * gap if gap == 2 else len(items))
     for j, e in enumerate(extra):
         put_cells(cells, cols, rows, px0 + 2, ey + j, ("   " + e).ljust(w - 4), FOOTER_FG, PANEL_BG)
-    label, keys = " ASCII ARCADE ", " Up/Down choose   Left/Right change   Enter fly   ? help   Esc back "
+    label = " ASCII ARCADE "
+    for keys in (" Up/Down choose   Left/Right change   Enter fly   ? help   Esc back ",
+                 " Up/Down choose  Left/Right change  Enter fly  ? help ", " Enter fly  ? help  Esc back "):
+        if len(label) + 1 + len(keys) <= cols:
+            break
     put_cells(cells, cols, rows, 0, rows - 1, " " * cols, FOOTER_FG, FOOTER_BG)
     put_cells(cells, cols, rows, 0, rows - 1, label, (14, 14, 20), (200, 200, 215))
     put_cells(cells, cols, rows, max(len(label) + 1, cols - len(keys)), rows - 1, keys[:max(0, cols - len(label) - 1)],
@@ -1607,6 +1712,8 @@ def bench():
     for theme in THEME_ORDER:
         t0 = time.time()
         g = Game(1, theme, THEME_ORDER.index(theme) % len(VEHICLES))
+        g.title_key("enter")   # time real flying (weapons armed), not the title screen
+        g.help = False
         t1 = time.time()
         n = 30
         for i in range(n):

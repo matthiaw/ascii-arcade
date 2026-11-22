@@ -1,7 +1,7 @@
 # ASCII ARCADE
 
-A little collection of games for the terminal. Start the launcher, pick a game with the arrow keys, press
-Enter. When the game ends you are back in the menu.
+A little collection of games for the terminal. Start the launcher, pick a game with the arrow keys (or its
+number: 1-9, 0 for the tenth, 0 again for the eleventh), press Enter. When the game ends you are back in the menu.
 
 ```sh
 python3 arcade.py
@@ -35,7 +35,7 @@ Homebrew brings its own Python (3.14); the games need nothing else.
 | Key | |
 |---|---|
 | Esc | in a game: pause / game menu - on a title screen: quit (back to the arcade) - in sub-screens: back |
-| P | pause (real-time games; in EMBERFALL P drinks a potion) |
+| P | pause (real-time games; in EMBERFALL P drinks a potion, Esc opens its game menu: M sound, Q save and quit) |
 | M | in the pause menu and in the launcher: sound on / off (remembered for every game) |
 | Q | in the pause menu: quit - on a title screen: quit (in DEPTHWELL Q also turns pieces) |
 | ? | help with all of the game's keys, also on the title screens |
@@ -60,7 +60,7 @@ kitty, Ghostty); 256 colours work too. Bigger windows give bigger pictures.
 | Game | | Window |
 |---|---|---|
 | **HOVERDRIFT** | Glide over endless voxel landscapes. Four vehicles (hovercraft, jet, hover tank, saucer), six worlds (meadows, ice, desert, volcano planet, Planet Xeno, crystal moon), six weapons. | 40x12+ |
-| **EMBERFALL** | A party role-playing adventure: create a hero, recruit companions, fight turn by turn with d20 rules, descend beneath the Ashpeaks. | 100x30+ |
+| **EMBERFALL** | A party role-playing adventure: create a hero, recruit companions, fight turn by turn with d20 rules, descend beneath the Ashpeaks. | 70x22+ |
 | **BLOCKFIRE** | A first-person arena shooter: raycast 3D with textured walls, lit floors and pixel-art robots that come in waves. | 60x18+ |
 | **DEEPCALL** | A submarine alone in the dark: only the sonar shows the trench, and every ping can be heard. Find air vents and salvage, keep the noise down, reach the Source at the bottom. | 60x20+ |
 | **LIGHTKEEPER** | Keep the lighthouse through stormy nights: light ships past the reefs, sound the horn in the fog, refill the oil and send the rescue boat. Alone, or two keepers at one keyboard. | 70x22+ |
@@ -69,7 +69,7 @@ kitty, Ghostty); 256 colours work too. Bigger windows give bigger pictures.
 | **ORBITAL** | A calm gravity puzzle: launch a probe past planets, moons, asteroid belts and wormholes to the dock ring. Fewer launches, more stars. | 70x22+ |
 | **LEAFLING** | A jump'n'run with a leaf for a hat: run, jump, glide and wall-jump through twelve levels in four worlds (sunlit forest canopy, crystal caves, wind-swept sky ruins, an autumn storm at night), with light motes, hidden seeds, lanterns, beetles, bats, spitting plants, two chases and two bosses. | 70x22+ |
 | **STACKFALL** | Falling blocks in a well ten wide and twenty deep. Modes: Marathon, Sprint (40 rows), Rising (rubble pushes up from below). | 40x20+ |
-| **DEPTHWELL** | Falling blocks in three dimensions: look down into a well, turn cube pieces about all three axes, fill whole layers. Four well sizes, three piece sets. | 70x24+ |
+| **DEPTHWELL** | Falling blocks in three dimensions: look down into a well, turn cube pieces about all three axes, fill whole layers. Four well sizes, three piece sets. | 70x22+ |
 
 ## DEEPCALL keys
 

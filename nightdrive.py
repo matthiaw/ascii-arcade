@@ -363,6 +363,10 @@ class Race:
         self.tick_s = 99                             # last low-time second ticked
         self.gear = 0
         self.verge_cd = 0.0
+        self.cp_flash = 0.0                          # HUD feedback timers: checkpoint bonus, hit flash
+        self.cp_bonus = 0
+        self.hit_flash = 0.0
+        self.hit_hard = False
         self.fill_traffic(initial=True)
 
     # ---- small helpers ---------------------------------------------------------------------------------
@@ -461,6 +465,8 @@ class Race:
         self.auto_lock -= dt
         self.hit_cool -= dt
         self.shake = max(0.0, self.shake - dt * 3)
+        self.cp_flash = max(0.0, self.cp_flash - dt)
+        self.hit_flash = max(0.0, self.hit_flash - dt)
         if not self.auto:
             self.gas = max(0.0, self.gas - 0.22 * dt)
         target = self.steer_dir if (self.steer_hold > 0 and running and self.spin <= 0) else 0
@@ -554,6 +560,7 @@ class Race:
                     self.time_left += bonus
                     self.score += 1000
                 self.sfx("checkpoint")
+                self.cp_flash, self.cp_bonus = 2.2, bonus
                 self.say("CHECKPOINT  +%d s" % bonus, 3.0, (120, 255, 160))
                 self.say("STAGE %d  %s" % (s + 1, STAGES[s]["name"]), 3.0, (255, 220, 120))
 
@@ -563,6 +570,8 @@ class Race:
         self.speed = min(self.speed, MAXV * keep)
         self.hit_cool = spin + 0.5
         self.shake = 1.0
+        self.hit_flash, self.hit_hard = 0.45, True
+        self.say("CRASH!", 1.2, (255, 110, 90))
         self.crashes += 1
         self.sfx("crash", 0.9, 0.3)
 
@@ -635,13 +644,13 @@ class Race:
                     if c.onc:
                         self.crash(1.1, 0.08, 1 if self.x > c.x else -1)
                         self.x += 0.35 if self.x >= c.x else -0.35
-                        self.say("CRASH!", 1.2, (255, 110, 90))
                     elif self.speed > c.v:
                         rel = (self.speed - c.v) / MAXV
                         self.speed = c.v * 0.8
                         self.pos = c.z - 300 - PLAYER_Z
                         self.hit_cool = 0.5
                         self.shake = 0.8
+                        self.hit_flash, self.hit_hard = 0.25, False
                         if rel <= 0.4:
                             self.sfx("bump", 0.8, 0.3)
                         if rel > 0.4:
@@ -1489,78 +1498,204 @@ def rain(px, W, H, r):
                 px[yy][xx] = ((p[0] + 140) >> 1, (p[1] + 150) >> 1, (p[2] + 175) >> 1)
 
 
-def bar(v, n):
+HUD_DIM = (150, 156, 186)      # secondary labels
+HUD_TXT = (236, 238, 248)      # primary values
+HUD_GOLD = (255, 214, 120)
+HUD_RED = (255, 72, 60)
+HUD_GREEN = (120, 255, 160)
+SCRIM = (6, 4, 14)
+
+
+def scrim(px, y0, y1, a0, a1, x0=0, x1=None):
+    """Darken pixel rows y0..y1 (alpha fading from a0 to a1) so HUD text reads over any scenery."""
+    H = len(px)
+    for y in range(max(0, y0), min(H, y1)):
+        a = a0 + (a1 - a0) * (y - y0) / max(1, y1 - y0 - 1)
+        row = px[y]
+        b = 1 - a
+        sr, sg, sb = SCRIM[0] * a, SCRIM[1] * a, SCRIM[2] * a
+        lo, hi = x0, len(row) if x1 is None else x1
+        row[lo:hi] = [(int(c[0] * b + sr), int(c[1] * b + sg), int(c[2] * b + sb)) for c in row[lo:hi]]
+
+
+def tint(px, col, a, edge=None):
+    """Wash the frame with a colour (hit flash); with edge, only the outer edge bands (low-time vignette)."""
+    W = len(px[0])
+    if edge is None:
+        for y, row in enumerate(px):
+            px[y] = [mix(c, col, a) for c in row]
+        return
+    e = max(2, int(W * edge))
+    for row in px:
+        for x in range(e):
+            k = a * (1 - x / e) ** 2
+            row[x] = mix(row[x], col, k)
+            row[W - 1 - x] = mix(row[W - 1 - x], col, k)
+
+
+def pixel_bar(cv, col, row, n, v, on, off):
+    """A crisp one-cell-high progress bar made of pixels (no shaded text glyphs)."""
     full = int(round(clamp(v, 0, 1) * n))
-    return "█" * full + "░" * (n - full)
+    y = row * 2
+    cv.rect(col, y, n, 2, off)
+    cv.rect(col, y, full, 2, on)
+    cv.rect(col, y, full, 1, mix(on, (255, 255, 255), 0.35))
+
+
+def banner(cv, row, text, fg, strength=1.0):
+    """A message strip: dark backing tinted by the message colour, wide enough to breathe."""
+    s = "   %s   " % text
+    cv.center(row, s, fg, mix((14, 10, 26), shade(fg, 0.3), 0.5 * strength))
 
 
 def draw_hud(cv, r, cols, rows):
     W, H = cv.W, cv.H
+    px = cv.px
     trk = r.trk
     k = 3 if H >= 110 else 2 if H >= 56 else 1
-    # time, big, top centre
+    run = r.state == "run"
     tl = r.time_left
+    low = tl < 10 and r.state in ("run", "timeup")
+    # hit flash: a red wash for a crash, a short amber one for a bump
+    if r.hit_flash > 0:
+        if r.hit_hard:
+            tint(px, (200, 20, 20), min(1.0, r.hit_flash / 0.45) * 0.38)
+        else:
+            tint(px, (255, 150, 40), min(1.0, r.hit_flash / 0.25) * 0.2, edge=0.12)
+    # low time: a red vignette that pulses with every second's tick
+    if low and r.state == "run":
+        beat = (tl % 1.0) ** 2                      # 1 right after a tick, fading to 0
+        tint(px, (210, 10, 20), 0.25 + 0.45 * beat * (1.4 - tl / 10), edge=0.10)
+    # a soft dark band behind the top HUD lines
+    scrim(px, 0, 4, 0.7, 0.6)
+    scrim(px, 4, 8, 0.6, 0.0)
+    # ---- time, big, top centre ----
     secs = int(math.ceil(tl)) if r.state != "finish" else int(tl)
     txt = "%d" % secs
-    red = tl < 10 and r.state in ("run", "timeup")
-    tcol = (255, 70, 60) if red and (int(r.t * 4) % 2 == 0 or tl <= 0) else (255, 70, 60) if red else (255, 240, 200)
-    if red and int(r.t * 4) % 2:
-        tcol = (255, 150, 120)
-    tw = big_width(txt, k + 1)
-    cv.center(0, "TIME", (230, 200, 120))
-    draw_big(cv, txt, (W - tw) // 2, 2, k + 1, tcol)
-    # stage and progress, top left
+    kt = k + 1
+    if low:
+        frac = tl % 1.0
+        tcol = mix(HUD_RED, (255, 236, 220), frac ** 3) if tl > 0 else HUD_RED
+        if run and tl <= 5:
+            kt = k + 2 if (5 * (k + 2) + 4) * 2 < H * 0.45 else kt
+    elif r.cp_flash > 0:
+        tcol = mix((255, 240, 200), HUD_GREEN, min(1.0, r.cp_flash))
+    else:
+        tcol = (255, 240, 200)
+    tw = big_width(txt, kt)
+    cv.center(0, "TIME", HUD_RED if low else HUD_GOLD)
+    draw_big(cv, txt, (W - tw) // 2, 2, kt, tcol)
+    trow = (2 + 5 * kt) // 2 + 1                     # first text row under the digits
+    if r.cp_flash > 0 and int(r.cp_flash * 6) % 4 != 0:
+        cv.put((W + tw) // 2 + 2, max(1, trow // 2), "+%d s" % r.cp_bonus, HUD_GREEN, (10, 30, 18))
+    # ---- stage and progress, top left ----
     s, i0, i1 = trk.ranges[min(r.ci, len(trk.ranges) - 1)]
     prog = clamp((r.pz / SEG - i0) / max(1, i1 - i0), 0, 1)
-    cv.put(1, 0, "STAGE %d/%d  %s" % (s + 1, len(STAGES), STAGES[s]["name"]), (255, 220, 140))
+    lab = "STAGE %d/%d " % (s + 1, len(STAGES))
+    cv.put(1, 0, lab, HUD_DIM)
+    cv.put(1 + len(lab), 0, STAGES[s]["name"], HUD_GOLD)
     km = r.to_checkpoint() * M_PER_UNIT / 1000
     last = r.ci >= len(trk.ranges) - 1 and trk.ranges[-1][0] == len(STAGES) - 1
     nb = max(6, min(16, cols // 8))
-    cv.put(1, 1, "%s %s %.1f km" % (bar(prog, nb), "FINISH" if last else "CP", km), (190, 200, 230))
-    # score, top right
-    sc = "SCORE %d" % int(r.score)
-    cv.put(cols - len(sc) - 1, 0, sc, (240, 220, 140))
+    neon = STAGES[s]["neon"][1]
+    pixel_bar(cv, 1, 1, nb, prog, HUD_RED if low else neon, (44, 44, 64))
+    cv.put(2 + nb, 1, "%s %.1f km" % ("FINISH" if last else "CP", km), HUD_RED if low else HUD_TXT)
+    # ---- score, top right ----
+    sc = "%d" % int(r.score)
+    cv.put(cols - len(sc) - 1, 0, sc, HUD_TXT)
+    cv.put(cols - len(sc) - 7, 0, "SCORE", HUD_DIM)
     ov = "passed %d" % r.overtakes
-    cv.put(cols - len(ov) - 1, 1, ov, (170, 176, 200))
-    # speed, big, bottom right
+    cv.put(cols - len(ov) - 1, 1, ov, HUD_DIM)
+    # ---- speed, big, bottom right, with a bar that fills to top speed ----
     kmh = int(r.speed * KMH)
     st_ = "%d" % kmh
     sw = big_width(st_, k)
+    sw3 = big_width("888", k)
     sx = W - sw - 7
-    sy = H - 4 - 5 * k
-    draw_big(cv, st_, sx, sy, k, (230, 240, 255))
-    cv.put(cols - 6, (sy + 5 * k) // 2 - 1, "km/h", (170, 180, 210))
-    # messages
+    sy = H - 6 - 5 * k
+    off = abs(r.x) > 1.0
+    draw_big(cv, st_, sx, sy, k, (255, 190, 110) if off else (230, 240, 255))
+    cv.put(cols - 6, (sy + 5 * k) // 2 - 1, "km/h", HUD_DIM, (12, 12, 20))
+    bx, by = W - sw3 - 7, sy + 5 * k + 2
+    sp = r.speed / MAXV
+    cv.rect(bx, by, sw3, 1, (30, 30, 46))
+    cv.rect(bx, by, int(sw3 * sp + 0.5), 1, mix((80, 180, 255), (255, 90, 220), sp))
+    # ---- messages and warnings ----
     mrow = max(4, int(rows * 0.28))
-    for j, (s_, ttl, col) in enumerate(r.msgs[-2:]):
-        if int(ttl * 6) % 2 == 0 or ttl > 1.0:
-            cv.center(mrow + j * 2, "  %s  " % s_, col, (16, 12, 30))
+    if trow + 1 > mrow:
+        mrow = trow + 1
     if r.state == "count":
-        n = 3 - int(r.t_state)
-        txt = str(max(1, n))
-        kk = k + 2
-        draw_big(cv, txt, (W - big_width(txt, kk)) // 2, int(H * 0.3), kk, (255, 220, 90))
-    if abs(r.x) > 1.0 and r.state == "run" and r.spin <= 0:
-        cv.center(mrow + 5, " OFF ROAD ", (255, 200, 120), (40, 20, 10))
-    # bottom bar
+        draw_intro(cv, r, k, mrow)
+    else:
+        for j, (s_, ttl, col) in enumerate(r.msgs[-2:]):
+            if ttl > 0.6 or int(ttl * 8) % 2 == 0:
+                banner(cv, mrow + j * 2, s_, col)
+    warn = None
+    if run and r.spin <= 0:
+        if low:
+            if int(r.t * 2) % 2 == 0:
+                warn = ("HURRY  -  %s %.1f km" % ("finish" if last else "checkpoint", km), HUD_RED)
+        if off:
+            warn = ("OFF ROAD", (255, 200, 120))
+        for c in r.cars:
+            if c.onc and 0 < c.z - r.pz < 48 * SEG and abs(c.x - r.x) < 0.42:
+                if int(r.t * 6) % 2 == 0:
+                    warn = ("!  ONCOMING  !", (255, 236, 150))
+                break
+    if warn:
+        banner(cv, max(mrow + 5, int(rows * 0.6)), warn[0], warn[1])
+    # ---- bottom bar: who, how, and the shared keys (the numbers live in the HUD above) ----
     rr = rows - 1
     bg = (12, 12, 20)
-    segs = [(" NIGHTDRIVE ", (16, 10, 30), (255, 110, 230)),
-            ("  %3d km/h " % kmh, (230, 236, 250), None),
-            ("  time %d " % secs, (255, 110, 90) if red else (240, 220, 160), None),
-            ("  %s %.1f km " % ("finish" if last else "checkpoint", km), (170, 200, 240), None),
-            ("  score %d " % int(r.score), (240, 220, 140), None),
-            ("  %s throttle " % ("auto" if r.auto else "manual"), (150, 156, 186), None)]
-    right = " ? help  Esc menu "
+    cv.put(0, rr, " " * cols, bg, bg)
     x = 0
-    for s_, fg, b in segs:
+    for s_, fg, b in ((" NIGHTDRIVE ", (16, 10, 30), (255, 110, 230)),
+                      ("  %s throttle " % ("auto" if r.auto else "manual"), HUD_DIM, None)):
+        right = " ? help   Esc pause "
         if x + len(s_) + len(right) > cols:
             break
         cv.put(x, rr, s_, fg, b or bg)
         x += len(s_)
-    cv.put(x, rr, " " * max(0, cols - x), bg, bg)
+    right = " ? help   Esc pause "
     if x + len(right) <= cols:
-        cv.put(cols - len(right), rr, right, (130, 136, 170), bg)
+        cv.put(cols - len(right), rr, right, HUD_DIM, bg)
+
+
+def draw_intro(cv, r, k, mrow):
+    """Before the start: which stage, what to do, and the countdown - on one dark card."""
+    W, H = cv.W, cv.H
+    s = r.stage_index
+    st = STAGES[s]
+    name = st["name"]
+    kn = k
+    big = big_width(name, kn) <= W - 8
+    top = mrow * 2 - 2
+    n = 3 - int(r.t_state)
+    kk = k + 2
+    room = H - 8 - top
+    if (5 * kn + 4) + 6 + 5 * kk + 4 > room:
+        big = False
+    if 4 + 6 + 5 * kk + 4 > room:
+        kk = max(1, (room - 14) // 5)
+    card_h = (5 * kn + 4 if big else 4) + 6 + 5 * kk + 4
+    scrim(cv.px, top, top + 3, 0.0, 0.7)
+    scrim(cv.px, top + 3, top + card_h, 0.7, 0.7)
+    scrim(cv.px, top + card_h, top + card_h + 3, 0.7, 0.0)
+    y = top + 3
+    cv.center(y // 2, "STAGE %d OF %d" % (s + 1, len(STAGES)), HUD_DIM)
+    y += 2
+    accent = st["neon"][0]
+    if big:
+        draw_big(cv, name, (W - big_width(name, kn)) // 2, y + 1, kn, accent, shadow=(20, 6, 30))
+        y += 5 * kn + 3
+    else:
+        cv.center(y // 2 + 1, name, accent)
+        y += 4
+    cv.center((y + 1) // 2, "reach the checkpoint  -  %d s on the clock" % allowance(s), HUD_TXT)
+    y += 5
+    txt = str(max(1, n))
+    pulse = 1 - (r.t_state % 1.0)
+    draw_big(cv, txt, (W - big_width(txt, kk)) // 2, y, kk, mix((255, 200, 70), (255, 250, 220), pulse ** 2))
 
 
 HELP = [

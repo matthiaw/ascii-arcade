@@ -739,11 +739,11 @@ def static_layer(L, view, seed):
             row.append(c)
         px.append(row)
     stars = []
-    for _ in range(W * H // 95):
+    for _ in range(W * H // 95):     # mostly faint: the starfield must not compete with the dotted preview
         x, y = rnd.randrange(W), rnd.randrange(H)
         b = rnd.random() ** 3
         tint = rnd.choice([(255, 255, 255), (200, 220, 255), (255, 230, 200), (255, 210, 210)])
-        c = mix(px[y][x], tint, 0.12 + 0.7 * b)
+        c = mix(px[y][x], tint, 0.05 + 0.6 * b)
         px[y][x] = c
         if b > 0.5:
             stars.append((x, y, tint))
@@ -752,11 +752,11 @@ def static_layer(L, view, seed):
     # the edge of the map (where signal is lost), when the window is wider or taller than the map
     x0, y0, x1, y1 = int(ox), int(oy), int(ox + WW * s), int(oy + WH * s)
     edge = (40, 44, 70)
-    if x0 > 0:
+    if x0 > 0 and L.station:
         for y in range(max(0, y0), min(H, y1), 2):
             blend(px, x0 - 1, y, edge, 0.6)
             blend(px, x1, y, edge, 0.6)
-    if y0 > 2:
+    if y0 > 2 and L.station:
         for x in range(max(0, x0), min(W, x1), 2):
             blend(px, x, y0 - 1, edge, 0.6)
             blend(px, x, y1, edge, 0.6)
@@ -1120,11 +1120,6 @@ class Game:
 # =============================================================================================
 # Rendering the game
 # =============================================================================================
-def bar(v, n=8):
-    f = int(round(clamp(v, 0, 1) * n))
-    return "█" * f + "░" * (n - f)
-
-
 def render(g, painter, cols, rows):
     view = View(cols, rows)
     L = g.L
@@ -1198,49 +1193,70 @@ def render(g, painter, cols, rows):
     return cv
 
 
+HUD_LABEL = (132, 138, 168)      # dim labels (4.7:1 on the bar); values carry the colour
+STAR_ON, STAR_OFF = (255, 214, 110), (70, 72, 98)
+POWER_COL = (255, 214, 140)
+
+
+def gauge(cv, x, r, v, n, col):
+    """A gauge of coloured cells with half-cell resolution: full = col, empty = a dark trace of it."""
+    v = clamp(v, 0.0, 1.0) * n
+    empty = mix(HUD_BG, col, 0.22)
+    for i in range(n):
+        f = v - i
+        cv.put(x + i, r, "▌" if 0.25 <= f < 0.75 else " ", col, col if f >= 0.75 else empty)
+    return x + n
+
+
 def hud(cv, g, cols, rows):
     r = rows - 1
     fuel = None
     if g.L.fuel:
         left = g.flight.fuel if (g.flight is not None and g.state == "fly") else g.L.fuel
-        fuel = "nudge ready" if left > 0 else "nudge used"
+        fuel = left > 0
     total = sum(g.progress.values())
+    # the launch in play decides the stars: three while it is the first, then fewer
+    n_try = g.attempts + (1 if g.state in ("aim", "after") else 0)
+    if g.state == "done" and g.banner:
+        n_try = g.banner[1]
+    can = stars_for(max(1, n_try))
+    rating = [("★" * can, STAR_ON), ("★" * (3 - can), STAR_OFF)]
     variants = []
-    for wide in (2, 1, 0, -1):
-        if wide < 0:
-            segs = [(" ORBITAL ", (14, 16, 26), (200, 230, 255)), ("  L%d" % g.num, (230, 230, 240), None),
-                    ("  try %d" % (g.attempts + (g.state == "aim")), (180, 186, 210), None),
-                    ("  %.1f°" % g.angle, (200, 230, 255), None), ("  %.1f%%" % g.power, (255, 214, 140), None)]
-            if fuel:
-                segs.append(("  " + fuel.split()[1], (255, 170, 90) if "ready" in fuel else (130, 120, 120), None))
-            variants.append(segs)
-            continue
-        segs = [(" ORBITAL ", (14, 16, 26), (200, 230, 255)),
-                ("  level %d" % g.num, (230, 230, 240), None),
-                ("  launches %d" % g.attempts if wide else "  try %d" % (g.attempts + (g.state == "aim")), (180, 186, 210), None),
-                ("  angle %5.1f°" % g.angle, (200, 230, 255), None),
-                ("  power %s %5.1f%%" % (bar(g.power / 100, 8 if wide == 2 else 5), g.power) if wide else
-                 "  power %5.1f%%" % g.power, (255, 214, 140), None)]
-        if fuel:
-            segs.append(("  " + fuel, (255, 170, 90) if "ready" in fuel else (130, 120, 120), None))
+    for wide in (2, 1, 0):
+        segs = []                                    # pieces: (text, colour, bg) or ("GAUGE", n)
+        if wide:
+            segs.append((" ORBITAL ", (14, 16, 26), (200, 230, 255)))
+        segs += [(" level " if wide else " L", HUD_LABEL, None), ("%d" % g.num, (236, 238, 246), None),
+                 ("  launch " if wide else "  try ", HUD_LABEL, None), ("%d " % max(1, n_try), (236, 238, 246), None)]
+        segs += [(t, c, None) for t, c in rating]
+        segs += [("  angle " if wide else "  aim ", HUD_LABEL, None), ("%5.1f°" % g.angle if wide else "%.1f°" % g.angle, (200, 230, 255), None),
+                 ("  power " if wide else "  pow ", HUD_LABEL, None), ("GAUGE", 10 if wide == 2 else 6 if wide else 5),
+                 (" %5.1f%%" % g.power if wide else " %d%%" % round(g.power), POWER_COL, None)]
+        if fuel is not None:
+            segs.append(("  nudge " if wide else "  ", HUD_LABEL, None))
+            segs.append((("ready" if wide else "nudge") if fuel else "used", (255, 170, 90) if fuel else (110, 106, 116), None))
         if g.state == "fly" and g.fast:
             segs.append(("  x3", (160, 255, 170), None))
-        if wide:
-            segs.append(("  stars %d" % total, (240, 210, 120), None))
+        segs += [("  ★ ", STAR_ON, None), ("%d" % total, (240, 220, 160), None)]
         variants.append(segs)
-    right = " ? help  Esc menu "
+    right = " ? help  Esc menu " if cols >= 110 else " ? help "
+
+    def width(segs):
+        return sum(p[1] if p[0] == "GAUGE" else len(p[0]) for p in segs)
+
     for segs in variants:
-        width = sum(len(s) for s, _, _ in segs)
-        if width + len(right) <= cols:
+        if width(segs) + len(right) <= cols:
             break
+    cv.put(0, r, " " * cols, HUD_LABEL, HUD_BG)
     x = 0
-    for s, fg, bg in segs:
-        cv.put(x, r, s, fg, bg or HUD_BG)
-        x += len(s)
-    if x < cols:
-        cv.put(x, r, " " * (cols - x), HUD_BG, HUD_BG)
+    for p in segs:
+        if p[0] == "GAUGE":
+            x = gauge(cv, x, r, (g.power - POWER_MIN) / (POWER_MAX - POWER_MIN), p[1], POWER_COL)
+        else:
+            cv.put(x, r, p[0], p[1], p[2] or HUD_BG)
+            x += len(p[0])
     if x + len(right) <= cols:
-        cv.put(cols - len(right), r, right, (130, 136, 170), HUD_BG)
+        cv.put(cols - len(right), r, right, HUD_LABEL, HUD_BG)
 
 
 def render_banner(cv, g):
@@ -1302,6 +1318,7 @@ DEMO.station = False
 class TitleDemo:
     def __init__(self, cols=80, rows=24):
         self.painter = Painter()
+        self.progress = {}
         self.t = 0.0
         self.new_flight()
 
@@ -1338,7 +1355,10 @@ class TitleDemo:
 
     def frame(self, cols, rows, dt, help_, sel, unlocked=1, pick=1, stars=0, solved=0):
         cv = self.scene(cols, rows, dt)
-        items = ["Continue        level %d" % unlocked, "Level select    < %d >" % pick, "From level 1"]
+        got = self.progress.get(pick, 0) if self.progress else 0
+        sel_txt = "%s %2d %s" % ("<" if pick > 1 else " ", pick, ">" if pick < unlocked else " ")
+        items = ["Continue        level %d" % unlocked,
+                 "Level select   %s  %s" % (sel_txt, "★" * got + "·" * (3 - got) if got else "new"), "From level 1"]
         best = "best: %d levels solved, %d stars" % (solved, stars) if solved else None
         extra = ["", "Set angle and power, launch, and let", "gravity carry the probe to the dock."]
         title_screen(cv, "ORBITAL", "a calm gravity puzzle among the planets", items, sel, best, extra=extra,
@@ -1372,6 +1392,7 @@ def main():
                     if any(k in ("q", "esc") for k in term.keys(0.3)):
                         return
                     continue
+                demo.progress = progress
                 cv = demo.frame(cols, rows, min(0.1, now - last), help_, sel, unlocked, pick,
                                 sum(progress.values()), max(progress, default=0))
                 term.write(cv.emit())

@@ -199,6 +199,8 @@ class Game:
         self.spawn_queue = []
         self.spawn_t = 0.0
         self.inter = 3.0           # countdown until the next wave starts
+        self.wave_t = -9.0         # when the current wave started (the renderer shows a banner)
+        self.clear_t = -9.0        # when the last wave was cleared
         self.over = False
         self.t = 0.0
         self.hold = {"f": 0.0, "b": 0.0, "l": 0.0, "r": 0.0, "tl": 0.0, "tr": 0.0}
@@ -341,6 +343,22 @@ class Game:
         elif action == "fire":
             self.fire()
 
+    def aim_bot(self, ca, sa, wall_d=None):
+        """The living bot a shot fired now would hit (or None)."""
+        if wall_d is None:
+            wall_d = self.cast(self.px, self.py, ca, sa)[0]
+        best, best_d = None, 1e9
+        for b in self.bots:
+            if not b.alive:
+                continue
+            dx, dy = b.x - self.px, b.y - self.py
+            along = dx * ca + dy * sa
+            if along <= 0.1 or along >= wall_d or along >= best_d:
+                continue
+            if abs(-dx * sa + dy * ca) < 0.3 * b.k["size"] + 0.05:
+                best, best_d = b, along
+        return best
+
     def fire(self):
         if self.fire_cd > 0:
             return
@@ -480,6 +498,7 @@ class Game:
                         kinds.append("drone")
                 self.spawn_queue = kinds
                 self.spawn_t = 0.0
+                self.wave_t = self.t
                 self.msg("WAVE %d - %d bots incoming" % (self.wave, n), 4.0)
                 SND.play("alarm", 0.8)
             return
@@ -492,6 +511,7 @@ class Game:
         if not self.spawn_queue and alive == 0:
             self.hp = min(100.0, self.hp + 25)
             self.ammo = min(self.max_ammo, self.ammo + 15)
+            self.clear_t = self.t
             self.msg("WAVE %d CLEARED  +25 HP  +15 ammo" % self.wave, 4.0)
             SND.play("cleared")
             self.inter = 4.0
@@ -657,9 +677,9 @@ def shade(c, k):
     return (clamp(int(c[0] * k), 0, 255), clamp(int(c[1] * k), 0, 255), clamp(int(c[2] * k), 0, 255))
 
 
-def fogged(c, lvl, emissive=False):
+def fogged(c, lvl, emissive=False, floor=0.0):
     d = lvl / LVL_PER_UNIT
-    k = 1.0 / (1.0 + d * 0.16)
+    k = max(floor, 1.0 / (1.0 + d * 0.16))
     if emissive:
         k = max(k, 0.8)
     return (int(c[0] * k + FOG[0] * (1 - k)) & 0xF8, int(c[1] * k + FOG[1] * (1 - k)) & 0xF8,
@@ -936,6 +956,7 @@ PALETTES = {
             "e": (90, 230, 255), "h": (70, 56, 48), "W": (120, 130, 150)},
 }
 OUTLINE = (12, 12, 16)
+SPRITE_FOG, SPRITE_FLOOR = 0.45, 0.62   # bots and pickups take less distance fog than walls: they stand out
 EMISSIVE = set("eWfF")
 
 
@@ -1004,7 +1025,7 @@ class SpriteBank:
                         c, e = px
                         if hit and c != OUTLINE:
                             c = mix(c, (255, 255, 255), 0.7)
-                        out.append(fogged(c, lvl, e or hit))
+                        out.append(fogged(c, lvl * SPRITE_FOG, e or hit, SPRITE_FLOOR))
                 s.append(out)
             self.cache[ck] = s
         return s
@@ -1137,6 +1158,10 @@ def x256(c):
 # Rendering
 # =============================================================================
 HUD_BG = (16, 16, 26)
+HUD_FG, HUD_DIM = (210, 210, 224), (140, 144, 168)
+CROSS_ON = (255, 190, 60)
+MAP_BG, MAP_WALL, MAP_EDGE = (10, 10, 18), (118, 122, 142), (70, 72, 92)
+POP_BG = (14, 14, 28)
 
 
 class Renderer:
@@ -1150,6 +1175,8 @@ class Renderer:
         self.pal256 = {}         # RGB -> the palette RGB it is shown as (256-colour terminals)
         self.parts = []          # [x, y, z, vx, vy, vz, age, life, colour]
         self.tracers = []        # [screen-space start getter (bot), hit, until]
+        self.pops = []           # "+100" rising from destroyed bots: [x, y, born]
+        self.proj = None         # (project, K, mid) of the last rendered view
         self.t = 0.0
         self.help = False        # the help box instead of the pause menu
         self.prep_map()
@@ -1194,6 +1221,7 @@ class Renderer:
                                        random.choice([(255, 230, 120), (255, 160, 60), (255, 255, 220)])])
             elif ev[0] == "kill":
                 _, x, y, kind = ev
+                self.pops.append([x, y, self.t])
                 body = PALETTES[kind]["b"]
                 for _ in range(46):
                     a, v = random.uniform(0, 6.3), random.uniform(0.5, 4)
@@ -1220,6 +1248,8 @@ class Renderer:
                 keep.append(p)
         self.parts = keep[-600:]
         self.tracers = [t for t in self.tracers if t[2] > self.t]
+        if self.pops:
+            self.pops = [p for p in self.pops if self.t - p[2] < 1.0]
 
     # --- the 3D view -------------------------------------------------------------------------------------
     def view(self, PW, PH, cam=None, dim=1.0):
@@ -1321,6 +1351,7 @@ class Renderer:
         buf, zbuf, K, mid, project = self.view(PW, PH, cam)
         if cam is not None:
             return buf
+        self.proj = (project, K, mid)
         objs = []
         for b in g.bots:
             objs.append((b.x, b.y, b))
@@ -1440,11 +1471,18 @@ class Renderer:
                             buf[y][x] = (255, 255, 230) if d < R * 0.3 else (255, 200, 80)
         # crosshair
         cx, cy = PW // 2, int(mid)
-        col = (255, 70, 60) if g.hitmark > 0 else (240, 240, 240)
+        on = not g.over and g.aim_bot(math.cos(g.a), math.sin(g.a)) is not None
+        col = (255, 70, 60) if g.hitmark > 0 else CROSS_ON if on else (240, 240, 240)
         if g.hitmark > 0:
             pts = [(cx + i, cy + i) for i in (-3, -2, 2, 3)] + [(cx + i, cy - i) for i in (-3, -2, 2, 3)]
         else:
             pts = [(cx + i, cy) for i in (-4, -3, -2, 2, 3, 4)] + [(cx, cy + i) for i in (-3, -2, 2, 3)]
+            if on:
+                pts.append((cx, cy))
+        for x, y in pts:   # a dark drop shadow keeps it readable on bright walls
+            if 0 <= x + 1 < PW and 0 <= y + 1 < PH:
+                c = buf[y + 1][x + 1]
+                buf[y + 1][x + 1] = (c[0] >> 2, c[1] >> 2, c[2] >> 2)
         for x, y in pts:
             if 0 <= x < PW and 0 <= y < PH:
                 buf[y][x] = col
@@ -1468,25 +1506,39 @@ class Renderer:
                     k = (y - (PH - 6)) / 5 * 0.6 * min(1.0, g.hurt_t)
                     buf[y] = [mix(c, (220, 20, 20), k) for c in buf[y]]
 
-    def minimap(self, buf, PW):
+    def minimap(self, buf, PW, PH):
+        """A compact, opaque map window round the player (top right). Bots outside it show on its edge."""
         g = self.g
-        ox, oy = PW - g.W - 2, 2
-        for y in range(g.H):
+        RW, RH = min(g.W, 26), min(g.H, 18)
+        x0 = clamp(int(g.px) - RW // 2, 0, g.W - RW)
+        y0 = clamp(int(g.py) - RH // 2, 0, g.H - RH)
+        ox, oy = PW - RW - 3, 2
+        for y in range(-1, RH + 1):   # backing with a one-pixel frame
             row = buf[oy + y]
-            for x in range(g.W):
-                c = row[ox + x]
-                row[ox + x] = mix(c, (150, 150, 162), 0.7) if g.grid[y][x] != '.' else mix(c, (10, 10, 18), 0.6)
+            for x in range(-1, RW + 1):
+                if y < 0 or y >= RH or x < 0 or x >= RW:
+                    row[ox + x] = MAP_EDGE
+                else:
+                    row[ox + x] = MAP_WALL if g.grid[y0 + y][x0 + x] != '.' else MAP_BG
         for p in g.pickups:
-            if p["active"]:
-                buf[oy + int(p["y"])][ox + int(p["x"])] = (230, 40, 40) if p["kind"] == "h" else (240, 200, 70)
+            mx, my = int(p["x"]) - x0, int(p["y"]) - y0
+            if p["active"] and 0 <= mx < RW and 0 <= my < RH:
+                buf[oy + my][ox + mx] = (255, 170, 190) if p["kind"] == "h" else (240, 200, 70)
+        blink = int(self.t * 4) % 2
         for b in g.bots:
             if b.alive:
-                buf[oy + int(b.y)][ox + int(b.x)] = PALETTES[b.kind]["b"]
-        x, y = int(g.px), int(g.py)
+                mx, my = int(b.x) - x0, int(b.y) - y0
+                c = PALETTES[b.kind]["b"]
+                if 0 <= mx < RW and 0 <= my < RH:
+                    buf[oy + my][ox + mx] = (255, 255, 255) if b.has_los and blink else c
+                else:              # off the window: a mark on the frame where it is
+                    buf[oy + clamp(my, -1, RH)][ox + clamp(mx, -1, RW)] = c
+        x, y = int(g.px) - x0, int(g.py) - y0
+        for k in (1, 2):           # facing: two pixels ahead of the player
+            fx, fy = int(g.px + math.cos(g.a) * k) - x0, int(g.py + math.sin(g.a) * k) - y0
+            if 0 <= fy < RH and 0 <= fx < RW:
+                buf[oy + fy][ox + fx] = (120, 200, 255) if k == 1 else (60, 110, 160)
         buf[oy + y][ox + x] = (255, 255, 255)
-        fx, fy = int(g.px + math.cos(g.a) * 1.5), int(g.py + math.sin(g.a) * 1.5)
-        if 0 <= fy < g.H and 0 <= fx < g.W:
-            buf[oy + fy][ox + fx] = (120, 200, 255)
 
     # --- output -------------------------------------------------------------------------------------------
     def emit(self, buf, cols, prow, text=None):
@@ -1535,27 +1587,30 @@ class Renderer:
         return out
 
     def hud(self, cols):
+        """Two lines: vitals first (health, ammo), then the wave; less important numbers drop out first
+        when the window is narrow. The second line shows messages, or a few key hints."""
         g = self.g
-        segs = []
-
-        def seg(s, f, b=HUD_BG):
-            segs.append((s, f, b))
         hp = int(g.hp)
         hpc = (80, 220, 100) if hp > 50 else (240, 200, 70) if hp > 25 else (255, 70, 60)
         filled = int(hp / 10 + 0.5)
-        seg(" BLOCKFIRE ", (16, 16, 20), (244, 150, 56))
-        seg("  HP ", (200, 200, 214))
-        seg("█" * filled, hpc)
-        seg("░" * (10 - filled), (70, 72, 90))
-        seg(" %3d " % hp, hpc)
-        seg("  AMMO %3d " % g.ammo, (240, 200, 70) if g.ammo else (255, 70, 60))
-        seg("  WAVE %d " % max(1, g.wave), (200, 200, 214))
-        seg("  BOTS %d " % (sum(1 for b in g.bots if b.alive) + len(g.spawn_queue)), (200, 200, 214))
-        seg("  KILLS %d " % g.kills, (200, 200, 214))
-        seg("  SCORE %d " % g.score, (110, 220, 255))
-        seg("  BEST %d " % g.best, (150, 150, 170))
+        ammoc = (255, 70, 60) if not g.ammo else (255, 150, 60) if g.ammo < 10 else (240, 200, 70)
+        bots = sum(1 for b in g.bots if b.alive) + len(g.spawn_queue)
+        segs = [(" BLOCKFIRE ", (16, 16, 20), (244, 150, 56), 3),
+                ("  HP ", HUD_DIM, HUD_BG, 0), ("█" * filled, hpc, HUD_BG, 0), ("░" * (10 - filled), (70, 72, 90), HUD_BG, 0),
+                (" %3d " % hp, hpc, HUD_BG, 0),
+                ("  AMMO ", HUD_DIM, HUD_BG, 0), ("%3d " % g.ammo if g.ammo else "PULSE ", ammoc, HUD_BG, 0),
+                ("  WAVE ", HUD_DIM, HUD_BG, 1), ("%d " % max(1, g.wave), HUD_FG, HUD_BG, 1),
+                ("  BOTS ", HUD_DIM, HUD_BG, 2), ("%d " % bots, (255, 120, 90) if bots else HUD_FG, HUD_BG, 2),
+                ("  SCORE ", HUD_DIM, HUD_BG, 2), ("%d " % g.score, (110, 220, 255), HUD_BG, 2),
+                ("  KILLS ", HUD_DIM, HUD_BG, 4), ("%d " % g.kills, HUD_FG, HUD_BG, 4),
+                ("  BEST ", HUD_DIM, HUD_BG, 5), ("%d " % g.best, HUD_DIM, HUD_BG, 5)]
+        while sum(len(x[0]) for x in segs) > cols:   # drop the least important label + value pair
+            worst = max(x[3] for x in segs)
+            if worst == 0:
+                break
+            segs = [x for x in segs if x[3] != worst]
         out, n = [], 0
-        for s, f, b in segs:
+        for s, f, b, _ in segs:
             s = s[:max(0, cols - n)]
             if s:
                 out.append(self.fg(f) + self.bg(b) + s)
@@ -1564,29 +1619,74 @@ class Renderer:
         if g.msgs:
             s, f = " " + g.msgs[-1][0], (240, 200, 70)
         else:
-            s, f = " W/S move  A/D strafe  Left/Right turn  Space fire  M map  Esc menu  ? help", (130, 132, 150)
+            s, f = " W/S move   A/D strafe   Left/Right turn   Space fire   ? help", HUD_DIM
         out.append(self.fg(f) + self.bg((10, 10, 18)) + s.ljust(cols)[:cols] + "\x1b[0m")
         return "".join(out)
+
+    def banner(self, buf, text, PW, prow, lines, t):
+        """A dark stripe across the view with large spaced text; it slides in from the left."""
+        PH = prow * 2
+        r0 = max(0, int(prow * 0.22))
+        h = len(lines) + 2
+        k = min(1.0, t / 0.18)                       # slide in
+        for y in range(r0 * 2, min(PH, (r0 + h) * 2)):
+            row = buf[y]
+            for x in range(int(PW * (1 - k)), PW):
+                c = row[x]
+                row[x] = (c[0] // 4, c[1] // 4, c[2] // 4 + 4)
+        dx = int(-(1 - k) * PW * 0.5)
+        for i, (s, c) in enumerate(lines):
+            x = (PW - len(s)) // 2 + dx
+            for j, ch in enumerate(s):
+                if 0 <= x + j < PW and ch != " ":
+                    text[(x + j, r0 + 1 + i)] = (ch, c, None)
 
     def frame(self, cols, rows):
         g = self.g
         prow = rows - 2
         PW, PH = cols, prow * 2
         buf = self.scene(PW, PH)
-        if g.show_map and cols >= 90 and PH >= g.H + 6:
-            self.minimap(buf, PW)
         text = {}
+        if g.over:   # dim the arena so the result box is the one thing to read
+            for y in range(PH):
+                buf[y] = [(c[0] * 3 >> 3, c[1] * 3 >> 3, c[2] * 3 >> 3) for c in buf[y]]
+        if self.pops and not g.over and self.proj:   # "+100" chips rising from destroyed bots
+            project, K, mid = self.proj
+            for x, y, born in self.pops:
+                tX, tY = project(x, y)
+                if tY > 0.3:
+                    age = self.t - born
+                    c = int(PW / 2.0 * (1 + tX / tY)) - 3
+                    r = int(mid + K * (0.5 - 0.7 - age * 0.6) / tY) // 2
+                    fgc = mix((255, 230, 120), POP_BG, clamp((age - 0.6) * 2.5, 0, 1))
+                    for j, ch in enumerate(" +100 "):
+                        if 0 <= c + j < cols and 0 <= r < prow:
+                            text[(c + j, r)] = (ch, fgc, POP_BG)
         if g.over:
             lines = ["", "Y O U   W E R E   S C R A P P E D", "",
                      "Wave %d   Kills %d   Score %d" % (g.wave, g.kills, g.score),
                      "NEW BEST SCORE!" if g.new_best else "Best %d" % g.best, "",
                      "R restart     Esc / Q quit", ""]
             self.box(text, cols, prow, lines, (255, 255, 255), (110, 20, 20))
+            if g.new_best:     # the record line in gold
+                y0 = prow // 2 - len(lines) // 2 + 4
+                for (x, y), (ch, f, bg) in list(text.items()):
+                    if y == y0 and ch != " ":
+                        text[(x, y)] = (ch, (255, 220, 90), bg)
         elif g.paused:
             text_box(text, cols, prow, HELP if self.help else PAUSE + ["", SND.label()])
+        elif g.wave and 0 <= g.t - g.wave_t < 1.8:   # a new wave rolls in
+            n = sum(1 for b in g.bots if b.alive) + len(g.spawn_queue)
+            self.banner(buf, text, PW, prow, [("W A V E   %d" % g.wave, (255, 214, 90)),
+                                             ("%d bots incoming" % n, (235, 235, 245))], g.t - g.wave_t)
+        elif g.wave and g.inter > 0 and 0 <= g.t - g.clear_t < 2.0:
+            self.banner(buf, text, PW, prow, [("W A V E   %d   C L E A R E D" % g.wave, (120, 240, 140)),
+                                             ("+25 HP    +15 ammo", (235, 235, 245))], g.t - g.clear_t)
         elif g.inter > 0 and not any(b.alive for b in g.bots):
-            self.box(text, cols, prow, ["", "W A V E   %d" % (g.wave + 1), "starts in %d" % (int(g.inter) + 1), ""],
-                     (255, 220, 90), (24, 24, 40))
+            self.banner(buf, text, PW, prow, [("W A V E   %d" % (g.wave + 1), (255, 214, 90)),
+                                             ("starts in %d" % (int(g.inter) + 1), (235, 235, 245))], 1.0)
+        if g.show_map and not g.over and cols >= 80 and PH >= 44:
+            self.minimap(buf, PW, PH)
         out = self.emit(buf, cols, prow, text)
         out.append(self.hud(cols))
         out.append("\x1b[?2026l")

@@ -29,9 +29,9 @@ import time
 from collections import Counter, deque
 
 SAVE_PATH = os.path.expanduser("~/.emberfall_save.json")
-MIN_W, MIN_H = 100, 30
-SIDE_W = 34
-LOG_H = 8
+MIN_W, MIN_H = 70, 22
+SIDE_W = 34      # side panel width on a roomy terminal (narrower on small ones, see UI.layout)
+LOG_H = 8        # log rows incl. its header (fewer on short terminals)
 VERSION = 1
 
 # =============================================================================
@@ -226,7 +226,7 @@ BLACK = (232, K.COLOR_BLACK)   # not 16-21: base16 colour schemes repaint those
 WHITE = (231, K.COLOR_WHITE)
 LIGHT = (252, K.COLOR_WHITE)
 GRAY = (246, K.COLOR_WHITE)
-DGRAY = (240, K.COLOR_WHITE)
+DGRAY = (243, K.COLOR_WHITE)   # hints and secondary text: still about 4.5:1 on black
 DDGRAY = (236, K.COLOR_BLACK)
 NIGHT = (234, K.COLOR_BLACK)
 RED = (196, K.COLOR_RED)
@@ -240,7 +240,7 @@ AMBER = (214, K.COLOR_YELLOW)
 BROWN = (130, K.COLOR_YELLOW)
 WOOD = (137, K.COLOR_YELLOW)
 DWOOD = (94, K.COLOR_YELLOW)
-FLOORBG = (52, K.COLOR_BLACK)
+FLOORBG = (235, K.COLOR_BLACK)   # neutral, so the dark red cell under foes means danger only
 TAN = (180, K.COLOR_YELLOW)
 SKIN = (223, K.COLOR_WHITE)
 BONE = (230, K.COLOR_WHITE)
@@ -1861,6 +1861,7 @@ class Game:
     # --- basics ---------------------------------------------------------------
     def msg(self, text, col=LIGHT):
         self.log.append((text, col))
+        self.log_n = getattr(self, "log_n", 0) + 1   # running count: the UI shows lines newer than the last key bright
 
     @property
     def leader(self):
@@ -6444,8 +6445,9 @@ def _shade(c, k):
 TEX16 = [1.0, 0.94, 1.0, 1.05, 0.97, 1.0, 1.03, 0.95, 1.0, 1.02, 0.96]
 
 
-def blit(pix, rows, col, tint=None):
-    """Draw a creature/item sprite in colour col onto a pixel block; tint overrides clothes, hair and skin."""
+def blit(pix, rows, col, tint=None, plate=None):
+    """Draw a creature/item sprite in colour col onto a pixel block; tint overrides clothes, hair and skin.
+    plate (rgb, strength) colours the ground the figure stands on: red under foes, gold under whoever acts."""
     other = FIG_COL
     if tint:
         col = tint["#"]
@@ -6455,15 +6457,35 @@ def blit(pix, rows, col, tint=None):
     # darken the ground right around the figure so it stands out (a soft outline)
     for j, r in enumerate(rows):
         for i, ch in enumerate(r):
-            if ch == "." and any(0 <= j + dj < n and 0 <= i + di < n and rows[j + dj][i + di] != "."
-                                 for dj, di in ((0, 1), (0, -1), (1, 0), (-1, 0))):
+            if ch == "." and (n > 4 or not plate) and any(0 <= j + dj < n and 0 <= i + di < n and rows[j + dj][i + di] != "."
+                                                     for dj, di in ((0, 1), (0, -1), (1, 0), (-1, 0))):
                 pix[j][i] = _shade(pix[j][i], 0.45)
+            elif ch == "." and plate:
+                c, k = plate
+                q = pix[j][i]
+                pix[j][i] = (int(q[0] + (c[0] - q[0]) * k), int(q[1] + (c[1] - q[1]) * k), int(q[2] + (c[2] - q[2]) * k))
     for j, r in enumerate(rows):
         for i, ch in enumerate(r):
             if ch == ".":
                 continue
             pix[j][i] = col if ch == "#" else lite if ch == "+" else dark if ch == "-" else other[ch]
 
+
+
+def corner_marks(pix, n, mk):
+    """Paint L-shaped corner brackets into an n x n pixel tile: mk = (top colour, bottom colour), either None."""
+    top, bot = mk
+    k = 1 if n <= 4 else 2 if n <= 8 else 4       # arm length in pixels
+    e = n - 1
+    for col, y, step in ((top, 0, 1), (bot, e, -1)):
+        if not col:
+            continue
+        for i in range(k):
+            pix[y][i] = pix[y][e - i] = col
+        for i in range(1, k if n > 4 else 2):       # the upright arm (on 4x4 tiles one pixel, so feet read as a base)
+            if n == 4 and col is top:
+                break
+            pix[y + i * step][0] = pix[y + i * step][e] = col
 
 
 def art_lines(key):
@@ -6800,17 +6822,26 @@ class UI:
         for j in range(h):
             self.put(y + j, x, " " * w, attr)
 
+    BOX_MUTE = {GOLD: (136, K.COLOR_YELLOW), AMBER: (136, K.COLOR_YELLOW), ORANGE: (130, K.COLOR_RED),
+                RED: (124, K.COLOR_RED)}
+
     def box(self, y, x, h, w, fg=GOLD, title=None, bg=BLACK):
-        a = self.C(fg, bg)
+        """A framed panel: a quiet rounded border (plain ASCII without UTF-8) with the title set into the top edge."""
+        a = self.C(self.BOX_MUTE.get(fg, fg) if PIC_MODE else fg, bg)
         self.fill(y, x, h, w, self.C(LIGHT, bg))
-        self.put(y, x, "." + "-" * (w - 2) + ".", a)
+        if PIC_MODE:
+            tl, tr, bl, br, hz, vt = "\u256d", "\u256e", "\u2570", "\u256f", "\u2500", "\u2502"
+        else:
+            tl, tr, bl, br, hz, vt = ".", ".", "'", "'", "-", "|"
+        self.put(y, x, tl + hz * (w - 2) + tr, a)
         for j in range(1, h - 1):
-            self.put(y + j, x, "|", a)
-            self.put(y + j, x + w - 1, "|", a)
-        self.put(y + h - 1, x, "'" + "-" * (w - 2) + "'", a)
+            self.put(y + j, x, vt, a)
+            self.put(y + j, x + w - 1, vt, a)
+        self.put(y + h - 1, x, bl + hz * (w - 2) + br, a)
         if title:
-            t = "[ %s ]" % title
-            self.put(y, x + max(2, (w - len(t)) // 2), t, self.C(YELLOW, bg, True))
+            t = " %s " % title if PIC_MODE else "[ %s ]" % title
+            tc = {RED: (210, K.COLOR_RED), ORANGE: (215, K.COLOR_YELLOW)}.get(fg, (222, K.COLOR_YELLOW))
+            self.put(y, x + max(2, (w - len(t)) // 2), t[:max(0, w - 4)], self.C(tc, bg, True))
 
     def block_title(self, text, y, k):
         """Block letters drawn with half-block characters (two pixels per cell), centred. Returns rows used."""
@@ -6954,7 +6985,7 @@ class UI:
                     self.watch_status()
                 elif k in (ord('v'), ord('V')) and self.g and self.g.area:
                     modes = self.view_modes()
-                    cur = self.view_mode(self.W - SIDE_W, self.H - 1 - LOG_H)
+                    cur = self.view_mode(*self.layout()[:2])
                     self.view_pref = modes[(modes.index(cur) + 1) % len(modes)]
                     self.draw_main(self.g, refresh=False)
                     self.watch_status()
@@ -7032,9 +7063,9 @@ class UI:
             return "huge"
         if "large" in modes and vw // 8 >= 18 and vh // 4 >= 10:
             return "large"
-        if "sprite" in modes and vw // 4 >= 22 and vh // 2 >= 13:
+        if "sprite" in modes and vw // 4 >= 20 and vh // 2 >= 12:
             return "sprite"
-        if "square" in modes and vw // 2 >= 44:
+        if "square" in modes and vw // 2 >= 22:
             return "square"
         return "narrow"
 
@@ -7183,6 +7214,8 @@ class UI:
                     bg = (58, K.COLOR_YELLOW)
                 if a.tmpl and a.T.get("big"):
                     bg = DRED if blink else (52, K.COLOR_RED)
+                elif bg is None and a.faction == "hostile" and not sprite:
+                    bg = (52, K.COLOR_RED)   # foes stand on a dark red cell in the text views
                 over[(a.x, a.y)] = (a.ch, a.fg, bg)
         for p in g.party:
             if p.dead:
@@ -7197,7 +7230,10 @@ class UI:
                 elif "paralyzed" in p.status:
                     bg = NAVY
                 over[(p.x, p.y)] = ("@", p.fg, bg)
-        if cur and (cur.is_pc or g.sees(cur)) and (cur.conscious or cur.downed):
+        if not cur and not sprite and not g.leader.dead:
+            ch, fg, bg = over.get((g.leader.x, g.leader.y), ("@", WHITE, None))
+            over[(g.leader.x, g.leader.y)] = (ch, fg, bg or (58, K.COLOR_YELLOW))   # the leader: a steady gold cell
+        if cur and (cur.is_pc or g.sees(cur)) and (cur.conscious or cur.downed) and not sprite:
             ch, fg, bg = over.get((cur.x, cur.y), ("@", WHITE, None))
             over[(cur.x, cur.y)] = (ch, fg, (94, K.COLOR_YELLOW) if blink else (58, K.COLOR_YELLOW))
         ti = self.target_info
@@ -7292,7 +7328,7 @@ class UI:
                         b = (0, 0, 0)
                     cells.append((ch, f, b))
                 out.append(cells)
-            self.rawmap = (y0, x0, out)
+            self.rawmap = (y0, x0, self.dimmed(out))
             for sy in range(vh):
                 self.put(y0 + sy, x0, " " * len(rows[sy]), self.mark_attr)
             return
@@ -7339,6 +7375,9 @@ class UI:
         fr = int(now * 3)
         black = (0, 0, 0)
         W = mw * n
+        marks = self.actor_marks(g, fam)
+        cur_a = g.current()
+        pulse = int(now * 4) % 2 == 0
         prow = [[black] * W for _ in range(mh * n)]
         for ty in range(mh):
             y = cy + ty - oy
@@ -7361,11 +7400,19 @@ class UI:
                     if o[2]:
                         tint = o[2]
                     if f:
+                        a_ = f[1]
+                        plate = None
+                        if a_ is cur_a:
+                            plate = ((255, 200, 60), 0.75 if pulse else 0.6)
+                        elif cur_a is None and a_ is g.leader:
+                            plate = ((255, 200, 60), 0.45)   # outside combat: this is you
+                        elif not a_.is_pc and a_.faction == "hostile":
+                            plate = ((200, 30, 30), 0.6)
                         if n >= 8:
-                            rows8 = ACTOR8["downed"] if f[0] == "downed" else figure8(f[1])
-                            blit(pix, scale2x(rows8) if n == 16 else rows8, rgb_of(o[1]), figure_tint(f[1]))
+                            rows8 = ACTOR8["downed"] if f[0] == "downed" else figure8(a_)
+                            blit(pix, scale2x(rows8) if n == 16 else rows8, rgb_of(o[1]), figure_tint(a_), plate)
                         else:
-                            blit(pix, ACTOR_SPR[f[0]], rgb_of(o[1]))
+                            blit(pix, ACTOR_SPR[f[0]], rgb_of(o[1]), None, plate)
                     elif o[0]:
                         items = ITEM8 if n >= 8 else ITEM_SPR
                         rows_i = items.get(o[0], items["*"])
@@ -7384,6 +7431,9 @@ class UI:
                             m0, m1, m2 = max(m0, 0.85), max(m1, 0.85), max(m2, 0.85)
                         pix = [[(min(255, int(c[0] * m0 + a0)), min(255, int(c[1] * m1 + a1)),
                                  min(255, int(c[2] * m2 + a2))) for c in r] for r in pix]
+                mk = marks.get(p) if lit else None
+                if mk:
+                    corner_marks(pix, n, mk)
                 for j in range(n):
                     prow[ty * n + j][tx * n:tx * n + n] = pix[j]
         rows = []
@@ -7398,9 +7448,36 @@ class UI:
             if 0 <= ry < len(rows) and 0 <= rx and rx + len(text) < W:
                 for i, chx in enumerate(text):
                     rows[ry][rx + i] = [chx, rgb_of(col), black]
-        self.rawmap = (y0, x0, [[tuple(c) for c in r] for r in rows])
+        self.rawmap = (y0, x0, self.dimmed([[tuple(c) for c in r] for r in rows]))
         for sy in range(vh):
             self.put(y0 + sy, x0, " " * vw, self.mark_attr)
+
+    def dimmed(self, rows):
+        """Behind a menu or message the map steps back (darker), so the panel in front reads first."""
+        if not getattr(self, "dim", False):
+            return rows
+        k = 0.4
+        return [[(ch, (int(f[0] * k), int(f[1] * k), int(f[2] * k)), (int(b[0] * k), int(b[1] * k), int(b[2] * k)))
+                 for ch, f, b in r] for r in rows]
+
+    def modal_backdrop(self, g):
+        self.dim = True
+        try:
+            self.draw_main(g, refresh=False)
+        finally:
+            self.dim = False
+
+    def actor_marks(self, g, fam):
+        """Corner brackets on the pixel map: a blinking reticle on the target being aimed at.
+        (Friend and foe are told apart by the ground plate blit() paints: red under foes, gold under you.)"""
+        marks = {}
+        pulse = int(time.time() * 4) % 2 == 0
+        ti = self.target_info
+        if ti:
+            t = ti["targets"][ti["idx"]]
+            c = ((255, 255, 255) if pulse else (255, 60, 60)) if ti["enemy"] else ((255, 255, 255) if pulse else (90, 230, 90))
+            marks[(t.x, t.y)] = (c, c)
+        return marks
 
     def raw_map_escapes(self):
         """Paint the lit map straight to the terminal, skipping cells curses has drawn over."""
@@ -7437,120 +7514,225 @@ class UI:
             return
         H, W = self.scr.getmaxyx()
         self.erase()
-        vw, vh = W - SIDE_W, H - 1 - LOG_H
+        vw, vh, sw, lh = self.layout()
         self.draw_top(g, W)
         self.draw_map(g, 0, 1, vw, vh)
-        self.draw_side(g, vw, 1, SIDE_W, vh)
-        self.draw_log(g, H - LOG_H, W)
+        self.draw_side(g, vw, 1, sw, vh)
+        self.draw_log(g, H - lh, W, lh)
+        self.draw_footer(g, H, W)
         if refresh:
             self.refresh()
 
+    def layout(self):
+        """(map width, map height, side panel width, log rows incl. header and footer) for this window."""
+        H, W = self.scr.getmaxyx()
+        sw = SIDE_W if W >= 110 else 30 if W >= 90 else 25
+        lh = LOG_H if H >= 34 else 7 if H >= 28 else 5
+        return W - sw, H - 1 - lh, sw, lh
+
     def draw_top(self, g, W):
-        a = self.C(LIGHT, (235, K.COLOR_BLACK))
+        bgc = (235, K.COLOR_BLACK)
+        a = self.C(LIGHT, bgc)
         self.put(0, 0, " " * W, a)
-        self.put(0, 1, "EMBERFALL", self.C(EMBER, (235, K.COLOR_BLACK), True))
+        self.put(0, 1, "EMBERFALL", self.C(EMBER, bgc, True))
         tod = "night" if g.night else ("morning" if (g.minutes % 1440) < 12 * 60 else "evening" if (g.minutes % 1440) >= 18 * 60 else "afternoon")
-        s = "  %s   Day %d, %s (%s)   Gold %d" % (g.area.name, g.day, g.clock, tod, g.gold)
-        self.put(0, 11, s, a)
-        if g.combat:
-            t = " COMBAT - Round %d " % g.combat["round"]
-            self.put(0, W - len(t) - 1, t, self.C(WHITE, DRED, True))
+        badge = (" COMBAT · ROUND %d " if PIC_MODE else " COMBAT - ROUND %d ") % g.combat["round"] if g.combat else ""
+        dot = "  ·  " if PIC_MODE else "  |  "
+        segs = [(g.area.name, self.C(WHITE, bgc, True)), ("Day %d  %s %s" % (g.day, g.clock, tod), self.C(GRAY, bgc)),
+                ("%d gold" % g.gold, self.C(GOLD, bgc))]
+        room = W - 12 - len(badge) - 1
+        if sum(len(t) for t, _ in segs) + len(dot) * 2 > room:   # small window: drop the time of day first
+            segs[1] = ("Day %d %s" % (g.day, g.clock), segs[1][1])
+        x = 12
+        for i, (t, at) in enumerate(segs):
+            if i:
+                if x + len(dot) + len(t) > 12 + room:
+                    break
+                self.put(0, x, dot, self.C(DGRAY, bgc))
+                x += len(dot)
+            self.put(0, x, t[:max(0, 12 + room - x)], at)
+            x += len(t)
+        if badge:
+            self.put(0, W - len(badge), badge, self.C(WHITE, DRED, True))
 
     def hpbar(self, p, w):
+        """(filled, empty, colour) strings for a w-cell health bar."""
         if p.max_hp <= 0:
-            return "", GRAY
+            return "", "", GRAY
         f = clamp(int(round(w * max(0, p.hp) / p.max_hp)), 0, w)
+        if p.hp > 0:
+            f = max(1, f)
         r = p.hp / p.max_hp
-        col = LGREEN if r > 0.6 else (YELLOW if r > 0.3 else RED)
-        return "#" * f + "-" * (w - f), col
+        col = LGREEN if r > 0.6 else (GOLD if r > 0.3 else RED)
+        full, empty = ("━", "━") if PIC_MODE else ("#", "-")
+        return full * f, empty * (w - f), col
+
+    def put_bar(self, y, x, p, w, bg):
+        full, empty, col = self.hpbar(p, w)
+        self.put(y, x, full, self.C(col, bg))
+        self.put(y, x + len(full), empty, self.C((238, K.COLOR_BLACK), bg))
 
     def draw_side(self, g, x, y, w, h):
         bg = (233, K.COLOR_BLACK)
+        hi = (236, K.COLOR_BLACK)          # the row of whoever acts now
         self.fill(y, x, h, w, self.C(LIGHT, bg))
+        rule = "│" if PIC_MODE else "|"
         for j in range(h):
-            self.put(y + j, x, "|", self.C(DGRAY, bg))
-        cy = y
+            self.put(y + j, x, rule, self.C(DDGRAY, bg))
+        x += 1
+        w -= 1
         cur = g.current()
+        n = len(g.party)
+        seq = []
+        if g.combat:
+            order, idx = g.combat["order"], g.combat["idx"]
+            seq = [a for a in order[idx:] + order[:idx]
+                   if not a.dead and (a.is_pc or a in g.area.actors) and (a.conscious or a.downed)
+                   and (a.is_pc or g.sees(a))]
+        # rows per member: name, bar, details, gap - squeezed on short terminals (the turn order wants room too)
+        need_after = min(len(seq), 6) + 2 if g.combat else 3
+        per = 4 if h - n * 4 >= need_after else 3 if h - n * 3 >= need_after else 2
+        cy = y
+        nw = w - 9
         for i, p in enumerate(g.party):
-            mark = ">" if (p is cur) else (" " if not (i == self.sel and not g.combat) else "*")
-            name = p.name if len(p.name) <= 18 else p.name[:17] + "."
+            if cy + 2 > y + h:
+                break
+            acting = p is cur
+            pick = (not g.combat) and i == self.sel % n
+            rbg = hi if acting else bg
+            if acting:
+                self.put(cy, x, " " * w, self.C(LIGHT, hi))
+            mark = ("▶" if PIC_MODE else ">") if acting else ("▸" if PIC_MODE else "*") if pick else " "
+            self.put(cy, x + 1, mark, self.C(GOLD, rbg, True))
+            name = p.name if len(p.name) <= nw - 3 else p.name[:nw - 4] + "."
             col = p.fg if not p.dead else DGRAY
-            self.put(cy, x + 2, "%s%d %-18s" % (mark, i + 1, name), self.C(col, bg, p is cur))
-            self.put(cy, x + w - 7, "%s %d" % (CLASSES[p.cls]["short"], p.level), self.C(GRAY, bg))
+            self.put(cy, x + 3, "%d" % (i + 1), self.C(DGRAY if not acting else GRAY, rbg))
+            self.put(cy, x + 5, name, self.C(col, rbg, acting or pick))
+            cl = "%s %d" % (CLASSES[p.cls]["short"], p.level)
+            self.put(cy, x + w - len(cl) - 1, cl, self.C(GRAY, rbg))
             cy += 1
             if p.dead:
-                self.put(cy, x + 4, "DEAD - raise at the temple", self.C(RED, bg))
-                cy += 3
+                self.put(cy, x + 3, "DEAD · raise at the temple"[:w - 4] if PIC_MODE else "DEAD - raise at the temple"[:w - 4],
+                         self.C(RED, bg))
+                cy += per - 1
                 continue
-            bar, bc = self.hpbar(p, 14)
-            self.put(cy, x + 4, "HP", self.C(GRAY, bg))
-            self.put(cy, x + 7, bar, self.C(bc, bg))
-            self.put(cy, x + 22, "%3d/%-3d" % (max(0, p.hp), p.max_hp), self.C(LIGHT, bg))
-            cy += 1
-            info = "AC %d" % p.ac
-            if p.can_cast:
-                sl = " ".join("%s:%d" % (k, v[0]) for k, v in sorted(p.slots.items()))
-                info += "  Slots " + sl
-            if p.ai:
-                info += "  [AI]"
-            self.put(cy, x + 4, info[:w - 5], self.C(GRAY, bg))
-            cy += 1
-            st = []
             if p.downed:
-                st.append("DOWN %d/%d" % tuple(p.dsaves))
-            for s in p.status:
-                st.append(s.capitalize())
-            if g.combat and p is cur:
-                st.append("Move %d%s" % (p.mp, "" if not p.acted else "  acted"))
-            self.put(cy, x + 4, ("  ".join(st))[:w - 5], self.C(PURPLE if st else GRAY, bg))
+                self.put(cy, x + 3, ("DOWN  saves %d/%d" % tuple(p.dsaves))[:w - 4], self.C(WHITE, DRED, True))
+            else:
+                num = "%d/%d" % (max(0, p.hp), p.max_hp)
+                bw = max(4, w - 6 - len(num))
+                self.put_bar(cy, x + 3, p, bw, bg)
+                r = p.hp / max(1, p.max_hp)
+                self.put(cy, x + w - len(num) - 1, num, self.C(WHITE if r > 0.3 else RED, bg, r <= 0.3))
             cy += 1
-        cy += 1
+            if per >= 3:
+                bits = [("AC %d" % p.ac, GRAY)]
+                if p.can_cast and p.slots:
+                    bits.append(("Spells " + " ".join("%d" % v[0] for k, v in sorted(p.slots.items())), PALE if any(v[0] for v in p.slots.values()) else DGRAY))
+                for s_ in p.status:
+                    bits.append((s_.capitalize(), PINK))
+                if g.combat and acting:
+                    bits.append(("Move %d" % p.mp + (" · acted" if PIC_MODE and p.acted else " acted" if p.acted else ""), GOLD))
+                if p.ai:
+                    bits.append(("AI", DGRAY))
+                cx = x + 3
+                for t, c in bits:
+                    if cx + len(t) > x + w - 1:
+                        break
+                    self.put(cy, cx, t, self.C(c, bg))
+                    cx += len(t) + 2
+                cy += 1
+            if per >= 4:
+                cy += 1
+        if per < 4:
+            cy += 1
         if g.combat:
-            self.put(cy, x + 2, "-- Initiative, round %d --" % g.combat["round"], self.C(YELLOW, bg))
+            if cy >= y + h - 1:
+                return
+            self.put(cy, x + 1, "TURN ORDER", self.C(GRAY, bg, True))
+            rd = "round %d" % g.combat["round"]
+            self.put(cy, x + w - len(rd) - 1, rd, self.C(DGRAY, bg))
             cy += 1
-            order = g.combat["order"]
-            idx = g.combat["idx"]
-            seq = order[idx:] + order[:idx]
+            room = y + h - cy
+            more = len(seq) - room + 1
+            if len(seq) > room:
+                seq = seq[:max(0, room - 1)] + [None]
             for a in seq:
-                if cy >= y + h:
+                if a is None:
+                    self.put(cy, x + 3, "+%d more" % more, self.C(DGRAY, bg))
                     break
-                if a.dead or not (a.is_pc or a in g.area.actors) or not (a.conscious or a.downed):
-                    continue
-                if not a.is_pc and not g.sees(a):
-                    continue
-                col = a.fg if a.is_pc else (RED if a.faction == "hostile" else LIGHT)
-                nm = a.name[:16]
-                self.put(cy, x + 2, ("> " if a is cur else "  ") + nm, self.C(col, bg, a is cur))
+                acting = a is cur
+                rbg = hi if acting else bg
+                if acting:
+                    self.put(cy, x, " " * w, self.C(LIGHT, hi))
+                foe = not a.is_pc and a.faction == "hostile"
+                col = a.fg if a.is_pc else ((203, K.COLOR_RED) if foe else LIGHT)
+                self.put(cy, x + 1, ("▶" if PIC_MODE else ">") if acting else " ", self.C(GOLD, rbg, True))
+                bw = 6 if w >= 28 else 4
+                nm = a.name[:w - bw - 6]
+                self.put(cy, x + 3, nm, self.C(col, rbg, acting))
                 if not a.is_pc:
-                    bar, bc = self.hpbar(a, 8)
-                    self.put(cy, x + 21, bar, self.C(bc, bg))
+                    full, empty, bc = self.hpbar(a, bw)
+                    self.put(cy, x + w - bw - 1, full, self.C(bc, rbg))
+                    self.put(cy, x + w - bw - 1 + len(full), empty, self.C((238, K.COLOR_BLACK), rbg))
                 cy += 1
         else:
-            lines = ["Walk into people to talk,", "into foes to fight.", "", "i inventory  c character",
-                     "j journal    z cast spell", "r rest       m message log", "S save       ? help"]
-            if g.area.kind != "town":
-                lines[0:2] = ["Exits: > stairs or the", "yellow > at a map edge."]
-            for l in lines:
+            act = [q["title"] for q in g.quests.values() if q["state"] == "active"]
+            lines = []
+            if act and cy + 3 < y + h:
+                self.put(cy, x + 1, "QUESTS", self.C(GRAY, bg, True))
+                cy += 1
+                for t in act[-3:]:
+                    for l in wrap(t, w - 5)[:2]:
+                        lines.append(l)
+                for j, l in enumerate(lines):
+                    if cy >= y + h - 3:
+                        break
+                    self.put(cy, x + 1, ("· " if PIC_MODE else "- ") if j == 0 or not lines[j - 1:j] else "  ", self.C(GOLD, bg))
+                    self.put(cy, x + 3, l, self.C(LIGHT, bg))
+                    cy += 1
+                cy += 1
+            hint = (["Walk into people to talk,", "into foes to fight."] if g.area.kind == "town"
+                    else ["Leave by the > stairs or", "a yellow > at the map edge."])
+            for l in wrap(" ".join(hint), w - 3):
                 if cy >= y + h:
                     break
-                self.put(cy, x + 2, l, self.C(DGRAY, bg))
+                self.put(cy, x + 1, l, self.C(DGRAY, bg))
                 cy += 1
 
-    def draw_log(self, g, y, W):
-        self.put(y, 0, "-" * W, self.C(DGRAY))
-        self.put(y, 2, " Log ", self.C(GRAY))
-        if g.combat:
-            hint = " arrows/numpad move  f attack  z spell  p potion  a auto  Space end turn "
-        else:
-            hint = " arrows/numpad/yubn move  i c j z r  S save  ? help  Q quit "
-        self.put(y, max(8, W - len(hint) - 2), hint, self.C(GRAY))
+    def draw_log(self, g, y, W, lh=LOG_H):
+        """The message log: a quiet rule, then the newest lines bright and older ones dimmed."""
+        rule = "─" if PIC_MODE else "-"
+        self.put(y, 0, rule * W, self.C(DDGRAY))
+        self.put(y, 2, " LOG ", self.C(GRAY, BLACK, True))
+        n = lh - 2
+        log = list(g.log)
+        fresh = clamp(getattr(g, "log_n", 0) - getattr(self, "log_mark", 0), 0, len(log))
         lines = []
-        for text, col in list(g.log)[-(LOG_H + 4):]:
+        for i, (text, col) in enumerate(log[-(n + 4):]):
+            new = i >= len(log[-(n + 4):]) - fresh
             for l in wrap(text, W - 3):
-                lines.append((l, col))
-        lines = lines[-(LOG_H - 1):]
+                lines.append((l, col if new else (244, K.COLOR_WHITE)))
+        lines = lines[-n:]
         for i, (l, col) in enumerate(lines):
             self.put(y + 1 + i, 1, l, self.C(col))
+
+    def footer_bar(self, keys):
+        """The shared ASCII ARCADE footer: label on the left, a few key hints on the right."""
+        H, W = self.scr.getmaxyx()
+        label = " ASCII ARCADE "
+        self.put(H - 1, 0, " " * (W - 1), self.C(FOOTER_FG, FOOTER_BG))
+        self.put(H - 1, 0, label, self.C(BLACK, FOOTER_LABEL))
+        keys = " %s " % keys
+        while len(keys) > W - len(label) - 2 and "   " in keys.strip():
+            keys = " " + keys.strip().rsplit("   ", 1)[0] + " "   # drop hints from the right until it fits
+        self.put(H - 1, max(len(label) + 1, W - 1 - len(keys)), keys, self.C(FOOTER_FG, FOOTER_BG))
+
+    def draw_footer(self, g, H, W):
+        if g.combat:
+            self.footer_bar("f attack   z spell   p potion   Space end turn   ? help")
+        else:
+            self.footer_bar("arrows move   i items   c hero   j journal   ? help   Esc menu")
 
     # --- animation ----------------------------------------------------------------------
     def animate(self, g):
@@ -7583,20 +7765,26 @@ class UI:
                 time.sleep(0.16)
                 self.burst = {}
         if any(e[0] in ("text", "shake") for e in ev):
-            for _ in range(3):
+            hits = {(e[1], e[2]) for e in ev if e[0] == "text" and e[3].startswith("-") and (e[1], e[2]) in g.visible}
+            for i in range(3):
+                # a struck creature flashes white, then red, so every hit lands visibly on the map
+                self.burst = {p: (WHITE if i == 0 else RED) for p in hits} if i < 2 else {}
                 self.draw_main(g)
                 time.sleep(0.05)
+            self.burst = {}
 
     # --- generic modals --------------------------------------------------------------------
-    def menu(self, title, items, art=None, footer=None, sel=0, width=None, detail=None):
-        """items: [(label, value, enabled)] -> value or None."""
+    def menu(self, title, items, art=None, footer=None, sel=0, width=None, detail=None, hotkeys=None):
+        """items: [(label, value, enabled)] -> value or None. hotkeys: {key code: value} shortcuts."""
         if not items:
             return None
         while True:
             if self.g:
-                self.draw_main(self.g, refresh=False)
+                self.modal_backdrop(self.g)
             H, W = self.scr.getmaxyx()
             alines = art_lines(art)[0] if art else []
+            if alines and len(alines) + len(items) + 6 > H - 2:   # small window: the list matters more than the picture
+                alines, art = [], None
             w = width or min(W - 4, max(44, max(len(i[0]) for i in items) + 8, max([len(l) for l in alines] + [0]) + 4))
             dl = wrap(detail(items[sel][1]), w - 4) if detail else []
             h = min(H - 2, len(items) + 4 + len(alines) + (len(dl) + 1 if dl else 0) + (1 if footer else 0))
@@ -7610,7 +7798,7 @@ class UI:
             top = clamp(sel - room + 1, 0, max(0, len(items) - room))
             for i in range(top, min(len(items), top + room)):
                 lab, val, en = items[i]
-                a = self.C(BLACK, GOLD) if i == sel else self.C(LIGHT if en else DGRAY)
+                a = self.C(BLACK, TITLE_SEL) if i == sel else self.C(LIGHT if en else DGRAY)
                 self.put(cy, x + 2, (" %-*s" % (w - 5, lab))[:w - 4], a)
                 cy += 1
             if dl:
@@ -7622,6 +7810,9 @@ class UI:
                 self.put(y + h - 2, x + 2, footer[:w - 4], self.C(DGRAY))
             self.refresh()
             k = self.wait_key()
+            if hotkeys and k in hotkeys:
+                sfx("select")
+                return hotkeys[k]
             if k in (curses.KEY_UP, ord('8'), ord('k')):
                 sel = (sel - 1) % len(items)
                 sfx("tick")
@@ -7638,7 +7829,7 @@ class UI:
     def message(self, title, text, art=None, fmt=None, col=LIGHT):
         while True:
             if self.g and self.g.area:
-                self.draw_main(self.g, refresh=False)
+                self.modal_backdrop(self.g)
             else:
                 self.erase()
             H, W = self.scr.getmaxyx()
@@ -7646,6 +7837,8 @@ class UI:
             aw = max([len(l) for l in alines] + [0])
             w = min(W - 4, max(60, aw + 6))
             tl = wrap(text, w - 6)
+            if alines and (len(tl) + len(alines) + 6 > H - 2 or aw > w - 4):   # no room: keep the words, drop the picture
+                alines, aw, art = [], 0, None
             h = min(H - 2, len(tl) + len(alines) + 5 + (1 if alines else 0))
             y, x = max(0, (H - h) // 2), max(0, (W - w) // 2)
             self.box(y, x, h, w, GOLD, title)
@@ -7734,11 +7927,13 @@ class UI:
             sel = clamp(sel, 0, len(opts) - 1)
             if self.pilot:
                 sel = self.pilot.choose_dialogue(g, npc, node, opts)
-            self.draw_main(g, refresh=False)
+            self.modal_backdrop(g)
             H, W = self.scr.getmaxyx()
             lines, pf, pp = art_lines(port)
             pw = max([len(l) for l in lines] + [0])
             w = min(W - 2, 112)
+            if lines and (w - pw - 7 < 36 or len(lines) + 4 > H - 2):   # small window: text first, no portrait
+                lines, pw, port = [], -3, None
             tw = w - pw - 7
             tl = wrap(text, tw)
             ol = []
@@ -7748,8 +7943,9 @@ class UI:
             h = min(H - 2, max(len(lines) + 4, len(tl) + len(ol) + 6))
             y, x = max(0, (H - h) // 2 - 1), max(0, (W - w) // 2)
             self.box(y, x, h, w, AMBER, spk)
-            self.art(y + 2, x + 2, port, lines, pf, pp)
-            self.put(y + 2 + len(lines) + 1, x + 2 + max(0, (pw - len(spk)) // 2), spk[:pw + 2], self.C(pf, BLACK, True))
+            if lines:
+                self.art(y + 2, x + 2, port, lines, pf, pp)
+                self.put(y + 2 + len(lines) + 1, x + 2 + max(0, (pw - len(spk)) // 2), spk[:pw + 2], self.C(pf, BLACK, True))
             tx = x + pw + 5
             cy = y + 2
             for l in tl:
@@ -7759,7 +7955,7 @@ class UI:
                 cy += 1
             cy = max(cy + 1, y + h - 1 - len(ol) - 1)
             for i, l in ol:
-                a = self.C(BLACK, AMBER) if i == sel else self.C(AMBER)
+                a = self.C(BLACK, TITLE_SEL) if i == sel else self.C(AMBER)
                 self.put(cy, tx, l.ljust(tw)[:tw], a)
                 cy += 1
             self.refresh()
@@ -7801,7 +7997,7 @@ class UI:
             else:
                 info += "  HP %d/%d" % (max(0, t.hp), t.max_hp)
             info += "   [Tab/arrows] next  [Enter] confirm  [Esc] cancel"
-            self.put(H - LOG_H, 1, " " + info[:W - 4] + " ", self.C(BLACK, YELLOW))
+            self.put(H - self.layout()[3], 0, (" " + info).ljust(W)[:W], self.C(BLACK, YELLOW))
             self.refresh()
             k = self.wait_key()
             if k in (9, curses.KEY_RIGHT, curses.KEY_DOWN, ord('6'), ord('2')):
@@ -7839,7 +8035,7 @@ class UI:
                 g.tick()
         elif c == "v":
             modes = self.view_modes()
-            cur = self.view_mode(self.W - SIDE_W, self.H - 1 - LOG_H)
+            cur = self.view_mode(*self.layout()[:2])
             self.view_pref = modes[(modes.index(cur) + 1) % len(modes)]
             g.msg("Map view: %s." % {"narrow": "narrow tiles", "square": "square tiles",
                                       "sprite": "pixel tiles", "large": "large pixel tiles",
@@ -7893,7 +8089,9 @@ class UI:
         while True:
             v = self.menu("Game menu", [("Keep playing", False, True), ("How to play", "help", True),
                                         (SND.label(), "sound", SND.available),
-                                        (save, "save", True), ("Quit without saving", "quit", True)], sel=sel)
+                                        (save, "save", True), ("Quit without saving", "quit", True)], sel=sel,
+                          footer="[Enter] choose  [m] sound  [q] %s" % ("save+quit" if not g.combat else "quit"),
+                          hotkeys={ord('m'): "sound", ord('M'): "sound", ord('q'): "save", ord('Q'): "save"})
             if v != "sound":
                 break
             SND.toggle()
@@ -8074,7 +8272,7 @@ class UI:
             top = clamp(sel - room + 1, 0, max(0, len(counts) - room))
             for i, (it, n) in enumerate(counts[top:top + room], top):
                 ch, col = item_glyph(it)
-                a = self.C(BLACK, GOLD) if i == sel else self.C(LIGHT)
+                a = self.C(BLACK, TITLE_SEL) if i == sel else self.C(LIGHT)
                 self.put(4 + i - top, 3, ch, self.C(col))
                 self.put(4 + i - top, 5, (" %-26s %s" % (ITEMS[it]["name"] + (" x%d" % n if n > 1 else ""), "")).ljust(30)[:30], a)
             if counts:
@@ -8148,27 +8346,35 @@ class UI:
         while True:
             p = g.party[i]
             H, W = self.full_box("Character - %d/%d" % (i + 1, len(g.party)))
-            lines, pf, pp = art_lines(p.portrait)
-            self.art(2, 3, p.portrait)
-            ay = 3 + len(lines)
-            self.put(ay, 3, p.name, self.C(p.fg, BLACK, True))
-            self.put(ay + 1, 3, "%s %s, level %d" % (RACES[p.race]["name"], CLASSES[p.cls]["name"], p.level), self.C(LIGHT))
             nxt = XP_LEVELS[p.level + 1] if p.level < MAX_LEVEL else None
-            self.put(ay + 2, 3, "XP %d%s" % (p.xp, (" / %d" % nxt) if nxt else " (max level)"), self.C(GRAY))
-            for j, l in enumerate(wrap(p.bio, 30)[:4]):
-                self.put(ay + 4 + j, 3, l, self.C(DGRAY))
-            cx = 38
+            who = "%s %s, level %d" % (RACES[p.race]["name"], CLASSES[p.cls]["name"], p.level)
+            xp = "XP %d%s" % (p.xp, (" / %d" % nxt) if nxt else " (max level)")
+            top = 2
+            if W >= 100:
+                lines, pf, pp = art_lines(p.portrait)
+                self.art(2, 3, p.portrait)
+                ay = 3 + len(lines)
+                self.put(ay, 3, p.name, self.C(p.fg, BLACK, True))
+                self.put(ay + 1, 3, who, self.C(LIGHT))
+                self.put(ay + 2, 3, xp, self.C(GRAY))
+                for j, l in enumerate(wrap(p.bio, 30)[:4]):
+                    self.put(ay + 4 + j, 3, l, self.C(DGRAY))
+                cx = 38
+            else:                                 # narrow window: name line on top, no portrait
+                self.put(2, 3, p.name, self.C(p.fg, BLACK, True))
+                self.put(2, 4 + len(p.name), (who + "   " + xp)[:W - 8 - len(p.name)], self.C(GRAY))
+                cx, top = 3, 3
             hpcol = RED if p.dead else LIGHT
-            self.put(2, cx, "HP %d/%d   AC %d   Speed %d   Proficiency +%d" % (max(0, p.hp), p.max_hp, p.ac, p.speed, p.prof), self.C(hpcol))
+            self.put(top, cx, ("HP %d/%d   AC %d   Speed %d   Proficiency +%d" % (max(0, p.hp), p.max_hp, p.ac, p.speed, p.prof))[:W - cx - 2], self.C(hpcol))
             w = p.weapon
-            self.put(3, cx, "Attack %s with %s: %s%s %s" % (sgn(p.attack_bonus()), w["name"], w["dmg"],
+            self.put(top + 1, cx, "Attack %s with %s: %s%s %s" % (sgn(p.attack_bonus()), w["name"], w["dmg"],
                                                            sgn(p.damage_bonus()) if p.damage_bonus() else "", w["dtype"]), self.C(LIGHT))
             for j, s in enumerate(STATS):
                 v = p.stats[s]
                 sv = p.save_bonus(s)
-                self.put(5 + j, cx, "%s %2d (%s)   save %s" % (s, v, sgn(mod(v)), sgn(sv)),
+                self.put(top + 3 + j, cx, "%s %2d (%s)   save %s" % (s, v, sgn(mod(v)), sgn(sv)),
                          self.C(YELLOW if s in CLASSES[p.cls]["saves"] else LIGHT))
-            fy = 5
+            fy = top + 3
             fx = cx + 30
             feats = []
             if p.cls == "fighter":
@@ -8190,21 +8396,21 @@ class UI:
                 feats.append("Slots: " + (" ".join("L%s %d/%d" % (k, v[0], v[1]) for k, v in sorted(p.slots.items())) or "-"))
                 feats += ["  " + SPELLS[s]["name"] for s in p.spells]
             self.put(fy - 1, fx, "Features", self.C(YELLOW))
-            for j, f in enumerate(feats[:H - fy - 14]):
+            for j, f in enumerate(feats[:max(6, H - fy - 14)]):
                 self.put(fy + j, fx, f[:W - fx - 2], self.C(LIGHT))
-            ey = max(12, fy + len(feats) + 1)
+            ey = max(top + 10, fy + len(feats) + 1)
             ey = min(ey, H - 9)
             self.put(ey, cx, "Equipment", self.C(YELLOW))
             for j, s in enumerate(slots):
                 it = p.equip.get(s)
-                a = self.C(BLACK, GOLD) if j == slot_sel else self.C(LIGHT)
+                a = self.C(BLACK, TITLE_SEL) if j == slot_sel else self.C(LIGHT)
                 txt = "%-7s %s" % (s.capitalize(), ITEMS[it]["name"] + "  - " + item_desc(it) if it else "-")
                 self.put(ey + 1 + j, cx, (" " + txt).ljust(W - cx - 3)[:W - cx - 3], a)
             ai = "on" if p.ai else "off"
-            foot = "[Left/Right] member  [Up/Down] slot  [Enter] change  [a] AI: %s" % ai
+            foot = "[Left/Right] member   [Up/Down] slot   [Enter] change   [a] AI: %s" % ai
             if p is not g.leader:
-                foot += "  [D] dismiss"
-            self.put(H - 2, 3, foot, self.C(DGRAY))
+                foot += "   [D] dismiss"
+            self.hint_line(H - 2, 3, foot, W - 6)
             self.refresh()
             k = self.wait_key()
             if k in ESC or k == ord('c') or k == ord('q'):
@@ -8318,7 +8524,7 @@ class UI:
             for j, it in enumerate(lst[top:top + room], top):
                 d = ITEMS[it]
                 price = d["price"] if mode == 0 else d["price"] // 2
-                a = self.C(BLACK, GOLD) if j == sel else self.C(LIGHT if (mode == 1 or price <= g.gold) else DGRAY)
+                a = self.C(BLACK, TITLE_SEL) if j == sel else self.C(LIGHT if (mode == 1 or price <= g.gold) else DGRAY)
                 self.put(4 + j - top, 30, (" %-26s %5d gp  %s" % (d["name"], price, item_desc(it)))[:W - 33].ljust(min(W - 33, 80)), a)
             if not lst:
                 self.put(4, 31, "(nothing to sell)", self.C(DGRAY))
@@ -8376,7 +8582,7 @@ class UI:
             rows[cy][cx] = [mark, mcol, rows[cy][cx][2]]
             for i, ch in enumerate(lbl):
                 rows[ly][lx + i] = [ch, fg, bg]
-        self.rawmap = (y0, x0, [[tuple(c) for c in r] for r in rows])
+        self.rawmap = (y0, x0, self.dimmed([[tuple(c) for c in r] for r in rows]))
         for j in range(h):
             self.put(y0 + j, x0, " " * w, self.mark_attr)
 
@@ -8460,6 +8666,12 @@ class UI:
             ("d changes the difficulty (Easy / Normal / Hard) at any time outside combat.", LIGHT),
             ("The adventure ends if the whole party falls, or if you come home with a dead hero and no coin.", LIGHT),
             ("", LIGHT),
+            ("READING THE MAP", YELLOW),
+            ("Gold ground marks your leader. In combat it pulses under whoever acts now.", LIGHT),
+            ("Red ground marks a foe. A blinking white frame is the target you are aiming at.", LIGHT),
+            ("+ is a closed door, ' an open one, > < are stairs, ^ a trap you have found.", LIGHT),
+            ("v cycles the map view: narrow, square and pixel tiles (pixel tiles need truecolour).", LIGHT),
+            ("", LIGHT),
             ("OTHER KEYS", YELLOW),
             ("i inventory   c character sheet (equipment, AI, dismiss)   j journal   m message log", LIGHT),
             ("r rest (restores HP and spells; might be interrupted)   Tab select party member", LIGHT),
@@ -8469,11 +8681,34 @@ class UI:
             ("", LIGHT),
             ("Rules after the D&D 5e System Reference Document 5.1 (CC-BY-4.0, Wizards of the Coast).", DGRAY),
         ]
-        H, W = self.full_box("Help")
-        for j, (l, c) in enumerate(txt[:H - 3]):
-            self.put(2 + j, 3, l[:W - 6], self.C(c))
-        self.refresh()
-        self.wait_key()
+        scroll = 0
+        while True:
+            H, W = self.full_box("Help")
+            lines = []
+            for l, c in txt:
+                ind = len(l) - len(l.lstrip())
+                for j, part in enumerate(wrap(l.strip(), W - 8 - ind) or [""]):
+                    lines.append((" " * (ind + (2 if j else 0)) + part, c))
+            room = H - 4
+            scroll = clamp(scroll, 0, max(0, len(lines) - room))
+            for j, (l, c) in enumerate(lines[scroll:scroll + room]):
+                self.put(2 + j, 3, l[:W - 6], self.C(c, BLACK, c == YELLOW))
+            more = len(lines) > room
+            self.hint_line(H - 2, 3, ("[Up/Down] scroll   " if more else "") + "[any other key] back", W - 6)
+            self.refresh()
+            k = self.wait_key()
+            if more and k in (curses.KEY_UP, ord('8'), curses.KEY_PPAGE):
+                scroll -= 1 if k != curses.KEY_PPAGE else room
+            elif more and k in (curses.KEY_DOWN, ord('2'), curses.KEY_NPAGE, ord(' ')):
+                scroll += 1 if k not in (curses.KEY_NPAGE, ord(' ')) else room
+            else:
+                return
+
+    def hint_line(self, y, x, text, maxw, col=None):
+        """A row of [key] hints; on a narrow screen hints drop off the end instead of being cut mid-word."""
+        while len(text) > maxw and "   " in text:
+            text = text.rsplit("   ", 1)[0]
+        self.put(y, x, text[:maxw], self.C(col or DGRAY))
 
     def gameover(self, g):
         H, W = self.full_box("Your adventure ends", RED)
@@ -8563,10 +8798,7 @@ class UI:
                 self.put(y + 1 + i * 2, px0 + 2, line, sel_a if i == sel else panel)
             credit = "Rules after the D&D 5e SRD 5.1 (CC-BY-4.0)."
             self.put(H - 2, max(0, (W - len(credit)) // 2), credit, self.C(DGRAY))
-            label, keys = " ASCII ARCADE ", " Up/Down choose   Enter start   ? help   Esc quit "
-            self.put(H - 1, 0, " " * (W - 1), self.C(FOOTER_FG, FOOTER_BG))
-            self.put(H - 1, 0, label, self.C(BLACK, FOOTER_LABEL))
-            self.put(H - 1, max(len(label) + 1, W - 1 - len(keys)), keys, self.C(FOOTER_FG, FOOTER_BG))
+            self.footer_bar("Up/Down choose   Enter start   ? help   Esc quit")
             self.refresh()
             k = self.key()
             if k in (curses.KEY_UP, ord('8')):
@@ -8621,7 +8853,7 @@ class UI:
         while True:
             H, W = self.full_box(title)
             for i, (lab, v) in enumerate(opts):
-                self.put(4 + i * 2, 4, (" %-12s " % lab), self.C(BLACK, GOLD) if i == sel else self.C(LIGHT))
+                self.put(4 + i * 2, 4, (" %-12s " % lab), self.C(BLACK, TITLE_SEL) if i == sel else self.C(LIGHT))
             art, text = info(opts[sel][1])
             x = 24
             y = 3
@@ -8649,25 +8881,28 @@ class UI:
         sel, mark = 0, None
         while True:
             H, W = self.full_box("Roll your abilities")
-            self.art(2, 4, race + "_" + cls)
-            x = 34
+            if W >= 96:
+                self.art(2, 4, race + "_" + cls)
+                x = 34
+            else:
+                x = 4
             self.put(2, x, "%s, %s %s" % (name, RACES[race]["name"], CLASSES[cls]["name"]), self.C(YELLOW, BLACK, True))
-            self.put(3, x, "4d6, drop the lowest die. Reroll as often as you like.", self.C(GRAY))
+            self.put(3, x, "4d6, drop the lowest die. Reroll as often as you like."[:W - x - 2], self.C(GRAY))
             for i, s in enumerate(STATS):
                 b = RACES[race]["bonus"].get(s, 0)
                 v = vals[s] + b
                 prim = s == CLASSES[cls]["order"][0]
-                a = self.C(BLACK, GOLD) if i == sel else self.C(YELLOW if prim else LIGHT)
+                a = self.C(BLACK, TITLE_SEL) if i == sel else self.C(YELLOW if prim else LIGHT)
                 txt = " %s  %2d %s = %2d  (%s) " % (s, vals[s], ("+%d" % b) if b else "  ", v, sgn(mod(v)))
                 if mark == i:
                     txt += "<swap>"
                 self.put(5 + i, x, txt, a)
-                self.put(5 + i, x + 30, "#" * max(0, v - 2), self.C(EMBER if v >= 16 else (AMBER if v >= 12 else DGRAY)))
+                self.put(5 + i, x + 30, ("\u2501" if PIC_MODE else "#") * max(0, v - 2), self.C(EMBER if v >= 16 else (AMBER if v >= 12 else DGRAY)))
             tot = sum(vals.values())
             self.put(12, x, "Total %d %s" % (tot, "(heroic!)" if tot >= 80 else "(sturdy)" if tot >= 72 else "(humble)"), self.C(GRAY))
             hp = CLASSES[cls]["hd"] + mod(vals["CON"] + RACES[race]["bonus"].get("CON", 0))
             self.put(13, x, "Starting HP %d" % max(1, hp), self.C(GRAY))
-            self.put(H - 2, 4, "[r] reroll   [Up/Down + Space] swap two scores   [Enter] begin   [Esc] back", self.C(DGRAY))
+            self.hint_line(H - 2, 4, "[r] reroll   [Enter] begin   [Up/Down + Space] swap two scores   [Esc] back", W - 7)
             self.refresh()
             k = self.wait_key()
             if k in (ord('r'), ord('R')):
@@ -8727,6 +8962,7 @@ def ui_run(self, g):
         k = self.key()
         if k == -1 or k == curses.KEY_RESIZE:
             continue
+        self.log_mark = getattr(g, "log_n", 0)
         self.on_key(g, k)
         self.animate(g)
 

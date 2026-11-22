@@ -2605,7 +2605,7 @@ PAL = [
         top=(122, 192, 64), top_hi=(178, 228, 98), top_lo=(78, 142, 50),
         moss=(88, 176, 74), moss_hi=(150, 222, 96), crumble=(204, 162, 98), crack=(122, 86, 52),
         plank=(156, 108, 62), plank_hi=(206, 160, 98), plank_lo=(96, 64, 40),
-        thorn=(124, 44, 58), thorn_hi=(236, 170, 176), water=(56, 140, 182), water_hi=(160, 218, 240),
+        thorn=(150, 40, 56), thorn_hi=(255, 160, 168), water=(56, 140, 182), water_hi=(160, 218, 240),
         water_lo=(30, 86, 128), beetle=((96, 72, 176), (150, 128, 230), (52, 38, 104)),
         plant=((196, 70, 150), (240, 140, 200)), shot=(250, 230, 110), bat=((70, 52, 84), (120, 96, 140))),
     dict(  # crystal caves: violet stone, glowing frost
@@ -2613,15 +2613,15 @@ PAL = [
         top=(150, 140, 220), top_hi=(214, 206, 255), top_lo=(104, 92, 170),
         moss=(60, 190, 190), moss_hi=(150, 250, 240), crumble=(170, 126, 230), crack=(88, 60, 140),
         plank=(120, 200, 230), plank_hi=(210, 250, 255), plank_lo=(60, 110, 160),
-        thorn=(80, 200, 220), thorn_hi=(230, 255, 255), water=(40, 150, 160), water_hi=(150, 255, 240),
+        thorn=(150, 40, 96), thorn_hi=(255, 130, 180), water=(40, 150, 160), water_hi=(150, 255, 240),
         water_lo=(20, 80, 100), beetle=((50, 170, 200), (150, 240, 255), (24, 80, 110)),
-        plant=((150, 80, 220), (220, 160, 255)), shot=(170, 255, 240), bat=((40, 30, 60), (110, 80, 150))),
+        plant=((150, 80, 220), (220, 160, 255)), shot=(170, 255, 240), bat=((92, 64, 140), (176, 140, 230))),
     dict(  # sky ruins: pale stone, green turf
         body=((196, 190, 176), (182, 176, 162), (206, 200, 188)), deep=(150, 144, 136), line=(96, 90, 92),
         top=(130, 196, 92), top_hi=(190, 236, 132), top_lo=(86, 150, 70),
         moss=(98, 168, 84), moss_hi=(160, 214, 116), crumble=(220, 212, 190), crack=(140, 130, 118),
-        plank=(212, 206, 196), plank_hi=(250, 248, 240), plank_lo=(140, 134, 128),
-        thorn=(150, 120, 90), thorn_hi=(250, 230, 200), water=(90, 160, 230), water_hi=(200, 240, 255),
+        plank=(184, 132, 88), plank_hi=(232, 188, 132), plank_lo=(112, 76, 52),
+        thorn=(160, 56, 60), thorn_hi=(255, 176, 160), water=(90, 160, 230), water_hi=(200, 240, 255),
         water_lo=(60, 110, 190), beetle=((200, 150, 60), (250, 210, 120), (120, 80, 30)),
         plant=((220, 90, 80), (255, 170, 140)), shot=(255, 240, 150), bat=((80, 76, 96), (140, 136, 160))),
     dict(  # autumn storm at night: dark soil under orange leaf litter
@@ -2629,9 +2629,9 @@ PAL = [
         top=(204, 106, 44), top_hi=(250, 168, 76), top_lo=(140, 64, 34),
         moss=(76, 120, 70), moss_hi=(130, 176, 100), crumble=(140, 100, 70), crack=(70, 48, 40),
         plank=(120, 84, 60), plank_hi=(170, 124, 84), plank_lo=(70, 48, 36),
-        thorn=(110, 60, 50), thorn_hi=(230, 180, 140), water=(40, 64, 96), water_hi=(130, 160, 200),
+        thorn=(150, 44, 44), thorn_hi=(255, 130, 104), water=(46, 76, 116), water_hi=(150, 184, 228),
         water_lo=(22, 36, 60), beetle=((170, 50, 40), (240, 120, 80), (90, 24, 20)),
-        plant=((120, 160, 60), (190, 220, 110)), shot=(255, 200, 90), bat=((36, 30, 44), (90, 80, 110))),
+        plant=((120, 160, 60), (190, 220, 110)), shot=(255, 200, 90), bat=((84, 66, 96), (170, 148, 196))),
 ]
 
 # ---- Leafling himself: L for tiles of 6+ pixels, S for small windows ---------------------------------------
@@ -2747,9 +2747,29 @@ class Backdrop:
         self.P = P = max(256, (W * 2 // 64 + 1) * 64)
         self.sky = self.make_sky(False)
         self.layers = self.make_layers(False)
+        self.recede()
         if biome == 3:
             self.sky_flash = self.make_sky(True)
             self.layers_flash = self.make_layers(True)
+
+    # aerial perspective: the scenery behind the level is washed towards one haze colour per world, more the
+    # further back a layer sits, so it never competes with the platforms, hazards and Leafling in front
+    HAZE = {0: ((196, 224, 222), (0.42, 0.45, 0.3), 0.0), 1: ((22, 14, 40), (0.35, 0.55), 0.0),
+            2: ((168, 202, 244), (0.3, 0.38, 0.32), 0.22), 3: ((28, 22, 46), (0.25, 0.32), 0.0)}
+
+    def recede(self):
+        col, alphas, sky_a = self.HAZE[self.biome]
+        done = {}
+        for n, (factor, cols) in enumerate(self.layers):
+            a = alphas[min(n, len(alphas) - 1)]
+            for spans in cols:
+                for j, (y0, y1, tab) in enumerate(spans):
+                    key = (id(tab), a)
+                    if key not in done:
+                        done[key] = [mix(c, col, a) for c in tab]
+                    spans[j] = (y0, y1, done[key])
+        if sky_a:
+            self.sky = [[mix(c, col, sky_a) for c in row] for row in self.sky]
 
     def grad(self, stops, n=None, k=1.0):
         """Colour table indexed by y + margin from a list of (position 0..1, colour)."""
@@ -3640,6 +3660,11 @@ class Fx:
         self.thunder_at = None
         self.rnd = random.Random(lv.n * 7 + 1)
         self.t = 0.0
+        self.toasts = []                          # [text, x, y, ttl, colour]: little labels that rise and fade
+        self.got_t = {}                           # HUD pulse timers: "mote", "seed", "life", "hurt"
+
+    def toast(self, text, x, y, col, ttl=1.3):
+        self.toasts = [tt for tt in self.toasts if tt[0] != text][-3:] + [[text, x, y, ttl, col]]
 
     def play(self, name, vol=1.0):
         if self.sound:
@@ -3688,16 +3713,22 @@ class Fx:
                 self.chain = self.chain + 1 if self.chain_t < 0.55 else 0
                 self.chain_t = 0.0
                 self.play("mote%d" % min(7, self.chain), 0.9)
+                self.got_t["mote"] = 0.35
             elif k == "life":
                 self.burst(sim.x, sim.y - 0.6, 12, [(255, 120, 140), (255, 200, 210)], 3, 0.7)
+                self.toast("+1 leaf", sim.x, sim.y - 2.2, (255, 150, 170))
+                self.got_t["life"] = 1.0
             elif k == "seed":
                 sx, sy = self.lv.seeds[e[1]]
                 self.burst(sx, sy, 22, [(255, 240, 160), (255, 200, 80), (255, 255, 255)], 4.5, 0.8)
                 self.play("seed")
+                self.toast("seed %d/%d" % (popcount(sim.seeds), len(self.lv.seeds)), sx, sy - 1.2, (255, 220, 110))
+                self.got_t["seed"] = 1.0
             elif k == "cp":
                 lx, ly = self.lv.lanterns[e[1]]
                 self.burst(lx, ly - 1.4, 16, [(255, 220, 130), (255, 180, 80)], 3.5, 0.7, up=1.0)
                 self.play("checkpoint")
+                self.toast("lantern lit", lx, ly - 3.2, (255, 214, 130), 1.6)
             elif k == "spring":
                 self.spring_squash[(e[1], e[2])] = 1.0
                 self.squash = 0.35
@@ -3713,6 +3744,7 @@ class Fx:
                            5, 0.9, kind="leaf", up=2.0, grav=6.0)
                 self.shake = max(self.shake, 0.35)
                 self.play("hurt")
+                self.got_t["hurt"] = 0.8
             elif k == "crumble":
                 self.play("crumble", 0.6)
             elif k == "boss":
@@ -3742,6 +3774,14 @@ class Fx:
         self.squash *= max(0.0, 1 - dt * 9)
         self.shake = max(0.0, self.shake - dt * 1.6)
         self.blink = max(0.0, self.blink - dt)
+        for k in list(self.got_t):
+            self.got_t[k] -= dt
+            if self.got_t[k] <= 0:
+                del self.got_t[k]
+        for tt in self.toasts:
+            tt[3] -= dt
+            tt[2] -= dt * 0.9
+        self.toasts = [tt for tt in self.toasts if tt[3] > 0]
         for k in list(self.spring_squash):
             self.spring_squash[k] -= dt * 4
             if self.spring_squash[k] <= 0:
@@ -3850,13 +3890,13 @@ def weather(cv, lv, sim, fx, ox, oy, T, t):
     px, W, H = cv.px, cv.W, cv.H
     b = lv.biome
     if b == 3:
-        n = W * H // 170
-        c = (150, 166, 210) if fx.flash < 0.3 else (235, 235, 255)
+        n = W * H // 200                                  # rain: present but quieter than anything you can touch
+        c = (130, 146, 196) if fx.flash < 0.3 else (235, 235, 255)
         for i in range(n):
             sp = 1.3 + (i % 5) * 0.12
             x = int((i * 37.17 + t * W * 0.3 * sp - ox * 0.3) % (W + 20) - 10)
             y = int((i * 91.3 + t * H * 1.7 * sp) % (H + 8) - 4)
-            for k, a in ((0, 0.42), (1, 0.28), (2, 0.14)):
+            for k, a in ((0, 0.32), (1, 0.2), (2, 0.1)):
                 xx, yy = x - k // 2, y - k
                 if 0 <= xx < W and 0 <= yy < H:
                     px[yy][xx] = mix(px[yy][xx], c, a)
@@ -3923,16 +3963,22 @@ def render(sim, fx, cam, cols, rows, t, hud=True, painter=None, extra=None):
     painter.paint_hero(cv, sim, fx, ox, oy, T, t)
     fx.paint(cv, ox, oy, T)
     weather(cv, lv, sim, fx, ox, oy, T, t)
+    for text, x, y, ttl, col in fx.toasts:
+        a = min(1.0, ttl / 0.4)
+        c, r = int(x * T - ox) - len(text) // 2 - 1, int((y * T - oy) // 2)
+        if 1 <= r < cv.rows - 1:
+            cv.put(max(0, min(cols - len(text) - 2, c)), r, " %s " % text, mix(TOAST_BG, col, a), TOAST_BG)
     if lv.biome == 3 and fx.flash > 0.05 and not flash:
         k = fx.flash * 0.25
         for y in range(H):
             cv.px[y] = [mix(c, (220, 220, 255), k) for c in cv.px[y]]
     if hud:
-        draw_hud(cv, sim, t, extra or {})
+        draw_hud(cv, sim, t, extra or {}, fx)
     return cv
 
 
 HUD_BG, HUD_FG, HUD_DIM, HUD_GOLD = (14, 16, 26), (236, 236, 244), (140, 146, 176), (255, 214, 110)
+HUD_CHIP, HUD_RED, TOAST_BG = (30, 32, 50), (255, 110, 130), (20, 18, 30)
 
 
 def fmt_time(frames_or_s, frames=True):
@@ -3940,30 +3986,69 @@ def fmt_time(frames_or_s, frames=True):
     return "%d:%05.2f" % (int(s // 60), s % 60)
 
 
-def draw_hud(cv, sim, t, extra):
+def draw_hud(cv, sim, t, extra, fx=None):
+    """Top bar: what you can lose on the left (leaves), what you collect next to it, where you are on the right.
+    Each group sits on its own chip so the bar scans in three glances; a chip pulses when its number changes."""
     lv = sim.lv
     cols = cv.cols
+    got = fx.got_t if fx else {}
     cv.put(0, 0, " " * cols, HUD_FG, HUD_BG)
+    for x in range(cv.W):                                 # a soft shadow under the bar
+        if len(cv.px) > 2:
+            cv.px[2][x] = shade(cv.px[2][x], 0.6)
+    narrow = cols < 90
+    gap = 1 if narrow else 2
     x = 1
-    parts = [("•", HUD_GOLD), (" %d/%d" % (sim.mote_count, len(lv.motes)), HUD_FG), ("   ", HUD_FG)]
-    parts += [("◆" if sim.seeds >> i & 1 else "◇", HUD_GOLD if sim.seeds >> i & 1 else HUD_DIM) for i in range(len(lv.seeds))]
-    parts += [("   ", HUD_FG), ("♥", (255, 110, 130)), (" %d" % sim.lives, HUD_FG)]
-    parts += [("   ", HUD_FG), (fmt_time(extra.get("frames", sim.f)), HUD_FG)]
-    for s, c in parts:
-        cv.put(x, 0, s, c, HUD_BG)
-        x += len(s)
-    name = "%s %s" % (lv.meta.get("id", ""), lv.meta.get("name", ""))
+
+    def chip(parts, pulse=0.0, pulse_col=HUD_GOLD):
+        nonlocal x
+        bg = mix(HUD_CHIP, shade(pulse_col, 0.45), min(1.0, pulse)) if pulse > 0 else HUD_CHIP
+        w = sum(len(s_) for s_, c in parts) + 2
+        cv.put(x, 0, " " * w, HUD_FG, bg)
+        xx = x + 1
+        for s_, c in parts:
+            cv.put(xx, 0, s_, c, bg)
+            xx += len(s_)
+        x += w + gap
+
+    hurt = got.get("hurt", 0.0)
+    chip([("♥ ", HUD_RED), ("%d" % sim.lives, HUD_FG)], max(hurt, got.get("life", 0.0)), HUD_RED)
+    chip([("• ", HUD_GOLD), ("%d" % sim.mote_count, HUD_FG), ("/%d" % len(lv.motes), HUD_DIM)], got.get("mote", 0.0) * 2)
+    if lv.seeds:
+        chip([(" ".join("◆" if sim.seeds >> i & 1 else "◇" for i in range(len(lv.seeds))),
+               HUD_GOLD if sim.seeds else HUD_DIM)], got.get("seed", 0.0))
+    left_end = x
+    # right side: the level, then the clock in front of it
+    name = lv.meta.get("name", "")
+    lid = lv.meta.get("id", "")
+    tm = fmt_time(extra.get("frames", sim.f))
     if lv.boss and sim.boss and not sim.boss_done:
-        name = "boss " + "■" * sim.boss[4] + "□" * (lv.boss["hp"] - sim.boss[4])
-    if x + len(name) + 2 < cols:
-        cv.put(cols - len(name) - 1, 0, name, HUD_DIM if not name.startswith("boss") else (255, 160, 120), HUD_BG)
+        hp = sim.boss[4]
+        right = [("boss ", (255, 160, 120)), ("■" * hp, (255, 120, 90)), ("□" * (lv.boss["hp"] - hp), HUD_DIM)]
+    else:
+        nm = name if left_end + len(lid) + len(name) + len(tm) + 8 < cols else ""
+        right = [(lid + (" " if nm else ""), HUD_GOLD), (nm, HUD_DIM)]
+    rw = sum(len(s_) for s_, c in right)
+    rx = cols - rw - 1
+    if rx > left_end:
+        for s_, c in right:
+            cv.put(rx, 0, s_, c, HUD_BG)
+            rx += len(s_)
+    tx = cols - rw - len(tm) - 4
+    if tx > left_end:
+        cv.put(tx, 0, tm, (196, 200, 220), HUD_BG)
     hint = extra.get("hint")
     if hint:
         a = extra.get("hint_a", 1.0)
-        cv.center(cv.rows - 1, " %s " % hint, mix(HUD_BG, (250, 246, 220), a), mix(cv.px[-1][cols // 2], HUD_BG, a * 0.85))
+        cv.center(cv.rows - 1, "  %s  " % hint, mix(HUD_BG, (250, 246, 220), a), mix(cv.px[-1][cols // 2], HUD_BG, a * 0.9))
     msg = extra.get("msg")
     if msg:
-        cv.center(cv.rows // 2 - 2, " %s " % msg, (20, 18, 24), (255, 214, 110))
+        sub = extra.get("sub")
+        r = max(3, cv.rows // 4)
+        w = max(len(msg), len(sub or "")) + 8
+        cv.center(r, " " * w, HUD_FG, TOAST_BG)
+        cv.center(r + 1, msg.center(w), (20, 18, 24), extra.get("msg_col", HUD_GOLD))
+        cv.center(r + 2, (sub or "").center(w), HUD_DIM, TOAST_BG)
 
 
 # =============================================================================================
@@ -4081,6 +4166,7 @@ class TitleDemo:
 
 
 _MAP_BG = {}
+BIOME_ACCENT = [(150, 220, 90), (190, 160, 255), (130, 196, 255), (250, 160, 70)]
 
 
 def draw_map(cols, rows, sel, t, kitty, show_help=False):
@@ -4088,12 +4174,14 @@ def draw_map(cols, rows, sel, t, kitty, show_help=False):
     cv = Canvas(cols, rows)
     W, H = cv.W, cv.H
     pw = W // 4
+    done, best, seeds, unlocked = progress()
     for b in range(4):
-        k = (b, pw, H)
-        if k not in _MAP_BG:
+        open_ = any(unlocked[i] for i in range(len(LEVELS)) if LEVELS[i]["biome"] == b)
+        k = (b, pw, H, open_)
+        if k not in _MAP_BG:                          # worlds sit back (darker) so stones and labels read on top
             sub = Canvas(pw, rows)
             backdrop(b, pw, H).paint(sub, 6.0 * b, 4, 4, 18)
-            _MAP_BG[k] = [[mix(c, (8, 8, 16), 0.25) for c in row] for row in sub.px]
+            _MAP_BG[k] = [[mix(c, (8, 8, 16), 0.5 if open_ else 0.78) for c in row] for row in sub.px]
         for y in range(H):
             cv.px[y][b * pw:(b + 1) * pw] = _MAP_BG[k][y]
     for y in range(H):
@@ -4101,7 +4189,6 @@ def draw_map(cols, rows, sel, t, kitty, show_help=False):
     for b in range(1, 4):
         for y in range(H):
             cv.px[y][b * pw] = (10, 10, 18)
-    done, best, seeds, unlocked = progress()
     pts = []
     for i in range(len(LEVELS)):
         b, k = LEVELS[i]["biome"], i % 3
@@ -4110,46 +4197,71 @@ def draw_map(cols, rows, sel, t, kitty, show_help=False):
         pts.append((x, y))
     for i in range(len(pts) - 1):
         (x0, y0), (x1, y1) = pts[i], pts[i + 1]
-        c = (255, 214, 110) if unlocked[i + 1] else (90, 90, 110)
+        c = (255, 214, 110) if unlocked[i + 1] else (84, 84, 104)
         steps = max(abs(x1 - x0), abs(y1 - y0))
         for s in range(steps):
             if s % 3 == 2:
                 continue
             x, y = x0 + (x1 - x0) * s / steps, y0 + (y1 - y0) * s / steps
             pset(cv.px, W, H, x, y, c)
-            pset(cv.px, W, H, x, y + 1, shade(c, 0.6))
+            pset(cv.px, W, H, x, y + 1, shade(c, 0.5))
     r = max(2.2, H / 25)
+    pulse = 0.5 + 0.5 * math.sin(t * 4)
     for i, (x, y) in enumerate(pts):
+        rr = r
         if done[i]:
             ring, core = (255, 214, 110), (110, 200, 90)
         elif unlocked[i]:
             ring, core = (240, 240, 250), (60, 70, 100)
         else:
-            ring, core = (70, 70, 86), (30, 30, 40)
+            ring, core, rr = (78, 78, 96), (26, 26, 36), r * 0.8
         if i == sel:
-            add_glow(cv.px, W, H, x + 0.5, y + 0.5, r * 2.6, (255, 230, 150), 0.5)
-        disc(cv.px, W, H, x + 0.5, y + 0.5, r, ring)
-        disc(cv.px, W, H, x + 0.5, y + 0.5, r - 1.2, core)
+            add_glow(cv.px, W, H, x + 0.5, y + 0.5, r * (2.4 + 0.4 * pulse), (255, 230, 150), 0.55)
+            ring = mix(ring, (255, 255, 255), 0.5 * pulse)
+        disc(cv.px, W, H, x + 0.5, y + 0.5, rr, ring)
+        disc(cv.px, W, H, x + 0.5, y + 0.5, rr - 1.2, core)
     x, y = pts[sel]
     art = HERO_L if H >= 70 else HERO_S
     blit_scaled(cv.px, W, H, sprite(art, "idle", False), x + 0.5, y - r - 1 + math.sin(t * 4) * 1.2)
+    # world headers: name in the world's colour, levels done, on a dark tab
     for b in range(4):
-        name = BIOMES[b]
-        cv.put(b * pw // 1 + max(0, (pw - len(name)) // 2), 1, name[:pw], (240, 240, 248), None)
+        n_done = sum(1 for i in range(len(LEVELS)) if LEVELS[i]["biome"] == b and done[i])
+        name = BIOMES[b] if pw >= len(BIOMES[b]) + 8 else BIOMES[b].split()[-1]
+        tag = " %d/3" % n_done
+        lab = " %s%s " % (name, tag)
+        if len(lab) > pw - 1:
+            lab = " %s " % name[:pw - 3]
+            tag = ""
+        x0 = b * pw + max(0, (pw - len(lab)) // 2)
+        open_ = any(unlocked[i] for i in range(len(LEVELS)) if LEVELS[i]["biome"] == b)
+        cv.put(x0, 1, lab, BIOME_ACCENT[b] if open_ else (110, 110, 130), (14, 14, 24))
+        if tag:
+            cv.put(x0 + len(lab) - len(tag) - 1, 1, tag, HUD_GOLD if n_done == 3 else HUD_DIM, (14, 14, 24))
     for i, (x, y) in enumerate(pts):
         lab = LEVELS[i]["id"]
-        cv.put(x - 1, min(rows - 4, int((y + r) // 2) + 1), lab, (240, 240, 248) if unlocked[i] else (120, 120, 140), None)
+        row = min(rows - 4, int((y + r) // 2) + 1)
+        fg = (20, 18, 24) if i == sel else (240, 240, 248) if unlocked[i] else (120, 120, 140)
+        cv.put(x - 2, row, " %s " % lab, fg, HUD_GOLD if i == sel else (14, 14, 24))
         if done[i]:
             ss = "".join("◆" if seeds[i] >> k & 1 else "◇" for k in range(3))
-            cv.put(x - 1, min(rows - 3, int((y + r) // 2) + 2), ss, (255, 214, 110), None)
+            cv.put(x - 2, min(rows - 3, row + 1), " %s " % ss, HUD_GOLD, (14, 14, 24))
     m = LEVELS[sel]
-    info = "%s  %s  -  %s" % (m["id"], m["name"], BIOMES[m["biome"]])
-    if not unlocked[sel]:
-        info += "   (locked)"
-    elif best[sel] is not None:
-        info += "   best %s   seeds %d/3" % (fmt_time(best[sel], frames=False), popcount(seeds[sel]))
     cv.put(0, rows - 2, " " * cols, HUD_FG, HUD_BG)
-    cv.center(rows - 2, info[:cols], HUD_FG, HUD_BG)
+    parts = [(m["id"] + "  ", HUD_GOLD), (m["name"], HUD_FG), ("  -  " + BIOMES[m["biome"]], HUD_DIM)]
+    if not unlocked[sel]:
+        parts.append(("   locked: clear %s first" % LEVELS[sel - 1]["id"], (255, 150, 130)))
+    elif best[sel] is not None:
+        parts += [("   best ", HUD_DIM), (fmt_time(best[sel], frames=False), HUD_FG), ("   seeds ", HUD_DIM),
+                  ("".join("◆" if seeds[sel] >> k & 1 else "◇" for k in range(3)), HUD_GOLD)]
+    else:
+        parts.append(("   not cleared yet", HUD_DIM))
+    total = sum(len(p_) for p_, c in parts)
+    while total > cols - 2 and len(parts) > 2:
+        total -= len(parts.pop()[0])
+    x = max(1, (cols - total) // 2)
+    for p_, c in parts:
+        cv.put(x, rows - 2, p_[:max(0, cols - x)], c, HUD_BG)
+        x += len(p_)
     arcadekit.footer(cv, "arrows choose   Enter play   ? help   Esc back")
     if show_help:
         overlay(cv, help_lines(kitty))
@@ -4171,6 +4283,23 @@ def clear_lines(lv, sim, record, seeds_before, last_of_biome, last_level):
         lines += ["", "A new world opens: %s." % BIOMES[lv.biome + 1]]
     lines += ["", "Enter: %s   Esc: world map" % ("world map" if last_level else "next level")]
     return lines
+
+
+def clear_overlay(cv, lines):
+    """The shared overlay box, with the headline, the seeds and a new record picked out in gold."""
+    overlay(cv, lines)
+    w = max(len(l) for l in lines) + 4
+    x0, y0 = max(0, (cv.cols - w) // 2), max(0, cv.rows // 2 - len(lines) // 2 - 1) + 1
+    bg = (22, 22, 42)
+    for j, l in enumerate(lines):
+        if j == 0:
+            cv.put(x0, y0 + j, ("  " + l).ljust(w), (20, 18, 24), HUD_GOLD)
+        elif l.startswith("seeds"):
+            cv.put(x0 + 2, y0 + j, l, HUD_GOLD, bg)
+        elif "new best" in l:
+            cv.put(x0 + 2 + l.index("new best"), y0 + j, "new best!", HUD_GOLD, bg)
+        elif l.startswith("Enter"):
+            cv.put(x0 + 2, y0 + j, l, HUD_DIM, bg)
 
 
 def too_small(term):
@@ -4304,14 +4433,18 @@ def play(term, ctl, n):
         if hint and state == "play":
             extra["hint"] = hint
         if state == "over":
-            extra["msg"] = "Out of leaves - the level starts again"
+            extra.update(msg="OUT OF LEAVES", sub="the level starts again", msg_col=HUD_RED)
+        elif state == "clear" and st_t <= 0.7:
+            extra.update(msg=("B I O M E   C L E A R" if last_of_biome else "L E V E L   C L E A R"),
+                         sub="%s %s" % (lv.meta["id"], lv.meta["name"]))
         elif banner > 0 and state == "play":
-            extra["msg"] = "%s  %s" % (lv.meta["id"], lv.meta["name"])
+            extra.update(msg="%s  %s" % (lv.meta["id"], lv.meta["name"]),
+                         sub="%s  -  world %d of 4" % (BIOMES[lv.biome], lv.biome + 1))
         cv = render(sim, fx, cam, cols, rows, t, painter=painter, extra=extra)
         if paused:
             overlay(cv, help_lines(ctl.kitty) if help_ else PAUSE + ["", SND.label()])
         elif state == "clear" and st_t > 0.7:
-            overlay(cv, clear_lines(lv, sim, record, seeds_before, last_of_biome, n == len(LEVELS) - 1))
+            clear_overlay(cv, clear_lines(lv, sim, record, seeds_before, last_of_biome, n == len(LEVELS) - 1))
         term.write(cv.emit())
         time.sleep(max(0.0, 1 / 40 - (time.time() - now)))
 

@@ -12,7 +12,7 @@ import math
 import random
 import time
 
-from arcadekit import (PAUSE_LINES, Canvas, Terminal, clamp, draw_title, load_scores, mix, overlay, shade,
+from arcadekit import (PAUSE_LINES, Canvas, Terminal, clamp, draw_title, footer, load_scores, mix, overlay, shade,
                        shared_key, submit, title_screen, title_width)
 from arcadesound import Sound
 
@@ -97,9 +97,11 @@ HELP = [
     "Enter  (Z)               sink one layer",
     "G                        ghost on / off",
     "",
-    "The bright block is your piece; the outlined spot below shows where it lands.",
-    "FROM ABOVE (right): every column coloured by its height, the landing cells",
-    "outlined in white. The gauge on the left marks your piece's depth.",
+    "The white piece is yours. The coloured outline on it is where",
+    "it lands; the coloured ring on the walls is its depth.",
+    "FROM ABOVE: each column coloured by its height, landing cells",
+    "outlined. DEPTH (left of the well): the stack's height, the",
+    "white mark is your piece. The rim turns red near the top.",
     "",
     "Esc / P                  pause menu (Q quit, M sound)",
     "?                        this help",
@@ -400,21 +402,33 @@ def wire(cv, v, cubes, col):
             cv.line(*a[i], *a[(i + 1) % 4], col)
 
 
-def footprint(cv, v, cubes):
-    """Where the piece will land: the top faces at the landing spot, softly lit, with a pale outline."""
+def ring(cv, v, z, col):
+    """A line round the four walls at depth z: tells at a glance how deep something is."""
+    g, p = v.g, v.p
+    q = [p(0, 0, z), p(g.W, 0, z), p(g.W, g.H, z), p(0, g.H, z)]
+    for i in range(4):
+        cv.line(*q[i], *q[(i + 1) % 4], col)
+
+
+def footprint(cv, v, cubes, col):
+    """Where the piece will land: the outline of its cubes at the landing depth, in that layer's colour.
+    Drawn over the falling piece, so it shows as a smaller outline inside it, like a shadow."""
     p = v.p
+    occ = {(x, y) for x, y, _ in cubes}
     for x, y, z in cubes:
-        q = [p(x, y, z), p(x + 1, y, z), p(x + 1, y + 1, z), p(x, y + 1, z)]
-        cv.poly(q, (64, 70, 96))
-        for i in range(4):
-            cv.line(*q[i], *q[(i + 1) % 4], (190, 196, 150))
+        if (x, y, z - 1) in cubes:
+            continue
+        for (dx, dy), (a, b) in (((-1, 0), ((x, y), (x, y + 1))), ((1, 0), ((x + 1, y), (x + 1, y + 1))),
+                                 ((0, -1), ((x, y), (x + 1, y))), ((0, 1), ((x, y + 1), (x + 1, y + 1)))):
+            if (x + dx, y + dy) not in occ:
+                cv.line(*p(a[0], a[1], z), *p(b[0], b[1], z), col)
 
 
 def solid_piece(cv, v, cubes, g):
     """The falling piece: bright filled tops with white edges and dim sides, deepest cubes first."""
     p = v.p
     occupied = set(cubes)
-    base = (232, 236, 250)
+    base = (226, 230, 246)
     for x, y, z in sorted(cubes, key=lambda c: -c[2]):
         for dx, dy, face in ((-1, 0, ((x, y), (x, y + 1))), (1, 0, ((x + 1, y), (x + 1, y + 1))),
                              (0, -1, ((x, y), (x + 1, y))), (0, 1, ((x, y + 1), (x + 1, y + 1)))):
@@ -443,7 +457,17 @@ def height_map(cv, g, x0, y0, cell):
             c = layer_col(g, top) if top is not None else (14, 15, 26)
             cv.rect(x0 + x * cell, y0 + y * cell, cell - 1, cell - 1, c)
             if (x, y) in land:
-                cv.frame(x0 + x * cell, y0 + y * cell, cell - 1, cell - 1, (255, 255, 255))
+                if cell >= 4:
+                    cv.frame(x0 + x * cell, y0 + y * cell, cell - 1, cell - 1, (255, 255, 255))
+                else:    # too small to outline: the cell turns white
+                    cv.rect(x0 + x * cell, y0 + y * cell, cell - 1, cell - 1, (255, 255, 255))
+
+
+def iso_box(offs, k):
+    """The pixel bounds of iso()'s picture, relative to its origin."""
+    xs = [(x - y) * k for x, y, z in offs]
+    ys = [(x + y) * k / 2 - z * k for x, y, z in offs]
+    return min(xs) - k, min(ys) - k / 2, max(xs) + k, max(ys) + k * 1.5
 
 
 def iso(cv, offs, ox, oy, k, col):
@@ -457,56 +481,115 @@ def iso(cv, offs, ox, oy, k, col):
         cv.poly([(sx + k, sy), (sx, sy + k / 2), (sx, sy + k * 1.5), (sx + k, sy + k)], shade(col, 0.5))
 
 
+PANEL_BODY = (15, 16, 30)
+PANEL_HEAD = (30, 32, 58)
+PANEL_EDGE = (48, 52, 88)
+LABEL = (138, 144, 182)
+VALUE = (240, 240, 250)
+SCORE_C = (250, 214, 120)
+
+
+def panel(cv, col, row, w, h, title=None, title_fg=LABEL):
+    """A framed box in character cells, with an optional header strip."""
+    cv.rect(col, row * 2, w, h * 2, PANEL_BODY)
+    cv.frame(col, row * 2, w, h * 2, PANEL_EDGE)
+    if title:
+        cv.put(col + 1, row, (" " + title).ljust(w - 2)[:w - 2], title_fg, PANEL_HEAD)
+
+
+def stat(cv, col, row, w, label, value, fg=VALUE):
+    cv.put(col + 1, row, (" " + label).ljust(w - 2)[:w - 2], LABEL, PANEL_BODY)
+    cv.put(col + w - 2 - len(value), row, value, fg, PANEL_BODY)
+
+
 def render(g, cols, rows, ghost=True):
     cv = Canvas(cols, rows)
     cv.vgradient((6, 6, 14), (14, 8, 22))
-    PH = (rows - 1) * 2
-    size = min(PH - 6, cols - 44)
-    cx = 12 + size / 2 + max(0, (cols - 44 - size) // 2)
+    PH = (rows - 1) * 2                              # the footer keeps the last row
+    RW = clamp(cols - (PH - 4) - 15, 20, 30)          # the side panel grows when there is room
+    size = max(20, min(PH - 4, cols - RW - 15))
+    x0 = max(0, (cols - (8 + size + 3 + RW)) // 2)   # gauge, well and panel centred as one group
+    cx = x0 + 8 + size / 2
     cy = PH / 2
     v = View(g, cx, cy, size)
+    hgt = g.height()
+    danger = clamp((hgt - (g.D - 3)) / 3, 0, 1) if not g.over else 0
+    pulse = 0.6 + 0.4 * math.sin(g.t * 8)
     draw_well(cv, v)
-    draw_cubes(cv, v, g.clearing[0] if g.clearing else ())
-    if not g.over and not g.clearing:
+    if danger or g.clearing:   # the rim glows red near the top, and flashes white as layers vanish
+        r0, r2 = v.p(0, 0, 0), v.p(g.W, g.H, 0)
+        c = mix((66, 76, 120), (236, 64, 64), danger * pulse)
+        if g.clearing:
+            c = mix(c, (255, 255, 255), clamp((g.clearing[1] - g.t) / 0.35, 0, 1))
+        x, y, w, h = int(r0[0]) - 1, int(r0[1]) - 1, int(r2[0] - r0[0]) + 3, int(r2[1] - r0[1]) + 3
+        cv.frame(x, y, w, h, c)
+        cv.frame(x - 1, y - 1, w + 2, h + 2, c)
+    clearing = g.clearing[0] if g.clearing else ()
+    for z in clearing:            # a cleared layer: its ring on the walls flashes white
+        ring(cv, v, z, (255, 255, 255))
+        ring(cv, v, z + 1, (255, 255, 255))
+    playing = not g.over and not g.clearing
+    if playing:
         cubes = g.cubes_at()
+        bottom = max(z for _, _, z in cubes) + 1
+        ring(cv, v, bottom, shade(layer_col(g, bottom - 1), 1.1))     # the piece's depth, on the walls
+    draw_cubes(cv, v, clearing)
+    if playing:
+        solid_piece(cv, v, cubes, g)
         if ghost:
             lz = g.landing()
             if lz != g.pz:
-                footprint(cv, v, g.cubes_at(pz=lz))
-        solid_piece(cv, v, cubes, g)
-    # depth gauge: one box per layer, lit up to the stack height
-    gx = 3
-    gh = min(PH - 8, g.D * 4)
+                land = g.cubes_at(pz=lz)
+                footprint(cv, v, land, layer_col(g, max(z for _, _, z in land)))
+    # depth gauge just left of the well: one box per layer, lit up to the stack height
+    gx = int(cx - size / 2) - 8
+    gh = min(PH - 6, g.D * 4)
     step = gh / g.D
     gy = (PH - gh) / 2
-    hgt = g.height()
+    cv.put(gx, max(0, int(gy) // 2 - 1), "DEPTH", LABEL)
+    pz = {z for _, _, z in g.cubes_at()} if playing else set()
+    lzs = {z for _, _, z in g.cubes_at(pz=g.landing())} if playing and ghost else set()
     for i in range(g.D):
         z = g.D - 1 - i
-        y = gy + gh - (i + 1) * step
-        c = layer_col(g, z) if i < hgt else (28, 30, 50)
-        cv.rect(gx, int(y) + 1, 5, max(1, int(step) - 1), c)
-        if not g.over and any(cz == z for _, _, cz in g.cubes_at()):   # the falling piece's depth
-            cv.rect(gx + 6, int(y) + 1, 2, max(1, int(step) - 1), (255, 255, 255))
-    # panel
-    px = int(cx + size / 2) + 6
-    row = 1
-    cv.put(px, row, "DEPTHWELL", (236, 212, 70))
-    stats = [("SCORE", "%d" % g.score), ("LEVEL", "%d" % g.level), ("LAYERS", "%d" % g.layers),
-             ("CUBES", "%d" % g.cubes), ("WELL", "%dx%dx%d" % (g.W, g.H, g.D))]
-    for i, (a, b) in enumerate(stats):           # one line each keeps room for the map below
-        cv.put(px, row + 2 + i, a, (130, 136, 170))
-        cv.put(px + 8, row + 2 + i, b, (240, 240, 250))
-    cv.put(px, row + 8, "NEXT", (130, 136, 170))
-    iso(cv, g.offsets(g.next), px + 12, (row + 10) * 2 + 4, 3, (200, 210, 240))
-    my = row + 16                                # the map from above fills what is left
-    cv.put(px, my, "FROM ABOVE", (130, 136, 170))
-    cell = max(2, min(6, (rows - 3 - my) * 2 // max(g.W, g.H)))
-    height_map(cv, g, px + 1, (my + 1) * 2 + 1, cell)
-    cv.put(px, rows - 2, "? keys   Esc pause", (110, 114, 140))
+        y = int(gy + gh - (i + 1) * step) + 1
+        hh = max(1, int(step) - 1)
+        c = layer_col(g, z) if i < hgt else (30, 32, 54)
+        if z in clearing:
+            c = (255, 255, 255)
+        elif i < hgt and i >= g.D - 3:
+            c = mix(c, (236, 64, 64), pulse * 0.5)
+        cv.rect(gx, y, 4, hh, c)
+        if z in pz:            # the falling piece's layers
+            cv.rect(gx + 5, y, 2, hh, (255, 255, 255))
+        elif z in lzs:         # where it will land
+            cv.rect(gx + 5, y, 1, hh, (120, 126, 160))
+    # side panel: stats, next piece, the map from above; each in its own frame
+    px = int(cx + size / 2) + 4
+    RW = min(RW, cols - px)
+    sh = 6
+    panel(cv, px, 0, RW, sh, "WELL %dx%dx%d" % (g.W, g.H, g.D))
+    for i, (a, b, c) in enumerate([("SCORE", "%d" % g.score, SCORE_C), ("LEVEL", "%d" % g.level, VALUE),
+                                   ("LAYERS", "%d" % g.layers, VALUE), ("CUBES", "%d" % g.cubes, VALUE)]):
+        stat(cv, px, 1 + i, RW, a, b, c)
+    free = rows - 1 - sh                             # rows left for NEXT and the map
+    cell = max(2, min(6, ((free - 9) * 2 - 3) // max(g.W, g.H), (RW - 4) // g.W))   # NEXT keeps 7+ rows
+    mh = (max(g.W, g.H) * cell + 2) // 2 + 2         # map panel rows
+    k = 3 if free - mh >= 9 else 2
+    offs = g.offsets(g.next)
+    bx0, by0, bx1, by1 = iso_box(offs, k)
+    nh = max(4, min(free - mh, int(by1 - by0 + 3) // 2 + 2))
+    panel(cv, px, sh, RW, nh, "NEXT")
+    iso(cv, offs, px + (RW - (bx1 - bx0)) / 2 - bx0, (sh + 1) * 2 + ((nh - 1) * 2 - (by1 - by0)) / 2 - by0, k,
+        (200, 210, 240))
+    my = sh + nh
+    mh = max(3, min(mh, rows - 1 - my))
+    panel(cv, px, my, RW, mh, "FROM ABOVE")
+    height_map(cv, g, px + (RW - g.W * cell) // 2, (my + 1) * 2 + 1, cell)
     for i, (txt, until, c) in enumerate(reversed(g.pops[-2:])):
-        cv.center(int(cy / 2) - 2 + i * 2, " %s " % txt, (14, 14, 20), c, int(cx - size / 2), int(size))
+        cv.center(int(cy / 2) - 2 + i * 2, "  %s  " % txt, (14, 14, 20), c, int(cx - size / 2), int(size))
     if g.paused:
         overlay(cv, HELP if g.help else PAUSE_LINES + ["", SND.label()])
+    footer(cv, "Arrows move  Q W E turn  Space drop  ? help")
     return cv
 
 
@@ -627,8 +710,8 @@ def main():
                         SND.play("over")
                         record = submit(GAME, mode_key(pit, si), g.score)
                     cols, rows = term.size()
-                    if cols < 70 or rows < 24:
-                        term.write("\x1b[0m\x1b[2J\x1b[HPlease make the window larger (70x24).")
+                    if cols < 70 or rows < 22:
+                        term.write("\x1b[0m\x1b[2J\x1b[HPlease make the window larger (70x22).")
                         time.sleep(0.2)
                         continue
                     cv = render(g, cols, rows, ghost)

@@ -38,7 +38,9 @@ ZONES = [  # name, top y, sonar colour, water colour, rock memory colour
 ]
 AMBER = (255, 190, 90)
 LAMP = (255, 240, 200)
+LAMP_BEAM = (255, 214, 140)       # the lamp's cone in the water: warm, so it never reads as rock
 FLARE = (255, 150, 60)
+LURKER = (235, 70, 80)            # hazards are warm reds and pinks, finds have a white twinkle
 
 # Sounds: eerie and sparse. The sonar "pong" is the voice of the game; everything else stays out of its way.
 SND = Sound(GAME, {
@@ -435,7 +437,7 @@ class Dive:
         self.echo_q = []                  # (time, sound, volume): sonar echoes on their way back
         self.warn_at = 0.0                # next low-air warning
         self.in_vent = False
-        self.say("Dive! Space pings the sonar, F a focused ping, L the lamp, E a flare.", 6)
+        self.say("Dive!  Space ping   F focused ping   L lamp   E flare", 6)
 
     # --- helpers ---------------------------------------------------------------------------------
     def say(self, s, ttl=3.0):
@@ -951,16 +953,20 @@ def render(d, cols, rows, title_mode=False):
     # finds glint where light has touched them
     for it in w.loot:
         x, y = int(it["x"]) - camx, int(it["y"]) - camy
-        if not (0 <= x < PW - 2 and 0 <= y < PH - 1):
+        if not (-2 <= x < PW + 2 and -1 <= y < PH + 1):
             continue
         age = t - it["seen"]
         near = math.hypot(it["x"] - d.x, it["y"] - d.y) < 16
         if age < 4 or near:
             b = max(0.3 if near else 0.0, 1 - age / 4)
             col = {"salvage": GOLD, "oxygen": (120, 220, 255), "battery": (140, 255, 140), "flares": FLARE}[it["kind"]]
-            glint = 1.0 if int(t * 3 + it["x"]) % 3 == 0 else 0.7
-            for ddx, ddy in ((0, 0), (1, 0), (0, 1), (1, 1)):
-                px[y + ddy][x + ddx] = mix(px[y + ddy][x + ddx], col, b * glint)
+            glint = 1.0 if int(t * 3 + it["x"]) % 3 == 0 else 0.75
+            core = mix(col, (255, 255, 255), 0.55 if glint == 1.0 else 0.25)
+            for ddx, ddy, k in ((0, 0, 1.0), (-1, 0, 0.75), (1, 0, 0.75), (0, -1, 0.75), (0, 1, 0.75),
+                                (-2, 0, 0.3 * glint), (2, 0, 0.3 * glint)):
+                X, Y = x + ddx, y + ddy
+                if 0 <= X < PW and 0 <= Y < PH:
+                    px[Y][X] = mix(px[Y][X], core if k == 1.0 else col, b * glint * k)
     # the Source at the bottom: a pale glow you can sense from far away
     sx, sy = w.source
     ds = math.hypot(sx - d.x, sy - d.y)
@@ -992,7 +998,9 @@ def render(d, cols, rows, title_mode=False):
         elif c.kind == "lurker":
             if not (-6 <= x < PW + 6 and -4 <= y < PH + 4):
                 continue
-            col = ZONES[zone_of(c.y)][2]
+            col = LURKER
+            if c.chasing:      # it has noticed you: a faint red shape even out of the sonar
+                seen = max(seen, 0.35 + 0.15 * math.sin(t * 8))
             if seen > 0:
                 for ddx in range(-4, 5):
                     for ddy in ((0,) if abs(ddx) > 2 else (-1, 0, 1)):
@@ -1003,10 +1011,11 @@ def render(d, cols, rows, title_mode=False):
             lx, ly = x + (3 if c.vx >= 0 else -3), y - 3
             if 0 <= lx < PW and 0 <= ly < PH and int(c.ph * 1.7) % 4 != 0:
                 px[ly][lx] = mix(px[ly][lx], (255, 250, 170), 0.85)
-            if dsub < 40:   # eyes, when you get close
+            if dsub < 40 or c.chasing:   # eyes, when you get close or it comes for you
+                k = 0.95 if c.chasing else 0.7 * (1 - dsub / 40)
                 for ex in (x - 3, x - 2) if c.x > d.x else (x + 2, x + 3):
                     if 0 <= ex < PW and 0 <= y < PH:
-                        px[y][ex] = mix(px[y][ex], (255, 60, 40), 0.7 * (1 - dsub / 40))
+                        px[y][ex] = mix(px[y][ex], (255, 60, 40), k)
         else:
             for i, (bx, by) in enumerate(c.body):
                 r = max(1.5, 6 - i * 0.28)
@@ -1026,6 +1035,15 @@ def render(d, cols, rows, title_mode=False):
                 for ex in (hx - 2, hx + 2):
                     if 0 <= ex < PW and 0 <= hy < PH:
                         px[hy][ex] = mix(px[hy][ex], (255, 230, 120), k)
+        if c.kind == "leviathan" and c.state == "hunt" and not title_mode and not (0 <= x < PW and 0 <= y < PH):
+            k = 0.6 + 0.4 * math.sin(t * 7)
+            ex, ey = int(clamp(x, 3, PW - 9)), int(clamp(y, 3, PH - 4))
+            for ddy in range(-2, 3):
+                for ddx in range(-2, 3):
+                    r = abs(ddx) + abs(ddy)
+                    X, Y = ex + ddx, ey + ddy
+                    if r <= 2 and 0 <= X < PW and 0 <= Y < PH:
+                        px[Y][X] = mix(px[Y][X], (255, 60, 45) if r < 2 else (150, 20, 20), k * (1.0 if r < 2 else 0.8))
     # flares
     for f in d.flare_list:
         x, y = int(f[0]) - camx, int(f[1]) - camy
@@ -1037,12 +1055,17 @@ def render(d, cols, rows, title_mode=False):
     if not title_mode:
         x0, y0 = int(d.x) - camx, int(d.y) - camy
         if d.lamp:
+            gg = w.g
             for k in range(1, 30):
                 half = int(k * 0.5)
                 for yy in range(-half, half + 1):
                     X, Y = x0 + d.face * (5 + k), y0 + yy
                     if 0 <= X < PW and 0 <= Y < PH:
-                        px[Y][X] = mix(px[Y][X], LAMP, 0.10 * (1 - k / 30))
+                        wx, wy = camx + X, camy + Y
+                        if 0 <= wx < W and 0 <= wy < H and gg[wy * W + wx]:
+                            continue
+                        edge = 1 - abs(yy) / (half + 1)
+                        px[Y][X] = mix(px[Y][X], LAMP_BEAM, 0.3 * (1 - k / 30) ** 1.4 * (0.45 + 0.55 * edge))
         for j, line in enumerate(SUB):
             for i, ch in enumerate(line):
                 if ch == ".":
@@ -1076,50 +1099,94 @@ def depth_gauge(cv, d, PW, PH):
     x = PW - 3
     top, bot = 4, PH - 4
     span = bot - top
+    px = cv.px
+    for y in range(top - 1, bot + 1):          # a dark rail so the gauge never melts into the rock
+        for xx in (x - 1, x + 2):
+            px[y][xx] = mix(px[y][xx], (4, 5, 10), 0.8)
     for y in range(top, bot):
         wy = (y - top) / span * H
         z = zone_of(wy)
-        c = mix(ZONES[z][3], ZONES[z][2], 0.35)
-        cv.px[y][x] = c
-        cv.px[y][x + 1] = c
-    sy = top + int(clamp(d.y / H, 0, 1) * span)
-    for yy in (sy - 1, sy, sy + 1):
-        for xx in (x - 2, x - 1, x, x + 1):
-            if 0 <= yy < PH:
-                cv.px[yy][xx] = (255, 220, 110)
+        c = mix(ZONES[z][3], ZONES[z][2], 0.55 if z == d.zone else 0.3)
+        if (y - top) / span * H < d.max_depth / METERS_PER_PX + 26:   # the part already dived
+            c = mix(c, ZONES[z][2], 0.15)
+        px[y][x] = c
+        px[y][x + 1] = c
     ty = top + int(d.w.source[1] / H * span)
     for xx in (x - 1, x, x + 1, x + 2):
-        if 0 <= xx < PW:
-            cv.px[ty][xx] = (230, 255, 240)
+        px[ty][xx] = (230, 255, 240)
+    sy = top + int(clamp(d.y / H, 0, 1) * span)
+    for yy in (sy - 1, sy, sy + 1):
+        for xx in range(x - 3, x + 3):
+            if 0 <= yy < PH and 0 <= xx < PW:
+                px[yy][xx] = (20, 16, 8)
+    for xx in range(x - 2, x + 2):
+        px[sy][xx] = GOLD
 
 
-def bar(v, n=8):
-    f = int(round(clamp(v, 0, 100) / 100 * n))
-    return "█" * f + "░" * (n - f)
+HUD_BG = (10, 12, 20)
+HUD_LABEL = (128, 134, 162)       # dim labels: 4.6:1 on the bar, values carry the colour
+DANGER = (255, 84, 70)
+NOISE_HOT = 0.55                  # the leviathan wakes above this
+
+
+def gauge(cv, x, r, v, n, col):
+    """A gauge drawn as coloured cells (half a cell of resolution): full = col, empty = a dark trace of it."""
+    v = clamp(v, 0.0, 1.0) * n
+    empty = mix(HUD_BG, col, 0.22)
+    for i in range(n):
+        f = v - i
+        if f >= 0.75:
+            cv.put(x + i, r, " ", col, col)
+        elif f >= 0.25:
+            cv.put(x + i, r, "▌", col, empty)
+        else:
+            cv.put(x + i, r, " ", col, empty)
+    return x + n
 
 
 def hud(cv, d, cols, rows):
     z = ZONES[d.zone]
     r = rows - 1
-    segs = [(" DEEPCALL ", (10, 10, 16), z[2]),
-            ("  %5d m " % d.depth_m(), (230, 230, 240), None),
-            ("  HULL %s" % bar(d.hull), (255, 120, 100) if d.hull < 30 else (220, 220, 230), None),
-            ("  AIR %s" % bar(d.oxygen), (255, 120, 100) if d.oxygen < 25 else (140, 220, 255), None),
-            ("  PWR %s" % bar(d.power), (240, 220, 120), None),
-            ("  FLARES %d" % d.flares, FLARE, None),
-            ("  NOISE %s" % bar(d.noise * 100, 6), (255, 80, 80) if d.noise > 0.55 else (170, 170, 190), None),
-            ("  $%d " % d.salvage, GOLD, None)]
+    t = d.t
+    cv.put(0, r, " " * cols, HUD_LABEL, HUD_BG)
+    n = 10 if cols >= 128 else 8 if cols >= 100 else 6
+    blink = int(t * 4) % 2 == 0
+    hunted = any(c.kind == "leviathan" and c.state == "hunt" for c in d.w.creatures)
     x = 0
-    for s, fg, bg in segs:
-        cv.put(x, r, s, fg, bg or (10, 12, 20))
-        x += len(s)
-    if x < cols:
-        cv.put(x, r, " " * (cols - x), (10, 10, 16), (10, 12, 20))
-    right = " %s   ? help  Esc menu " % z[0]
-    if x + len(right) <= cols:
-        cv.put(cols - len(right), r, right, (130, 136, 170), (10, 12, 20))
+    if cols >= 110:
+        cv.put(0, r, " DEEPCALL ", (10, 10, 16), z[2])
+        x = 10
+    s = " %4d m" % d.depth_m()
+    cv.put(x, r, s, (236, 238, 246), HUD_BG)
+    x += len(s)
+    # noise first: it is the danger gauge, green when quiet, red once the deep can hear you
+    nz = d.noise
+    ncol = DANGER if nz > NOISE_HOT else mix((110, 200, 140), (250, 200, 80), nz / NOISE_HOT)
+    lab = "HUNTED" if hunted and blink else "NOISE"
+    cv.put(x, r, " %-6s " % lab, DANGER if (hunted or nz > NOISE_HOT) else HUD_LABEL, HUD_BG)
+    x += 8
+    x = gauge(cv, x, r, nz, n, ncol)
+    for lab, v, col, low in (("HULL", d.hull, (226, 226, 236), 30), ("AIR", d.oxygen, (120, 214, 255), 25),
+                             ("PWR", d.power, (240, 214, 110), 15)):
+        warn = v < low
+        cv.put(x, r, " %s " % lab, DANGER if warn and blink else HUD_LABEL, HUD_BG)
+        x += len(lab) + 2
+        x = gauge(cv, x, r, v / 100, n, DANGER if warn else col)
+    s = " FLARE "
+    cv.put(x, r, s, HUD_LABEL, HUD_BG)
+    cv.put(x + len(s), r, str(d.flares), FLARE if d.flares else (110, 110, 120), HUD_BG)
+    x += len(s) + len(str(d.flares))
+    s = " $%d" % d.salvage
+    cv.put(x, r, s, GOLD, HUD_BG)
+    x += len(s)
+    for right in (" %s   ? help " % z[0], " %s " % z[0], ""):
+        if x + len(right) + 1 <= cols:
+            cv.put(cols - len(right), r, right, HUD_LABEL, HUD_BG)
+            break
     for i, (s, _) in enumerate(d.msgs[-2:]):
-        cv.center(1 + i, " %s " % s, (230, 236, 240), (12, 16, 30))
+        s = s if len(s) <= cols - 4 else s[:cols - 7] + "..."
+        alarm = s.isupper() or "enormous" in s or "bit" in s or "sting" in s or "impact" in s
+        cv.center(1 + i, " %s " % s, (255, 236, 230) if alarm else (230, 236, 240), (70, 16, 20) if alarm else (12, 16, 30))
 
 
 HELP = [
