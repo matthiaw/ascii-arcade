@@ -27,10 +27,11 @@ import random
 import re
 import select
 import sys
+import threading
 import time
 
 import arcadekit
-from arcadekit import Canvas, clamp, load_scores, mix, overlay, shade, shared_key, submit, title_screen
+from arcadekit import AUTO_LABEL, AutoMode, Canvas, clamp, load_scores, mix, overlay, shade, shared_key, submit, title_screen
 
 try:
     from arcadesound import Sound
@@ -1141,7 +1142,7 @@ STORM_1 = hcat("""
      o ===   o o    
                     
                     
-    ===    ===      
+    ====   ===      
                  b  
 ###~~~~~~~~~~~~~####
 ####################
@@ -2393,6 +2394,280 @@ def solve_level(n, budget=600.0, seeds=True):
 def safe(s):
     """Standing on something that will not crumble away."""
     return s.ground and s.stand != CRUM
+
+
+# =============================================================================================
+# Auto mode: Leafling plays the real levels on her own. The route planner above (the same A* search the
+# self-test uses, on the real physics) plans one stretch at a time - to the next lantern, a seed when one is
+# near, the boss arena, the exit - in a background thread while she runs the stretch before it. Like a player
+# she sometimes mistimes a jump (pressed a few frames late or early, let go too soon): often that costs
+# nothing, sometimes a life. After a slip or a death she plans again from where she is.
+# =============================================================================================
+class LeafBot:
+    SLIP = 0.06                    # chance that a jump is mistimed (calibrated for a few deaths per world)
+    STRETCH = 10                   # plan about this many tiles at a time (a long search would stall the game)
+    CACHE = {}                     # (level, seeds, goal, state) -> (inputs, end): a way once found is remembered
+    LOCK = threading.Lock()
+
+    def __init__(self, lv, rnd=None, seeds=True, slip=None, threaded=True):
+        self.lv = lv
+        self.rnd = rnd or random.Random()
+        self.slip = self.SLIP if slip is None else slip
+        self.threaded = threaded
+        self.with_seeds = seeds
+        goals = []
+        for i, (lx, ly) in enumerate(lv.lanterns):
+            goals.append(("lantern", lx, lambda s, i=i: s.lit >> i & 1 and safe(s), (int(lx), int(ly) - 1), MAIN_NODES))
+        if lv.boss:
+            goals.insert(sum(1 for lx, _ in lv.lanterns if lx < lv.arena[0]),
+                         ("arena", lv.arena[0], lambda s: s.boss is not None or s.boss_done,
+                          (int(lv.arena[0] + 3), int(lv.boss_at[1]) - 1), MAIN_NODES))
+        goals.append(("exit", lv.exit[0], lambda s: s.won, (int(lv.exit[0]), int(lv.exit[1]) - 1), MAIN_NODES))
+        if seeds:
+            for i, (sx, sy) in enumerate(lv.seeds):
+                k = next((j for j, g in enumerate(goals) if g[1] > sx), len(goals) - 1)
+                goals.insert(k, ("seed", sx, lambda s, i=i: s.seeds >> i & 1 and safe(s), (int(sx), int(sy)),
+                                 SEED_NODES // 2))
+        self.goals = goals
+        self.skip = set()              # seeds given up on (the planner could not reach them in its budget)
+        # in a chase a rest on the way is rarely a safe one: plan from lantern to lantern in one piece
+        self.direct = set(range(len(goals))) if lv.chase else set()
+        self.dists = {}
+        self.route = []                # inputs still to play
+        self.job = None                # (generation, start state, goal index) being planned
+        self.result = None
+        self.gen = 0
+        self.fails = 0
+        self.give_up = False
+        self.late = 0                  # boss fight: frames the jump is still late
+        self.stats = dict(slips=0, fatal=0, plans=0, cached=0, seeds_skipped=0, waits=0)
+
+    # -- goals ----------------------------------------------------------------------------
+    def next_goal(self, s):
+        for i, g in enumerate(self.goals):
+            if i in self.skip:
+                continue
+            if g[0] == "arena" and (s.boss is not None or s.boss_done):
+                continue
+            if not g[2](s):
+                if g[0] == "seed" and abs(g[1] - s.x) > 40:
+                    continue           # a seed far behind (after a respawn): not worth going back
+                return i
+        return None
+
+    def sig(self, s, gi):
+        """What a plan from s depends on (None: too much going on to reuse one)."""
+        if s.crumble or s.boss is not None:
+            return None
+        lv = self.lv
+        chase = (s.f - s.chase_f0, round(s.chase_x0 - s.x, 6)) if s.chase_f0 >= 0 else None
+        return (lv.n, self.with_seeds, gi, s.f % PERIOD if lv.periodic else 0, round(s.x, 6), round(s.y, 6),
+                round(s.vx, 6), round(s.vy, 6), s.ground, s.glide, s.jumping, s.lit, s.seeds, s.dead_en,
+                s.boss_done, chase, s.cp)
+
+    def dist(self, gi):
+        if gi not in self.dists:
+            self.dists[gi] = distance_map(self.lv, *self.goals[gi][3])
+        return self.dists[gi]
+
+    # -- planning ---------------------------------------------------------------------------
+    def _run(self, gen, start, gi, key):
+        name, gx, goal, cell, nodes = self.goals[gi]
+        dm = self.dist(gi)
+        lv = self.lv
+
+        def togo(s):
+            x, y = int(s.x), int(s.y - 0.6)
+            return dm[y][x] if 0 <= x < lv.W and 0 <= y < lv.H else 1e9
+
+        d0 = togo(start)
+        if name == "seed" or d0 > 1e8 or d0 < self.STRETCH * 1.4 or gi in self.direct:
+            target = goal
+        else:                          # far away: plan a stretch of the way, then the next one
+            def target(s):
+                if goal(s):
+                    return True
+                return (s.ground and s.stand in (SOL, MOSS) and s.plat < 0     # a rest on firm ground
+                        and togo(s) <= d0 - self.STRETCH)
+        budget = 3.0 if name == "seed" else 30.0 if gi in self.direct else 6.0
+        ins, end, _ = plan(start, target, cell, budget, max_nodes=nodes)
+        if ins is not None and key is not None:
+            with self.LOCK:
+                self.CACHE[key] = (ins, end)
+        if self.job is not None and self.job[0] == gen and self.job[1] is start:
+            self.result = (gen, start, gi, ins, end)
+
+    def request(self, start):
+        """Plan the stretch after start (or take it from the cache)."""
+        gi = self.next_goal(start)
+        if gi is None:
+            return
+        key = self.sig(start, gi)
+        self.job = (self.gen, start, gi)
+        self.result = None
+        hit = self.CACHE.get(key) if key is not None else None
+        if hit:
+            self.stats["cached"] += 1
+            self.result = (self.gen, start, gi, list(hit[0]), hit[1].copy())
+            return
+        self.stats["plans"] += 1
+        if self.threaded:
+            threading.Thread(target=self._run, args=(self.gen, start, gi, key), daemon=True).start()
+        else:
+            self._run(self.gen, start, gi, key)
+
+    @classmethod
+    def warm(cls, n, seeds=True):
+        """Plan the first stretch of level n in the background, so it is ready when the level starts."""
+        lv = Level(n)
+        bot = cls(lv, seeds=seeds)
+        bot.request(Sim(lv))
+
+    def invalidate(self):
+        self.gen += 1
+        self.route, self.job, self.result = [], None, None
+
+    @staticmethod
+    def same(a, b):
+        return (a.f == b.f and abs(a.x - b.x) < 1e-6 and abs(a.y - b.y) < 1e-6 and a.lit == b.lit
+                and a.seeds == b.seeds and a.dead == b.dead)
+
+    def take_result(self, s):
+        r = self.result
+        if r is None:
+            return
+        gen, start, gi, ins, end = r
+        self.result = self.job = None
+        if gen != self.gen:
+            return
+        if not self.route and not self.same(start, s):   # planned for a moment that did not come
+            self.request(s.copy())
+            return
+        if ins is None:
+            if self.goals[gi][0] == "seed":
+                self.skip.add(gi)
+                self.stats["seeds_skipped"] += 1
+            else:
+                self.fails += 1
+                if self.fails >= 2:        # no way on from here: back to the lantern, and from there
+                    self.give_up = True    # plan the whole way to this goal in one go
+                    self.direct.add(gi)
+                    return
+            self.request(start)            # (the same goal again, or the next one after a skipped seed)
+            return
+        self.fails = 0
+        self.route += ins
+        if not end.won and not (end.boss is not None and not end.boss_done):
+            self.request(end.copy())       # plan the stretch after this one while this one is played
+
+    # -- one input per step -------------------------------------------------------------------
+    def input(self, s):
+        """The input for the next step of s; None while Leafling waits for the planner; 'r' to give up and go
+        back to the last lantern."""
+        if s.boss is not None and not s.boss_done:
+            self.invalidate()
+            inp = boss_bot(s)
+            if self.late > 0:
+                self.late -= 1
+                return (inp[0], False, inp[2], False) if inp[1] else inp
+            if inp[1] and self.rnd.random() < self.slip * 1.5:     # a little late on the jump
+                self.late = self.rnd.randint(2, 7)
+                self.stats["slips"] += 1
+                return (inp[0], False, inp[2], False)
+            return inp
+        self.take_result(s)
+        if not self.route:
+            if self.give_up:
+                self.give_up = False
+                self.fails = 0
+                self.invalidate()
+                return "r"
+            if self.job is None:
+                self.request(s.copy())
+                self.take_result(s)
+            if not self.route:
+                self.stats["waits"] += 1
+                return None
+        if self.route[0][1] and self.rnd.random() < self.slip:
+            self.try_slip(s)
+        return self.route.pop(0)
+
+    def try_slip(self, s):
+        """A mistimed jump: pressed a few frames late, or let go too soon. The rest of the stretch is played as
+        planned, as a player would; when that ends badly she really loses a leaf. A slip she would get away
+        with is left out (it would need a new plan, and the game would wait for it)."""
+        self.stats["slips"] += 1
+        r = self.route
+        if self.rnd.random() < 0.6:
+            k = self.rnd.randint(2, 6)
+            alt = [(r[0][0], False, False, False)] * k + r[:90]
+        else:
+            alt = [r[0]] + [(d, False, False, dn) for d, j, h, dn in r[1:12]] + r[12:90]
+        c = s.copy()
+        for i in alt:
+            c.step(i)
+            if c.dead:
+                self.stats["fatal"] += 1
+                self.gen += 1                    # the stretch planned after this one will not be needed
+                self.job = self.result = None
+                self.route = alt
+                return
+            if c.won:
+                return
+
+    def died(self, s):
+        """Leafling lost a leaf: forget the route and plan from the lantern she will be put back at."""
+        self.invalidate()
+        if s.lives > 1:
+            c = s.copy()
+            c.respawn()
+            self.request(c)
+
+
+def auto_level(n, rnd, slip=None, seeds=True, limit_s=600, cpu_s=240.0):
+    """Headless: the auto-mode bot plays level n with the game's own rules (5 leaves, back to the lantern
+    after a death, the level starts again when the leaves run out). Returns a report dict."""
+    lv = Level(n)
+    sim = Sim(lv)
+    bot = LeafBot(lv, rnd, seeds=seeds, slip=slip, threaded=False)
+    rep = dict(n=n, deaths=0, overs=0, frames=0, won=False, seeds=0, where=[], waits=0, timeout=False)
+    t_end = time.time() + cpu_s                 # the planner is synchronous here: cap the real time too
+    while rep["frames"] < limit_s * 60:
+        if time.time() > t_end:
+            rep["timeout"] = True
+            break
+        inp = bot.input(sim)
+        if inp == "r":
+            sim.respawn()
+            rep["frames"] += 60                 # (a give-up costs a moment, and can never loop for free)
+            continue
+        if inp is None:
+            rep["frames"] += 1          # (the planner is synchronous here; this only happens when it is stuck)
+            rep["waits"] += 1
+            if rep["waits"] > 600:
+                break
+            continue
+        sim.step(inp)
+        rep["frames"] += 1
+        if sim.dead:
+            rep["deaths"] += 1
+            rep["where"].append(int(sim.x))
+            bot.died(sim)
+            rep["frames"] += 54          # the death pause of play()
+            sim.lives -= 1
+            if sim.lives <= 0:
+                rep["overs"] += 1
+                sim = Sim(lv)
+                bot.invalidate()
+            else:
+                sim.respawn()
+        if sim.won:
+            rep["won"] = True
+            rep["seeds"] = popcount(sim.seeds)
+            rep["level_time"] = sim.f / 60
+            break
+    rep["slips"] = bot.stats["slips"]
+    return rep
 
 
 
@@ -4072,7 +4347,9 @@ def help_lines(kitty):
             "Slide down mossy walls and jump off them to climb.",
             "Stomp beetles, bats and plants from above; dodge the seeds",
             "plants spit. Lanterns keep your place. Three seeds hide in",
-            "every level. Every 50 motes give an extra leaf (life)."]
+            "every level. Every 50 motes give an extra leaf (life).",
+            "",
+            "Auto mode: the game plays itself (Space pause, +/- speed, Esc stop)."]
 
 
 PAUSE = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "M                 sound on / off",
@@ -4151,7 +4428,7 @@ class TitleDemo:
         done, best, seeds, unlocked = progress()
         nxt = next((i for i in range(len(LEVELS)) if unlocked[i] and not done[i]), len(LEVELS) - 1)
         m = LEVELS[nxt]
-        items = ["%s   %s %s" % ("Play    " if not any(done) else "Continue", m["id"], m["name"]), "World map"]
+        items = ["%s   %s %s" % ("Play    " if not any(done) else "Continue", m["id"], m["name"]), "World map", AUTO_LABEL]
         total = sum(popcount(v) for v in seeds)
         line = None
         if any(done):
@@ -4306,10 +4583,14 @@ def too_small(term):
     term.write("\x1b[0m\x1b[2J\x1b[HPlease make the window larger (70x22).")
 
 
-def play(term, ctl, n):
-    """One level. Returns 'next', 'map' or 'quit'."""
+def play(term, ctl, n, auto=None):
+    """One level. Returns 'next', 'map' or 'quit' ('stop' when the viewer ends auto mode).
+    With auto (an arcadekit.AutoMode) the LeafBot plays: the real level and rules, but nothing is recorded."""
     lv = Level(n)
-    sim = Sim(lv, toggle_glide=not ctl.kitty)
+    sim = Sim(lv, toggle_glide=not ctl.kitty and not auto)
+    bot = LeafBot(lv) if auto else None
+    if auto and n + 1 < len(LEVELS):
+        threading.Thread(target=LeafBot.warm, args=(n + 1,), daemon=True).start()
     fx = Fx(lv)
     cam = Camera()
     painter = Painter(lv)
@@ -4329,6 +4610,14 @@ def play(term, ctl, n):
         dt = min(0.1, now - last)
         last = now
         for name, kind in term.events():
+            if auto:
+                if kind == "press":
+                    a = auto.key(name)
+                    if a == "stop":
+                        return "stop"
+                    if a == "sound" and SND.toggle():
+                        SND.play("tick")
+                continue
             if kind != "press":
                 ctl.feed(name, kind, now)
                 continue
@@ -4373,30 +4662,53 @@ def play(term, ctl, n):
             last = time.time()
             continue
         T = tile_size(cols, rows * 2)
+        real_dt = dt
+        if auto:
+            dt = auto.scale(dt)               # game time runs at the chosen speed (0 while paused)
+        if auto and state == "clear" and st_t > 0.7:
+            st_t += real_dt
+            if st_t > 3.7:                    # the result box stays about 3 s, then on to the next level
+                return "next" if n < len(LEVELS) - 1 else "map"
         if not paused:
             t += dt
             banner -= dt
             if state == "play":
                 acc += dt
                 steps = 0
-                while acc >= DT and steps < 8:
-                    ev = sim.step(ctl.sample(now))
+                todo = auto.steps(real_dt, DT) if auto else 99
+                while (acc >= DT and steps < 8) if not auto else steps < todo:
+                    if auto:
+                        inp = bot.input(sim)
+                        if inp == "r":            # no way on from here: back to the lantern, as a player would
+                            sim.respawn()
+                            fx.blink = 1.0
+                            cam.x = None
+                            steps += 1
+                            continue
+                        if inp is None:           # thinking: the planner has not found the way yet
+                            break
+                    else:
+                        inp = ctl.sample(now)
+                    ev = sim.step(inp)
                     fx.events(sim, ev)
                     acc -= DT
                     steps += 1
                     if sim.dead:
                         state, st_t = "dead", 0.0
                         SND.play("death", 0.8)
+                        if bot:
+                            bot.died(sim)
                         break
                     if sim.won:
                         state, st_t = "clear", 0.0
                         lid = lv.meta["id"]
-                        record = submit(GAME, "%s time" % lid, round(sim.f / 60, 2), lower_is_better=True)
-                        submit(GAME, "%s seeds" % lid, seeds_before | sim.seeds)
+                        if not auto:
+                            record = submit(GAME, "%s time" % lid, round(sim.f / 60, 2), lower_is_better=True)
+                            submit(GAME, "%s seeds" % lid, seeds_before | sim.seeds)
                         SND.play("biome" if last_of_biome else "clear")
                         fx.burst(sim.x, sim.y - 1, 40, [(220, 255, 200), (255, 240, 160), (140, 230, 120)], 6, 1.2)
                         break
-                if steps >= 8:
+                if steps >= 8 or auto:
                     acc = 0.0
             elif state == "dead":
                 st_t += dt
@@ -4415,7 +4727,9 @@ def play(term, ctl, n):
             elif state == "over":
                 st_t += dt
                 if st_t > 2.2:
-                    sim = Sim(lv, toggle_glide=not ctl.kitty)
+                    sim = Sim(lv, toggle_glide=not ctl.kitty and not auto)
+                    if bot:
+                        bot.invalidate()
                     fx = Fx(lv)
                     cam.x = None
                     ctl.reset()
@@ -4423,7 +4737,7 @@ def play(term, ctl, n):
             else:
                 st_t += dt
             fx.update(sim, dt)
-            cam.update(sim, cols / T, rows * 2 / T, dt)
+            cam.update(sim, cols / T, rows * 2 / T, real_dt if auto else dt)
         extra = {}
         hint = None
         for hx, text in lv.hints:
@@ -4444,7 +4758,13 @@ def play(term, ctl, n):
         if paused:
             overlay(cv, help_lines(ctl.kitty) if help_ else PAUSE + ["", SND.label()])
         elif state == "clear" and st_t > 0.7:
-            clear_overlay(cv, clear_lines(lv, sim, record, seeds_before, last_of_biome, n == len(LEVELS) - 1))
+            lines = clear_lines(lv, sim, record, seeds_before, last_of_biome, n == len(LEVELS) - 1)
+            if auto:
+                lines[-1] = "Auto mode: on to the %s" % ("next level" if n < len(LEVELS) - 1 else "world map")
+            clear_overlay(cv, lines)
+        if auto:
+            thinking = state == "play" and not bot.route and bot.job is not None
+            auto.banner(cv, extra="thinking..." if thinking else "")
         term.write(cv.emit())
         time.sleep(max(0.0, 1 / 40 - (time.time() - now)))
 
@@ -4486,6 +4806,40 @@ def world_map(term, ctl, sel):
                 SND.play("hurt", 0.4)
 
 
+def auto_mode(term, ctl, n):
+    """Auto mode: Leafling plays the levels in order from n (via the world map), until Esc / Q."""
+    auto = AutoMode()
+    t0 = time.time()
+    while True:
+        # a moment on the world map, the way a player picks the level
+        shown = 0.0
+        last = time.time()
+        while shown < 1.6:
+            now = time.time()
+            for k, kind in term.events(max(0.0, 1 / 30 - (time.time() - now))):
+                if kind == "press":
+                    a = auto.key(k)
+                    if a == "stop":
+                        return
+                    if a == "sound" and SND.toggle():
+                        SND.play("tick")
+            now = time.time()
+            shown += auto.scale(now - last)
+            last = now
+            cols, rows = term.size()
+            if cols < 70 or rows < 22:
+                too_small(term)
+                continue
+            cv = draw_map(cols, rows, n, now - t0, ctl.kitty)
+            auto.banner(cv)
+            term.write(cv.emit())
+        SND.play("start")
+        res = play(term, ctl, n, auto)
+        if res == "stop":
+            return
+        n = n + 1 if res == "next" and n + 1 < len(LEVELS) else 0
+
+
 def main():
     with Terminal() as term:
         ctl = Controls(term.kitty)
@@ -4515,13 +4869,20 @@ def main():
                     help_ = True
                 elif k in ("q", "esc"):
                     return
-                elif k in ("up", "w", "down", "s", "tab"):
-                    sel = 1 - sel
+                elif k in ("up", "w"):
+                    sel = (sel - 1) % 3
+                    SND.play("tick")
+                elif k in ("down", "s", "tab"):
+                    sel = (sel + 1) % 3
                     SND.play("tick")
                 elif k in ("enter", " "):
                     SND.play("start")
-                    go = nxt if sel == 0 else "map"
+                    go = nxt if sel == 0 else "map" if sel == 1 else "auto"
             if go is None:
+                continue
+            if go == "auto":                    # from the level last chosen on the world map, or the next one
+                auto_mode(term, ctl, nxt if map_sel is None else map_sel)
+                last = time.time()
                 continue
             if go == "map":
                 go = world_map(term, ctl, nxt if map_sel is None else map_sel)
@@ -4720,6 +5081,51 @@ def demo_test():
             raise AssertionError("the title demo gets stuck in world %d at x=%.1f" % (b, s.x))
 
 
+def auto_test(seconds=30.0):
+    """Auto mode in the real play loop, headless, at x8: level 1-1 must be cleared (nothing recorded - the
+    self-test replaces submit), and pause must stop the game time."""
+    class FakeTerm:
+        kitty = False
+
+        def __init__(self):
+            self.t0 = time.time()
+            self.frames = 0
+
+        def events(self, timeout=0.0):
+            self.frames += 1
+            if time.time() - self.t0 > seconds:
+                return [("esc", "press")]
+            return []
+
+        def size(self):
+            return 120, 40
+
+        def write(self, s):
+            pass
+
+    auto = AutoMode(8.0)
+    term = FakeTerm()
+    quiet = SND.enabled
+    SND.enabled = False
+    try:
+        res = play(term, Controls(False), 0, auto)
+    finally:
+        SND.enabled = quiet
+    assert res == "next", "auto mode did not clear 1-1 at x8 within %.0f s (%s)" % (seconds, res)
+    lv = Level(0)
+    sim = Sim(lv)
+    bot = LeafBot(lv, threaded=False)
+    auto = AutoMode(8.0)
+    auto.key(" ")
+    assert auto.paused and auto.steps(0.5, DT) == 0, "auto mode: time runs on while paused"
+    for _ in range(120):
+        inp = bot.input(sim)
+        if inp not in (None, "r"):
+            sim.step(inp)
+    assert sim.x > lv.start[0] + 3, "the auto-mode bot does not get going"
+    return term.frames, time.time() - term.t0
+
+
 def selftest():
     t0 = time.time()
     global submit
@@ -4749,6 +5155,9 @@ def selftest():
     print("rendering: %d frames at 70x22, 120x40 and 160x45 (+ title, world map, overlays)" % render_test())
     demo_test()
     print("title demo: the autopilot runs through all four worlds")
+    frames, secs = auto_test()
+    print("auto mode: the bot cleared 1-1 at x8 in the real play loop (%d frames, %.1f s), nothing recorded"
+          % (frames, secs))
     # 5. the route planner: every level can be finished, every lantern is on the way, every seed reachable
     budget = 600.0
     for a in sys.argv:

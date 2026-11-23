@@ -127,6 +127,9 @@ Rising bubbles mark air vents. Gold glints are salvage; blue, green and orange o
 flares. Jellyfish glow and sting; lurkers carry a blinking lure and swim towards every sound; in the deep zones a
 leviathan listens, and the NOISE bar shows how loud you have been.
 
+In auto mode the pilot only knows what its own pings have shown: it explores the dark, keeps quiet enough not
+to wake the leviathan, tops up at vents and dives for the Source.
+
 ## LIGHTKEEPER keys
 
 | Key | One keeper | Two keepers |
@@ -213,6 +216,9 @@ lantern to make it your restart point. Every level hides three seeds (behind fak
 beaten path); every 50 light motes give an extra leaf. The last level of each world ends with a set piece:
 a bramble wall or a storm front chasing you, or a beetle boss you stomp while it is dizzy. Levels unlock as you
 finish them; the world map shows your best time and seeds per level.
+
+Auto mode plays the levels in order from the one picked on the world map, using the game's own route planner;
+Leafling sometimes mistimes a jump and really loses a leaf, and goes after seeds when they are within reach.
 
 Terminals with the kitty keyboard protocol (kitty, WezTerm, Ghostty, recent iTerm2) report key releases: there
 the jump height follows how long you hold the key and holding jump in the air glides. In other terminals (macOS
