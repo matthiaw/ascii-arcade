@@ -16,6 +16,7 @@ Run:        python3 lightkeeper.py
 Self-test:  python3 lightkeeper.py --selftest
 Benchmark:  python3 lightkeeper.py --bench
 """
+import bisect
 import math
 import random
 import sys
@@ -811,6 +812,119 @@ class FineView:
                 xx, yy = u - 0.5, v - 0.5
                 phase.append(xx * 0.33 + yy * 0.52 + 1.6 * math.sin(yy * 0.17 + xx * 0.06) + rnd.uniform(0, 0.6))
             self.rows.append((Y, X0, ang, dist, phase, dark, lit, wa, sw))
+        self.X0 = X0
+        self.fog_cols = [(X + 2 - ox) / z for X in range(0, PW, 4)]     # where the 4x4 fog grid samples
+        self.fog_rows = [(Y + 2 - oy) / z for Y in range(0, PH, 4)]
+        # For the fast path, each row is cut into runs of one kind: open water of one material (dark, lit) whose
+        # only motion is the swell, plain land (no motion at all), and everything else (shores, surf). Pixels the
+        # beam or the lamp's glow may reach are found per frame and drawn exactly.
+        self.mats, self.wtabs, self.ltabs = [], {}, {}
+        self.lmats, self.fogtabs = [], {}
+        mat_id, lmat_id = {}, {}
+        K = SWELL_STEPS / TAU
+        self.fast = []
+        for Y, X0_, ang, dist, phase, dark, lit, wa, sw in self.rows:
+            runs, prev = [], None
+            lm = [0] * len(ang)
+            for k in range(len(ang)):
+                if sw[k] == 0 and wa[k] == 1.0:
+                    m = mat_id.get((dark[k], lit[k]))
+                    if m is None:
+                        m = mat_id[(dark[k], lit[k])] = len(self.mats)
+                        self.mats.append((dark[k], lit[k]))
+                    kind = m
+                elif sw[k] == 0 and wa[k] == 0.0:
+                    kind = -1                                    # land
+                    m = lmat_id.get((dark[k], lit[k]))
+                    if m is None:
+                        m = lmat_id[(dark[k], lit[k])] = len(self.lmats)
+                        self.lmats.append((dark[k], lit[k]))
+                    lm[k] = m
+                else:
+                    kind = -2                                    # anything else: per pixel
+                if kind != prev:
+                    runs.append([k, k + 1, kind])
+                    prev = kind
+                else:
+                    runs[-1][1] = k + 1
+            pidx = [int(round(p * K)) for p in phase]
+            n_ = len(ang)
+            inc = all(ang[k] <= ang[k + 1] for k in range(n_ - 1))
+            dec = not inc and all(ang[k] >= ang[k + 1] for k in range(n_ - 1))
+            asc = ang if inc else ang[::-1] if dec else None
+            near = [k for k in range(n_) if dist[k] < 6]
+            glow = (near[0], near[-1] + 1) if near else None
+            cells = [(X0 + k) >> 2 for k in range(n_)]
+            self.fast.append((runs, pidx, inc, asc, glow, cells, ((Y + 0.5 - oy) / z - ly) ** 2, lm))
+        self.lamp_x = lx
+
+    def land_row(self, r, L):
+        """Plain land of row r at light L (no swell, no surf): one colour per pixel, cached per L."""
+        tab = self.ltabs.get(L)
+        if tab is None:
+            tab = self.ltabs[L] = [None] * len(self.rows)
+        row = tab[r]
+        if row is None:
+            dark, lit = self.rows[r][5], self.rows[r][6]
+            row = tab[r] = [(int(a[0] + (b[0] - a[0]) * L), int(a[1] + (b[1] - a[1]) * L), int(a[2] + (b[2] - a[2]) * L))
+                            for a, b in zip(dark, lit)]
+        return row
+
+    def fog_tabs(self, moon, levels):
+        """For each fog step in levels: every water material's swell table and every land material's colour, under
+        the moon alone."""
+        wl, ll = self.fogtabs.setdefault(moon, ([[None] * (FOG_STEPS + 1) for _ in self.mats], [None] * (FOG_STEPS + 1)))
+        fc = (40, 46, 56)
+        for q in levels:
+            if ll[q] is None:
+                f = q / FOG_STEPS
+                L = moon * (1 - f * 0.8) if q else moon
+                fk = f * 0.45
+                for m in range(len(self.mats)):
+                    wl[m][q] = self.water_tab(m, L, f if q else 0)
+                lt = []
+                for a, b in self.lmats:
+                    col = (int(a[0] + (b[0] - a[0]) * L), int(a[1] + (b[1] - a[1]) * L), int(a[2] + (b[2] - a[2]) * L))
+                    if q:
+                        col = (int(col[0] + (fc[0] - col[0]) * fk), int(col[1] + (fc[1] - col[1]) * fk),
+                               int(col[2] + (fc[2] - col[2]) * fk))
+                    lt.append(col)
+                ll[q] = lt
+        return wl, ll
+
+    def water_tab(self, m, L0, f):
+        """Open water of material m at light L0 (before the swell) under fog f: its colour for each step of the
+        swell, so a frame looks pixels up instead of mixing them."""
+        key = (m, L0, f)
+        tab = self.wtabs.get(key)
+        if tab is None:
+            if len(self.wtabs) > 4000:
+                self.wtabs.clear()
+            a, b = self.mats[m]
+            fc = (40, 46, 56)
+            tab = []
+            for i in range(SWELL_STEPS):
+                L = L0 * (1 - 0.2 * (1 - math.sin(TAU * i / SWELL_STEPS)))
+                col = (int(a[0] + (b[0] - a[0]) * L), int(a[1] + (b[1] - a[1]) * L), int(a[2] + (b[2] - a[2]) * L))
+                if f:
+                    col = mix(col, fc if L < 0.3 else (150, 160, 170), f * 0.45)
+                tab.append(col)
+            self.wtabs[key] = tab
+        return tab
+
+
+SWELL_STEPS = 256                # the swell's phase in steps of 1/256 turn: far below one colour level in the dark
+FOG_STEPS = 128                  # fog density steps for the looked-up water and land (below one colour level)
+
+
+def _beam_span(asc, inc, n_, lo, hi):
+    """The index range of a row whose angle (monotonic along the row) lies in [lo, hi], one pixel wider."""
+    i0, i1 = bisect.bisect_left(asc, lo), bisect.bisect_right(asc, hi)
+    if i0 >= i1:
+        return None
+    if not inc:
+        i0, i1 = n_ - i1, n_ - i0
+    return max(0, i0 - 1), min(n_, i1 + 1)
 
 
 def draw_fine(n, painter, cv, PW, PH, z, title_mode):
@@ -832,15 +946,32 @@ def draw_fine(n, painter, cv, PW, PH, z, title_mode):
     fogc = n.fog > 0
     fg = []
     if fogc:                                     # fog on a grid of 4x4 screen pixels (finer than 3x3 world pixels)
-        for gy in range(0, PH, 4):
-            v = (gy + 2 - oy) / z
-            fg.append([n.fog_at((gx + 2 - ox) / z, v) for gx in range(0, PW, 4)])
+        # the same numbers as Night.fog_at, with the column and row terms worked out once per frame
+        fs, fog = n.fog_seed, n.fog
+        tx0, ty0 = n.t * n.wind[0] * 0.05, n.t * n.wind[1] * 0.05
+        xs = []
+        for x in fv.fog_cols:
+            fx = (x / 22.0 + tx0) % 16
+            ix = int(fx)
+            xs.append((ix, fx - ix))
+        for y in fv.fog_rows:
+            fy = (y / 22.0 + ty0) % 16
+            iy = int(fy)
+            ty = fy - iy
+            s0, s1 = fs[iy], fs[iy + 1]
+            frow = []
+            for ix, tx in xs:
+                a = s0[ix] + (s0[ix + 1] - s0[ix]) * tx
+                b = s1[ix] + (s1[ix + 1] - s1[ix]) * tx
+                v = (a + (b - a) * ty - 0.35) * 1.8
+                frow.append((0 if v < 0 else 1 if v > 1 else v) * fog)
+            fg.append(frow)
     moon = 0.06 if n.night <= 2 else 0.03
     sin = math.sin
-    for Y, X0, ang, dist, phase, dark, lit, wa, sw in fv.rows:
-        row = px[Y]
-        frow = fg[Y >> 2] if fogc else None
-        for k in range(len(ang)):
+
+    def exact(row, frow, X0, ang, dist, phase, dark, lit, wa, sw, k0, k1):
+        """Pixels k0..k1 of a row, every term worked out (beam, glow, fog, flash, swell, surf)."""
+        for k in range(k0, k1):
             L = moon
             d = dist[k]
             if on and d < R:
@@ -864,16 +995,83 @@ def draw_fine(n, painter, cv, PW, PH, z, title_mode):
             if w_:
                 L *= 1 - w_ * 0.2 * (1 - sin(t * 1.5 + phase[k]))
             a, b = dark[k], lit[k]
+            col = (int(a[0] + (b[0] - a[0]) * L), int(a[1] + (b[1] - a[1]) * L), int(a[2] + (b[2] - a[2]) * L))
             s_ = sw[k]
             if s_ or f:
-                col = mix(a, b, L)
                 if s_:
                     col = mix(col, SURF, s_ * (0.1 + 0.07 * sin(t * 2.2 + phase[k] * 2) + 0.3 * L))
                 if f:
-                    col = mix(col, (40, 46, 56) if L < 0.3 else (150, 160, 170), f * 0.45)
-                row[X0 + k] = col
+                    fk = f * 0.45
+                    fc = (40, 46, 56) if L < 0.3 else (150, 160, 170)
+                    col = (int(col[0] + (fc[0] - col[0]) * fk), int(col[1] + (fc[1] - col[1]) * fk),
+                           int(col[2] + (fc[2] - col[2]) * fk))
+            row[X0 + k] = col
+
+    if flash:                                    # lightning: rare and short, every pixel worked out
+        for Y, X0, ang, dist, phase, dark, lit, wa, sw in fv.rows:
+            exact(px[Y], fg[Y >> 2] if fogc else None, X0, ang, dist, phase, dark, lit, wa, sw, 0, len(ang))
+    else:
+        # Away from the beam and the glow a pixel only knows the moon, the fog and the swell: water is looked
+        # up per swell step, land is one cached colour; the beam's pixels (found per row by bisecting the
+        # row's angles, which run monotonic) and the shores are then worked out exactly on top.
+        Ti = int(round(t * 1.5 * SWELL_STEPS / TAU))
+        msk = SWELL_STEPS - 1
+        spans = []
+        if on:
+            b0 = beam - TAU if beam > math.pi else beam
+            lo, hi = b0 - half - 1e-6, b0 + half + 1e-6
+            if lo < -math.pi:
+                spans = [(lo + TAU, math.pi + 1), (-math.pi - 1, hi)]
+            elif hi > math.pi:
+                spans = [(lo, math.pi + 1), (-math.pi - 1, hi - TAU)]
             else:
-                row[X0 + k] = (int(a[0] + (b[0] - a[0]) * L), int(a[1] + (b[1] - a[1]) * L), int(a[2] + (b[2] - a[2]) * L))
+                spans = [(lo, hi)]
+        FS = FOG_STEPS
+        if fogc:                                 # the fog steps of this frame, and their colours
+            lvs = [[int(f * FS + 0.5) for f in frow] for frow in fg]
+            used = set()
+            for lv in lvs:
+                used.update(lv)
+            wl, ll = fv.fog_tabs(moon, used)
+        RR = R * R
+        lx = fv.lamp_x
+        for r, (Y, X0, ang, dist, phase, dark, lit, wa, sw) in enumerate(fv.rows):
+            runs, pidx, inc, asc, glow, cells, dy2, lm = fv.fast[r]
+            row = px[Y]
+            frow = fg[Y >> 2] if fogc else None
+            if frow is not None:
+                lv = lvs[Y >> 2]
+            for k0, k1, kind in runs:
+                if kind >= 0:                    # open water
+                    if frow is None:
+                        tab = fv.water_tab(kind, moon, 0)
+                        row[X0 + k0:X0 + k1] = [tab[(p + Ti) & msk] for p in pidx[k0:k1]]
+                    else:
+                        lt = wl[kind]
+                        row[X0 + k0:X0 + k1] = [lt[lv[cc]][(p + Ti) & msk] for cc, p in zip(cells[k0:k1], pidx[k0:k1])]
+                elif kind == -1:                 # land
+                    if frow is None:
+                        row[X0 + k0:X0 + k1] = fv.land_row(r, moon)[k0:k1]
+                    else:
+                        row[X0 + k0:X0 + k1] = [ll[lv[cc]][m] for cc, m in zip(cells[k0:k1], lm[k0:k1])]
+                else:
+                    exact(row, frow, X0, ang, dist, phase, dark, lit, wa, sw, k0, k1)
+            if glow:
+                exact(row, frow, X0, ang, dist, phase, dark, lit, wa, sw, glow[0], glow[1])
+            if spans and dy2 < RR:
+                n_ = len(ang)
+                w = math.sqrt(RR - dy2)            # the beam's reach along this row, two pixels wider
+                r0 = max(0, int(ox + z * (lx - w)) - 2 - X0)
+                r1 = min(n_, int(ox + z * (lx + w)) + 3 - X0)
+                if asc is None:
+                    exact(row, frow, X0, ang, dist, phase, dark, lit, wa, sw, 0, n_)
+                    continue
+                for lo, hi in spans:
+                    sp = _beam_span(asc, inc, n_, lo, hi)
+                    if sp:
+                        k0, k1 = max(sp[0], r0), min(sp[1], r1)
+                        if k0 < k1:
+                            exact(row, frow, X0, ang, dist, phase, dark, lit, wa, sw, k0, k1)
 
     def S(x, y):                                 # world -> screen
         return x * z + ox, y * z + oy

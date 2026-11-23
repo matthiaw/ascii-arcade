@@ -721,11 +721,11 @@ def fill(px, W, x0, y0, x1, y1, c, clip):
         px[y][x0:x1] = run
 
 
-def glow(px, W, cx, cy, r, c, a, clip):
+def glow(px, W, cx, cy, r, c, a, clip, cap=16.0):
     """Additive soft light around (cx, cy)."""
     if r < 1.0:
         return
-    r = min(r, 16.0)
+    r = min(r, cap)
     r2 = r * r
     x0, x1 = max(0, int(cx - r)), min(W, int(cx + r) + 1)
     y0, y1 = max(0, int(cy - r)), min(int(clip), int(cy + r) + 1)
@@ -827,9 +827,46 @@ def hires(art, w, h):
     return g
 
 
+_FINE_ART = {}
+
+
+def fine_art(art, w, h):
+    """Big windows: the smoothed art sampled at exactly w x h, with the dark bands sorted out at that size. A 'D'
+    pixel on the silhouette stays a 1 px outline; inside the car a dark band keeps a 1 px seam on its top edge and
+    the rest of it becomes 'K', a shaded panel, so the outline does not grow fat with the car."""
+    key = (id(art), w, h)
+    g = _FINE_ART.get(key)
+    if g is not None:
+        return g
+    if len(_FINE_ART) > 400:
+        _FINE_ART.clear()
+    src = hires(art, w, h)
+    th, tw = len(src), len(src[0])
+    xs = [tx * tw // w for tx in range(w)]
+    g = [[src[ty * th // h][x] for x in xs] for ty in range(h)]
+    out = [r[:] for r in g]
+    for y in range(h):
+        for x in range(w):
+            if g[y][x] != "D":
+                continue
+            n = [g[y - 1][x] if y > 0 else ".", g[y + 1][x] if y < h - 1 else ".",
+                 g[y][x - 1] if x > 0 else ".", g[y][x + 1] if x < w - 1 else "."]
+            if "." in n:
+                continue                                  # silhouette: the outline
+            if n[0] != "D" or n[1] in "TX":
+                continue                                  # the seam on top of a band / above the tyres
+            out[y][x] = "K"
+    g = ["".join(r) for r in out]
+    _FINE_ART[key] = g
+    return g
+
+
 def draw_art(px, W, art, cols, x0, y0, w, h, clip, flip=False, lean=0.0):
     w, h = int(w), int(h)
     if w < 1 or h < 1:
+        return
+    if FINE and (w >= len(art[0]) * 1.5 or h >= len(art) * 1.5):
+        draw_art_fine(px, W, art, cols, x0, y0, w, h, clip, flip, lean)
         return
     src_art = hires(art, w, h)
     fine = src_art is not art
@@ -854,6 +891,42 @@ def draw_art(px, W, art, cols, x0, y0, w, h, clip, flip=False, lean=0.0):
             if 0 <= x < W:
                 ch = src[(w - 1 - tx) * tw // w if flip else tx * tw // w]
                 if ch != ".":
+                    out[x] = cl[ch]
+
+
+# ---- big windows: finer drawing (anti-aliased road, facades, thin poles, 1 px car outlines) ----
+FINE = False          # set by render() for the frame being drawn; small windows keep the classic look exactly
+
+
+def is_fine(cols, rows):
+    return cols >= 140 and rows >= 44
+
+
+def draw_art_fine(px, W, art, cols, x0, y0, w, h, clip, flip, lean):
+    g = fine_art(art, w, h)
+    body = cols["B"]
+    top, bot = shade(body, 1.12), shade(body, 0.78)
+    dk = cols["D"]
+    x0, y0 = int(x0), int(y0)
+    for ty in range(h):
+        y = y0 + ty
+        if y < 0 or y >= clip:
+            continue
+        src = g[ty]
+        if flip:
+            src = src[::-1]
+        out = px[y]
+        sh = int(lean * (1 - ty / h) * 2.5)
+        cl = dict(cols)
+        b = mix(top, bot, ty / h)
+        cl["B"] = b
+        cl["K"] = mix(b, dk, 0.45)                       # a panel a shade darker than the paint around it
+        xs = x0 + sh
+        for tx in range(w):
+            ch = src[tx]
+            if ch != ".":
+                x = xs + tx
+                if 0 <= x < W:
                     out[x] = cl[ch]
 
 
@@ -928,7 +1001,15 @@ def background(si, W, H, hz):
         for y in range(max(hz - band, int(y0)), hz):
             sl[y - (hz - band)][x % BW2] = c
     neon = st["neon"]
-    if scene in ("city", "storm"):
+
+    def put(x, y, c):                                  # one skyline pixel at screen row y
+        j = int(y) - (hz - band)
+        if 0 <= j < band:
+            sl[j][x % BW2] = c
+    fine = is_fine(W, H // 2)
+    if fine:
+        fine_skyline(scene, st, rnd, sl, col, put, BW2, band, hz, W)
+    elif scene in ("city", "storm"):
         x = 0
         while x < BW2:
             w = rnd.randint(3, 9)
@@ -949,6 +1030,8 @@ def background(si, W, H, hz):
                     for xx in range(x, x + w):
                         sl[j][xx % BW2] = nc
             x += w + rnd.randint(0, 2)
+    if fine:
+        pass
     elif scene == "coast":
         for x in range(BW2):                                   # a far headland with a few lights
             a = x / BW2 * math.tau
@@ -1013,6 +1096,372 @@ def background(si, W, H, hz):
     return _BG[key]
 
 
+def vbar(px, W, xl, xr, y0, y1, c, clip, a=1.0):
+    """Big windows: an upright bar with anti-aliased sides (poles, trunks)."""
+    for y in range(max(0, int(y0)), min(int(clip), int(math.ceil(y1)))):
+        aspan(px[y], W, xl, xl, xr, xr, c, a)
+
+
+def hbar(px, W, x0, x1, yc, th, c, clip):
+    """Big windows: a level bar th pixels thick, its top and bottom edges blended into the rows they cut."""
+    ya, yb = yc - th / 2, yc + th / 2
+    for y in range(max(0, int(ya)), min(int(clip), int(math.ceil(yb)))):
+        cov = min(yb, y + 1) - max(ya, y)
+        if cov > 0.05:
+            aspan(px[y], W, x0, x0, x1, x1, c, min(1.0, cov))
+
+
+def draw_lamp_fine(px, W, off, sx, sy, h, s, clip, pole, lampc, near, f):
+    """A street lamp for big windows: a slim pole with a lit edge, a thin arm, a small head and a soft glow."""
+    w = max(1.0, 70 * s * 0.5)
+    vbar(px, W, sx - w / 2, sx + w / 2, sy - h, sy, pole, clip)
+    if w > 2.2:                                           # a little catch-light down one side of the pole
+        vbar(px, W, sx - w / 2 + w * 0.15, sx - w / 2 + w * 0.4, sy - h, sy, mix(pole, (200, 200, 210), 0.3), clip)
+    d = -math.copysign(1, off)
+    arm = d * 500 * s
+    th = max(1.0, 40 * s * 0.6)
+    hx = sx + arm
+    ax0, ax1 = (sx, hx) if arm > 0 else (hx, sx)
+    hbar(px, W, ax0 - w / 2, ax1 + w / 2, sy - h + th / 2, th, pole, clip)
+    hw, hh = max(1.0, 90 * s), max(1.0, 50 * s)
+    hbar(px, W, hx - hw, hx + hw, sy - h + th + hh * 0.3, hh * 0.6, mix(pole, (0, 0, 0), 0.3), clip)
+    hbar(px, W, hx - hw * 0.8, hx + hw * 0.8, sy - h + th + hh * 0.8, max(1.0, hh * 0.45), lampc, clip)
+    if near < 90:
+        gy = sy - h + th + hh
+        glow(px, W, hx, gy, max(1.5, 900 * s), (60, 50, 30), 0.55 * (1 - f), clip, cap=W / 9)
+        glow(px, W, hx, gy, max(1.5, 300 * s), (130, 110, 70), 0.9 * (1 - f), clip)
+
+
+_TUFTS = {}
+
+
+def draw_pine_fine(px, W, seed, sx, sy, h, w, s, clip, dark, lite, bark):
+    """A pine for big windows: a thin trunk, tiers of boughs with ragged, anti-aliased edges, moonlight on the
+    left and a shadow under every tier."""
+    rnd = random.Random(seed * 131 + 7)
+    tw = max(1.0, 90 * s * 0.8)
+    vbar(px, W, sx - tw / 2, sx + tw / 2, sy - h * 0.25, sy, bark, clip)
+    rows = int(h * 0.85)
+    top = sy - h
+    tiers = 3 + seed % 2
+    deep = shade(dark, 0.6)
+    lite = mix(lite, (120, 150, 150), 0.12)
+    rim = mix(lite, (150, 170, 190), 0.3)
+    jit = [rnd.uniform(-1, 1) for _ in range(16)]
+    tufts = _TUFTS.get(seed % 16)                         # sixteen needle patterns go round the forest
+    if tufts is None:
+        tr = random.Random(seed % 16)
+        tufts = _TUFTS[seed % 16] = [[tr.uniform(-0.9, 0.8) for _ in range(48)] for _ in range(73)]
+    for j in range(rows):
+        yy = int(top + j)
+        if not 0 <= yy < clip:
+            continue
+        p = j / max(1, rows)
+        tier = (p * tiers) % 1.0
+        half = w / 2 * (0.25 + 0.75 * p) * (0.55 + 0.45 * tier)
+        half += jit[j % 16] * max(0.4, w * 0.02)            # needles: the edge is never quite straight
+        if half < 0.5:
+            continue
+        row = px[yy]
+        aspan(row, W, sx - half - 0.6, sx - half + 0.6, sx + half - 0.6, sx + half + 0.6, dark)
+        if half > 2:
+            m = sx - half * 0.3                           # moonlit left side, blended softly into the dark
+            aspan(row, W, sx - half - 0.6, sx - half + 0.6, m - 1.5, m + 1.5, lite)
+            aspan(row, W, sx - half - 0.6, sx - half + 0.6, sx - half + 0.4, sx - half + 1.4, rim, 0.6)
+            if tier > 0.78:                               # shadow under the bough above the next tier
+                aspan(row, W, sx - half * 0.6 - 1, sx - half * 0.6 + 1, sx + half - 0.6, sx + half + 0.6, deep, 0.7)
+            band = tufts[int(p * 72)]                     # tied to the tree, not the frame: no shimmer
+            for u in band[:int(half * 0.25)]:             # tufts of needles catching the light, or not
+                x = int(sx + u * half)
+                if 0 <= x < W:
+                    row[x] = mix(row[x], rim if x < sx - half * 0.2 else deep, 0.5)
+
+
+def draw_cactus_fine(px, W, sx, sy, h, w, s, clip, c):
+    """A saguaro for big windows: rounded tops, ribs, a lit side and a shaded side."""
+    lit, dk, rib = mix(c, (170, 210, 160), 0.3), shade(c, 0.55), shade(c, 0.72)
+
+    def stem(xl, xr, y0, y1):
+        ww = xr - xl
+        for y in range(max(0, int(y0)), min(int(clip), int(math.ceil(y1)))):
+            d = max(0.0, (y + 0.5 - y0) / max(1.0, ww * 0.5))
+            ins = ww * 0.5 * (1 - math.sqrt(d * (2 - d))) if d < 1 else 0.0   # round cap
+            a, b = xl + ins, xr - ins
+            if b - a < 0.3:
+                continue
+            row = px[y]
+            aspan(row, W, a - 0.5, a + 0.5, b - 0.5, b + 0.5, c)
+            aspan(row, W, a - 0.5, a + 0.5, a + (b - a) * 0.3 - 1, a + (b - a) * 0.3 + 1, lit)
+            aspan(row, W, a + (b - a) * 0.68 - 1, a + (b - a) * 0.68 + 1, b - 0.5, b + 0.5, dk)
+            if ww > 5:
+                for r in (0.5, 0.82):
+                    x = a + (b - a) * r
+                    aspan(row, W, x - 0.5, x - 0.5, x + 0.5, x + 0.5, rib, 0.7)
+    aw = max(1.0, 160 * s)
+    hbar(px, W, sx - w / 2 - 380 * s + aw / 2, sx, sy - h * 0.55 + aw / 2, aw, c, clip)
+    stem(sx - w / 2 - 380 * s, sx - w / 2 - 380 * s + aw, sy - h * 0.85, sy - h * 0.55 + aw)
+    hbar(px, W, sx, sx + w / 2 + 340 * s - aw / 2, sy - h * 0.4 + aw / 2, aw, c, clip)
+    stem(sx + w / 2 + 340 * s - aw, sx + w / 2 + 340 * s, sy - h * 0.7, sy - h * 0.4 + aw)
+    stem(sx - w / 2, sx + w / 2, sy - h, sy)
+
+
+WINDOW_TINTS = ((255, 214, 140), (255, 236, 200), (200, 222, 255), (255, 190, 120))
+
+
+def draw_tower_fine(px, W, off, seed, sx, sy, w, h, s, clip, bc, f, haze, st, near):
+    """A tower block for big windows: a lit front, a darker side facing the road, a bright corner edge, a crown or
+    setback, glass that shows the floors even where it is dark, windows of varied brightness, a few fully lit
+    floors and a mast with a red light. Everything is picked from the seed, so a building looks the same each
+    time it passes."""
+    rnd = random.Random(seed * 7919 + 17)
+    x0, x1 = sx - w / 2, sx + w / 2
+    side_r = off < 0                                       # left of the road: we see its right flank
+    fw = w * rnd.uniform(0.68, 0.8)                        # width of the front face
+    if side_r:
+        fx0, fx1, sx0, sx1 = x0, x0 + fw, x0 + fw, x1
+    else:
+        fx0, fx1, sx0, sx1 = x1 - fw, x1, x0, x1 - fw
+    top = sy - h
+    side_c = shade(bc, 0.62)
+    edge_c = mix(bc, mix((210, 200, 255), haze, f), 0.32)
+    form = seed % 4                                        # 0 flat, 1 setback, 2 stepped crown, 3 flat with a mast
+    cut = h * rnd.uniform(0.18, 0.26)
+    inset = w * 0.16
+    fill(px, W, fx0, top + (cut if form == 1 else 0), fx1 + 1, sy, bc, clip)
+    fill(px, W, sx0, top + (cut if form == 1 else 0) + max(1, 80 * s), sx1 + 1, sy, side_c, clip)
+    if form == 1:                                          # the narrower upper block
+        fill(px, W, fx0 + inset, top, fx1 - inset + 1, top + cut, bc, clip)
+        fill(px, W, sx0 + (inset if not side_r else 0), top + max(1, 80 * s), sx1 - (inset if side_r else 0) + 1,
+             top + cut, side_c, clip)
+    elif form == 2:                                        # a stepped crown sits on top
+        for j, (a, b) in enumerate(((0.2, 0.06), (0.36, 0.11))):
+            fill(px, W, fx0 + fw * a, top - h * b, fx1 - fw * a + 1, top - h * (b - 0.06 if j else 0), bc, clip)
+            fill(px, W, fx0 + fw * a, top - h * b, fx1 - fw * a + 1, top - h * b + 1, edge_c, clip)
+    # the bright corner where front and flank meet, and the roof line
+    ex = fx1 if side_r else fx0 - 1
+    yt = top + (cut if form == 1 else 0)
+    fill(px, W, ex, yt, ex + 1, sy, edge_c, clip)
+    fill(px, W, fx0, yt, fx1 + 1, yt + 1, edge_c, clip)
+    if form == 1:
+        fill(px, W, fx0 + inset, top, fx1 - inset + 1, top + 1, edge_c, clip)
+    # windows: dark glass everywhere, some lit, a few whole floors lit up
+    cell = 300 * s
+    glass = mix(bc, mix((70, 84, 130), haze, f), 0.35)
+    tint = WINDOW_TINTS[seed % 4]
+    if seed % 5 == 0:
+        tint = st["neon"][seed % 4]
+    lit_p = rnd.uniform(0.18, 0.42)
+    gw, gh = max(1.0, cell * 0.55), max(1.0, cell * 0.5)
+    ny = int(h / cell)
+    nx = int(fw / cell)
+    snx = int((sx1 - sx0) / cell)
+    for jy in range(1, ny - 1):
+        y = top + jy * cell
+        if form == 1 and y < top + cut + cell * 0.5:
+            continue
+        floor_lit = rnd.random() < 0.07
+        floor_dark = rnd.random() < 0.12
+        for jx in range(nx):
+            xw = fx0 + (fw - nx * cell) / 2 + jx * cell + cell * 0.22
+            r_ = rnd.random()
+            if floor_lit or (not floor_dark and r_ < lit_p):
+                b = 0.5 + 0.5 * rnd.random() if not floor_lit else 0.85
+                c = mix(bc, mix(tint if rnd.random() > 0.1 else WINDOW_TINTS[rnd.randrange(4)], haze, f * 0.6), b)
+            else:
+                c = glass
+            fill(px, W, xw, y, xw + gw, y + gh, c, clip)
+        for jx in range(snx):                              # the flank: narrower, dimmer windows
+            xw = sx0 + ((sx1 - sx0) - snx * cell) / 2 + jx * cell + cell * 0.3
+            if not floor_dark and rnd.random() < lit_p * 0.6:
+                c = mix(side_c, mix(tint, haze, f * 0.6), 0.45 + 0.3 * rnd.random())
+            else:
+                c = shade(glass, 0.75)
+            fill(px, W, xw, y, xw + max(1.0, cell * 0.35), y + gh, c, clip)
+    if seed % 3 == 0 and w > 4:                            # neon band on the roof
+        yb = top + (cut if form == 1 else 0) - (h * 0.11 if form == 2 else 0)
+        nc = mix(st["neon"][seed % 4], haze, f * 0.5)
+        fill(px, W, fx0, yb, fx1 + 1, yb + max(1, 120 * s), nc, clip)
+    if form in (0, 3) or seed % 7 == 1:                    # a mast with a red light
+        mx = fx0 + fw * (0.3 + 0.4 * ((seed // 4) % 5) / 4)
+        mh = h * (0.16 if form == 3 else 0.08)
+        mt = top - (h * 0.11 if form == 2 else 0)
+        vbar(px, W, mx - 0.5, mx + 0.5, mt - mh, mt, mix((120, 120, 140), haze, f), clip)
+        ly = int(mt - mh)
+        if 0 <= ly < clip and 0 <= int(mx) < W:
+            px[ly][int(mx)] = mix((255, 60, 50), haze, f * 0.4)
+            if near < 80:
+                glow(px, W, mx, ly + 0.5, max(1.5, 160 * s), (120, 10, 10), 0.8 * (1 - f), clip)
+
+
+def fine_skyline(scene, st, rnd, sl, col, put, BW2, band, hz, W):
+    """The far skyline layer for big windows: the same kind of horizon as in a small window, drawn with the
+    structure a bigger window has room for. Seeded, so it is the same every time."""
+    haze, neon = st["haze"], st["neon"]
+    sc = W / 140.0                                     # the view stays the same: features grow with the window
+    if scene in ("city", "storm"):
+        city = scene == "city"
+        for layer in (0, 1):                           # a hazier row of towers behind, the main row in front
+            x = rnd.randint(0, 6)
+            while x < BW2:
+                w = int(rnd.randint(3, 9) * sc)
+                h = rnd.uniform(0.25, 1.0) ** 1.3 * band * (0.9 if city else 0.6) * (1.12 if layer == 0 else 1.0)
+                base = (14, 10, 28) if city else (18, 20, 28)
+                bc = mix(base, haze, rnd.uniform(0.0, 0.35) + (0.32 if layer == 0 else 0.0))
+                if layer == 0:
+                    for xx in range(x, x + w):
+                        col(xx, hz - h * (0.8 if min(xx - x, x + w - 1 - xx) < w * 0.2 else 1.0), bc)
+                    x += w + rnd.randint(-2, 4)
+                    continue
+                form = rnd.randrange(4)                # 0 flat, 1 setback, 2 stepped crown, 3 spire
+                fw = max(2, int(w * rnd.uniform(0.66, 0.8)))
+                flank = shade(bc, 0.6)
+                edge = mix(bc, (150, 130, 200) if city else (120, 130, 150), 0.35)
+                prof = []
+                for u in range(w):
+                    d = min(u, w - 1 - u) / max(1.0, w)
+                    hh = h
+                    if form == 1 and d < 0.17:
+                        hh = h * 0.8
+                    elif form == 2:
+                        hh = h * (0.9 if d < 0.15 else 0.96 if d < 0.3 else 1.04)
+                    prof.append(hh)
+                    c = bc if u < fw else flank
+                    col(x + u, hz - hh, c)
+                    put(x + u, hz - hh, edge if u < fw else bc)      # roof line catches the light
+                for yy in range(int(hz - prof[fw - 1]), hz):         # the bright corner
+                    put(x + fw - 1, yy, mix(edge, bc, 0.3))
+                if form == 3 or (form == 0 and rnd.random() < 0.4):   # a mast with a red light
+                    mx = x + fw // 2
+                    mh = max(2, int(h * rnd.uniform(0.08, 0.18)))
+                    for yy in range(int(hz - h - mh), int(hz - h)):
+                        put(mx, yy, mix(bc, (120, 120, 140), 0.5))
+                    put(mx, hz - h - mh - 1, (255, 50, 50))
+                # windows: dark glass on every floor, lit ones in this building's colour, a few lit floors
+                tint = rnd.choice(WINDOW_TINTS + ((neon[1], neon[0]) if city else ()))
+                lit_p = rnd.uniform(0.15, 0.4) if city else rnd.uniform(0.06, 0.2)
+                glass = mix(bc, (60, 70, 110), 0.22)
+                pitch = 2 if sc < 2.6 else 3
+                for yy in range(int(hz - min(prof)) + 2, hz - 1, 2):
+                    fl = rnd.random()
+                    for u in range(1, w - 1, pitch):
+                        if u == fw - 1 or yy < hz - prof[u] + 2:
+                            continue
+                        if fl < 0.06 or (fl > 0.15 and rnd.random() < lit_p * (1 if u < fw else 0.5)):
+                            c = mix(bc, tint if rnd.random() > 0.12 else rnd.choice(WINDOW_TINTS),
+                                    rnd.uniform(0.45, 1.0) * (1 if u < fw else 0.6))
+                        else:
+                            c = glass if u < fw else shade(glass, 0.8)
+                        put(x + u, yy, c)
+                if rnd.random() < 0.25 and h > 4:            # neon sign on the roof
+                    nc = rnd.choice(neon)
+                    top = hz - max(prof) - (1 if form == 2 else 0)
+                    for xx in range(x + 1, x + fw - 1):
+                        put(xx, top, nc)
+                x += w + rnd.randint(0, 2)
+    elif scene == "coast":
+        towns = [rnd.uniform(0, BW2) for _ in range(4)]
+        for x in range(BW2):                                   # a far headland: moonlit crest, lights in clusters
+            a = x / BW2 * math.tau
+            h = band * (0.18 + 0.12 * math.sin(a * 2 + 0.5) + 0.08 * math.sin(a * 5) + 0.015 * math.sin(a * 41))
+            if math.sin(a * 2 + 0.5) > -0.2:
+                col(x, hz - h, (8, 14, 30))
+                for yy in range(int(hz - h), hz):
+                    put(x, yy, mix((22, 30, 54), (8, 14, 30), min(1.0, (yy - (hz - h)) / max(1.0, h * 0.5))))
+                put(x, hz - h, (40, 52, 86))
+                near = min(min(abs(x - t), BW2 - abs(x - t)) for t in towns)
+                if rnd.random() < (0.35 if near < 8 * sc else 0.03):
+                    yy = hz - 1 - rnd.randint(0, max(0, int(h * (0.6 if near < 8 * sc else 1)) - 1))
+                    put(x, yy, rnd.choice(((255, 210, 140), (255, 230, 180), (255, 180, 110))))
+        lx = int(towns[0])                                     # a lighthouse on the headland
+        a = lx / BW2 * math.tau
+        if math.sin(a * 2 + 0.5) > 0.2:
+            gh = band * (0.18 + 0.12 * math.sin(a * 2 + 0.5) + 0.08 * math.sin(a * 5))
+            th = max(3, int(band * 0.16))
+            for yy in range(int(hz - gh - th), int(hz - gh) + 1):
+                put(lx, yy, (200, 200, 210) if (yy // 2) % 2 else (200, 60, 60))
+            put(lx, hz - gh - th - 1, (255, 240, 180))
+    elif scene == "forest":
+        for x in range(BW2):                                   # rolling hills with a faint moonlit crest
+            a = x / BW2 * math.tau
+            hill = band * (0.35 + 0.15 * math.sin(a * 3) + 0.1 * math.sin(a * 7 + 1))
+            col(x, hz - hill, (16, 30, 32))
+            put(x, hz - hill, (30, 48, 50))
+        for layer, (shade_c, rim, step) in enumerate((((12, 24, 22), (24, 40, 38), (2, 6)),
+                                                       ((8, 16, 14), (18, 32, 28), (1, 4)))):
+            x = rnd.randint(0, 3)
+            while x < BW2:                                     # pines: tiers of boughs, a lit left edge
+                h = rnd.uniform(0.25, 0.55) * band * (0.85 if layer == 0 else 1.0)
+                w = max(3, int(rnd.randint(3, 6) * sc))
+                tiers = rnd.randint(3, 5)
+                for kx in range(w):
+                    d = abs(kx - (w - 1) / 2) / (w / 2)
+                    hh = h * (1 - d * 0.9)
+                    col(x + kx, hz - hh, shade_c)
+                # bough notches: the outline steps in at every tier
+                for t in range(1, tiers):
+                    yy = hz - h + h * t / tiers
+                    half = (w / 2) * (t / tiers) * 0.85
+                    put(int(x + (w - 1) / 2 - half) - 1, yy, shade_c)
+                    put(int(x + (w - 1) / 2 + half) + 1, yy, shade_c)
+                    put(int(x + (w - 1) / 2 - half), yy + 1, rim)
+                put(int(x + (w - 1) / 2), hz - h, rim)
+                x += rnd.randint(int(step[0] * sc), int(step[1] * sc))
+    elif scene == "desert":
+        x = 0
+        while x < BW2:                                       # mesas: layered rock, a lit face and a shadowed one
+            w = int(rnd.randint(8, 26) * sc)
+            h = rnd.uniform(0.25, 0.7) * band
+            lit_w = int(w * rnd.uniform(0.35, 0.6))
+            strata = [rnd.uniform(-0.12, 0.12) for _ in range(12)]
+            for k in range(w):
+                edge = min(k, w - 1 - k) / sc
+                hh = h if edge >= 2.5 else h * (0.5 + edge * 0.2)
+                y0 = int(hz - hh)
+                for yy in range(max(hz - band, y0), hz):
+                    sti = int((yy - (hz - h)) / max(1.0, 1.5 * sc)) % 12
+                    base = (54, 30, 50) if k < lit_w else (34, 18, 36)
+                    put(x + k, yy, shade(base, 1 + strata[sti]))
+                put(x + k, y0, (126, 82, 90) if k < lit_w else (86, 54, 66))
+            x += w + rnd.randint(int(4 * sc), int(30 * sc))
+    elif scene == "mountain":
+        peaks = [(rnd.uniform(0, BW2), rnd.uniform(0.45, 1.0) * band, rnd.uniform(0.7, 1.4) / sc)
+                 for _ in range(max(4, int(BW2 / (22 * sc))))]
+        for x in range(BW2):
+            h, pk = 0, None
+            for p in peaks:
+                px_, ph, sl_ = p
+                d = min(abs(x - px_), BW2 - abs(x - px_))
+                v = ph - d * sl_ + math.sin(d * 1.3 / sc + ph) * 0.8
+                if v > h:
+                    h, pk = v, p
+            nh = 0
+            for px_, ph, sl_ in peaks:                       # a lower, nearer range in front
+                d = min(abs(x - px_ * 0.7 - BW2 * 0.15) % BW2, BW2 - abs(x - px_ * 0.7 - BW2 * 0.15) % BW2)
+                nh = max(nh, ph * 0.45 - d * sl_ * 0.8)
+            if nh <= band * 0.12:
+                nh = 0
+            lit = pk is not None and ((x - pk[0]) % BW2) > BW2 / 2    # faces turned to the moon (left) are lit
+            gully = math.sin(x * 0.9 / sc) * 0.5 + math.sin(x * 2.3 / sc + 1) * 0.5
+            snow_d = max(1.5, h * 0.24) * (1 + 0.35 * gully)
+            for y in range(max(hz - band, int(hz - max(h, nh))), hz):
+                up = hz - y
+                if up <= nh:
+                    c = (16, 20, 38) if up < nh - 1 else (34, 40, 62)
+                elif up <= h:
+                    snow = up > h - snow_d and h > band * 0.5
+                    if snow:
+                        c = (150, 160, 192) if lit else (96, 106, 140)
+                    else:
+                        c = (38, 46, 78) if lit else (26, 30, 56)
+                        if gully > 0.75 and not lit:
+                            c = (22, 26, 48)
+                    if up > h - 1:
+                        c = mix(c, (190, 200, 230) if lit else c, 0.4)
+                else:
+                    continue
+                put(x, y, c)
+
+
 # ---- roadside sprites ----
 def draw_sprite(px, W, kind, off, seed, sx, sy, s, clip, k, f, haze, st, near, t):
     """One roadside object standing at screen (sx, sy); s = pixels per world unit."""
@@ -1034,8 +1483,11 @@ def draw_sprite(px, W, kind, off, seed, sx, sy, s, clip, k, f, haze, st, near, t
             if 0 <= int(sy - h) < clip and 0 <= int(sx) < W:
                 px[int(sy - h)][int(sx)] = mix((255, 220, 150), haze, f * 0.5)
             return
-        w = max(1.0, 70 * s)
         pole = L((90, 92, 100), max(k, 0.5))
+        if FINE:
+            draw_lamp_fine(px, W, off, sx, sy, h, s, clip, pole, mix((255, 226, 160), haze, f * 0.4), near, f)
+            return
+        w = max(1.0, 70 * s)
         fill(px, W, sx - w / 2, sy - h, sx + w / 2 + 1, sy, pole, clip)
         arm = -math.copysign(1, off) * 500 * s
         ax0, ax1 = (sx, sx + arm) if arm > 0 else (sx + arm, sx)
@@ -1054,11 +1506,18 @@ def draw_sprite(px, W, kind, off, seed, sx, sy, s, clip, k, f, haze, st, near, t
         trunk = L((70, 56, 44), k)
         lean = math.copysign(1, off) * 350 * s
         n = max(2, int(h / 2))
+        ring = shade(trunk, 0.7)
+        fine_trunk = FINE and tw > 2
         for j in range(n):
             p = j / n
             yy = sy - h * p
             xx = sx + lean * p * p
-            fill(px, W, xx - tw / 2, yy - h / n - 1, xx + tw / 2 + 1, yy, trunk, clip)
+            if fine_trunk:                               # big windows: a tapering trunk with growth rings
+                t2 = tw * (1 - 0.3 * p) / 2
+                vbar(px, W, xx - t2, xx + t2, yy - h / n - 1, yy, ring if j % 3 == 0 else trunk, clip)
+                vbar(px, W, xx - t2 * 0.7, xx - t2 * 0.1, yy - h / n - 1, yy, mix(trunk, (150, 130, 110), 0.2), clip)
+            else:
+                fill(px, W, xx - tw / 2, yy - h / n - 1, xx + tw / 2 + 1, yy, trunk, clip)
         topx, topy = sx + lean, sy - h
         leaf = L((24, 60, 40), k * 1.1)
         R = 1100 * s
@@ -1079,6 +1538,9 @@ def draw_sprite(px, W, kind, off, seed, sx, sy, s, clip, k, f, haze, st, near, t
         w = 1150 * s * (0.85 + (seed % 5) / 16)
         dark = L((18, 46, 30), k)
         lite = L((34, 74, 44), k)
+        if FINE and h > 12:
+            draw_pine_fine(px, W, seed, sx, sy, h, w, s, clip, dark, lite, L((60, 42, 30), k))
+            return
         fill(px, W, sx - max(1, 90 * s), sy - h * 0.25, sx + max(1, 90 * s) + 1, sy, L((60, 42, 30), k), clip)
         rows = int(h * 0.85)
         top = sy - h
@@ -1101,6 +1563,9 @@ def draw_sprite(px, W, kind, off, seed, sx, sy, s, clip, k, f, haze, st, near, t
             return
         w = max(1.0, 220 * s)
         c = L((40, 92, 54), k)
+        if FINE and w > 3:
+            draw_cactus_fine(px, W, sx, sy, h, w, s, clip, c)
+            return
         fill(px, W, sx - w / 2, sy - h, sx + w / 2 + 1, sy, c, clip)
         aw = max(1.0, 160 * s)
         fill(px, W, sx - w / 2 - 380 * s, sy - h * 0.55, sx - w / 2, sy - h * 0.55 + aw, c, clip)
@@ -1178,6 +1643,9 @@ def draw_sprite(px, W, kind, off, seed, sx, sy, s, clip, k, f, haze, st, near, t
         if h < 2:
             return
         bc = L((34, 30, 50) if st["scene"] == "city" else (40, 44, 54), max(k, 0.55))
+        if FINE and 300 * s >= 2.5:
+            draw_tower_fine(px, W, off, seed, sx, sy, w, h, s, clip, bc, f, haze, st, near)
+            return
         fill(px, W, sx - w / 2, sy - h, sx + w / 2 + 1, sy, bc, clip)
         cell = 300 * s
         x0 = sx - w / 2
@@ -1257,10 +1725,12 @@ def palette(trk, si, alt, k, f):
 
 
 def render(r, cols, rows, hud=True):
+    global FINE
     cv = Canvas(cols, rows)
     W, H = cv.W, cv.H
     px = cv.px
     trk = r.trk
+    fine = FINE = is_fine(cols, rows)
     view_si = trk.stage[trk.seg(r.pz)]
     st = STAGES[view_si]
     car_bot = H - 3 if hud else H - 1
@@ -1337,7 +1807,14 @@ def render(r, cols, rows, hud=True):
                 t = 1.0
             cx = x2 + (x1 - x2) * t
             w = w2 + (w1 - w2) * t
-            row = road_row(W, cx, w, P0, nl, onc, dash, alt)
+            if fine:
+                ta = min(1.0, max(0.0, (yy - y2) * inv))
+                tb = min(1.0, max(0.0, (yy + 1 - y2) * inv))
+                ea = (x2 + (x1 - x2) * ta, w2 + (w1 - w2) * ta)
+                eb = (x2 + (x1 - x2) * tb, w2 + (w1 - w2) * tb)
+                row = road_row_fine(W, ea, eb, P0, nl, onc, dash)
+            else:
+                row = road_row(W, cx, w, P0, nl, onc, dash, alt)
             if beam:
                 bc = cx + beam_c * w
                 a, b = int(bc - bo * w), int(bc + bo * w) + 1
@@ -1346,14 +1823,16 @@ def render(r, cols, rows, hud=True):
                 if b > W:
                     b = W
                 if b > a:
-                    row[a:b] = road_row(W, cx, w, P1, nl, onc, dash, alt)[a:b]
+                    row[a:b] = (road_row_fine(W, ea, eb, P1, nl, onc, dash) if fine else
+                                road_row(W, cx, w, P1, nl, onc, dash, alt))[a:b]
                     a, b = int(bc - bi * w), int(bc + bi * w) + 1
                     if a < 0:
                         a = 0
                     if b > W:
                         b = W
                     if b > a:
-                        row[a:b] = road_row(W, cx, w, P2, nl, onc, dash, alt)[a:b]
+                        row[a:b] = (road_row_fine(W, ea, eb, P2, nl, onc, dash) if fine else
+                                    road_row(W, cx, w, P2, nl, onc, dash, alt))[a:b]
             px[yy] = row
         if top < maxy:
             maxy = top
@@ -1414,6 +1893,83 @@ def render(r, cols, rows, hud=True):
     if hud:
         draw_hud(cv, r, cols, rows)
     return cv
+
+
+def aspan(row, W, l0, l1, r0, r1, c, a=1.0):
+    """Big windows: paint colour c over one scanline between a left and a right edge with sub-pixel coverage.
+    Each edge is given by where it crosses the top and the bottom of the scanline, so a slanted edge fades
+    over the pixels it actually passes through instead of jumping a whole block per row."""
+    if l0 > l1:
+        l0, l1 = l1, l0
+    if l1 - l0 < 1.0:
+        m = (l0 + l1) * 0.5
+        l0, l1 = m - 0.5, m + 0.5
+    if r0 > r1:
+        r0, r1 = r1, r0
+    if r1 - r0 < 1.0:
+        m = (r0 + r1) * 0.5
+        r0, r1 = m - 0.5, m + 0.5
+    xa = int(l0) if l0 > 0 else 0
+    xb = int(r1) + 1
+    if xb > W:
+        xb = W
+    if xb <= xa:
+        return
+    dl, dr = 1.0 / (l1 - l0), 1.0 / (r1 - r0)
+    fa = fb = xb
+    if a >= 1.0:
+        fa = max(xa, int(math.ceil(l1 - 0.5)))
+        fb = min(xb, int(math.floor(r0 - 0.5)) + 1)
+        if fb > fa:
+            row[fa:fb] = [c] * (fb - fa)
+        else:
+            fa = fb = xb
+    for x in list(range(xa, fa)) + list(range(fb, xb)):
+        m = x + 0.5
+        cl = (m - l0) * dl
+        cr = (r1 - m) * dr
+        cov = (1.0 if cl > 1 else cl) + (1.0 if cr > 1 else cr) - 1.0
+        if cov > 0.004:
+            cov *= a
+            if cov > 1.0:
+                cov = 1.0
+            row[x] = c if cov >= 0.996 else mix(row[x], c, cov)
+
+
+def road_row_fine(W, ta, tb, P, nl, onc, dash):
+    """road_row for big windows: the same road, every edge anti-aliased. ta / tb are (cx, w) at the top and the
+    bottom of the scanline."""
+    gl, gr, rum, road, lane, yel = P
+    (ca, wa), (cb, wb) = ta, tb
+    row = [gl] * W
+    if gl != gr:
+        aspan(row, W, ca, cb, W + 2, W + 2, gr)
+    if max(ca + wa * 1.13, cb + wb * 1.13) <= 0 or min(ca - wa * 1.13, cb - wb * 1.13) >= W:
+        return row
+    aspan(row, W, ca - wa * 1.13, cb - wb * 1.13, ca + wa * 1.13, cb + wb * 1.13, rum)
+    aspan(row, W, ca - wa, cb - wb, ca + wa, cb + wb, road)
+    lw = (wa + wb) * 0.011
+    if lw < 0.3:
+        return row
+    # thin in the distance: never wider than the paint, but at least one pixel so it stays a crisp line
+    hw = max(lw, 1.0) * 0.5
+    a = min(1.0, 0.55 + lw * 0.6)
+
+    def line(k, dpx, c):
+        xa, xb = ca + k * wa + dpx, cb + k * wb + dpx
+        sl = abs(xb - xa) / (2 * hw)                 # a shallow line spreads thin over a row: lift it a little
+        aspan(row, W, xa - hw, xb - hw, xa + hw, xb + hw, c, a * (sl ** 0.5 if sl > 1 else 1.0))
+    line(-0.96 + 0.011, 0.0, lane)
+    line(0.96 - 0.011, 0.0, lane)
+    for kk in range(1, nl):
+        k = -1 + 2 * kk / nl
+        if onc and kk * 2 == nl:
+            gap = max(lw + 1.0, (wa + wb) * 0.0175)
+            line(k, -gap / 2, yel)
+            line(k, gap / 2, yel)
+        elif dash:
+            line(k, 0.0, lane)
+    return row
 
 
 def road_row(W, cx, w, P, nl, onc, dash, alt):

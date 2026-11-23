@@ -1,10 +1,10 @@
 # ASCII ARCADE
 
-![The ASCII ARCADE start screen: all fifteen games playing at once](docs/screenshots/start.gif)
+![The ASCII ARCADE start screen: all sixteen games playing at once](docs/screenshots/start.gif)
 
 A little collection of games for the terminal. Start the launcher: the start screen shows all games playing at once
 (Enter starts the highlighted one, any other key opens the menu). Pick a game with the arrow keys (or its number:
-1-15, two digits typed quickly one after the other), press Enter. When the game ends you are back in the menu.
+1-16, two digits typed quickly one after the other), press Enter. When the game ends you are back in the menu.
 
 ```sh
 python3 arcade.py
@@ -65,6 +65,11 @@ The pause menu always reads: Esc / P / Enter continue, ? help, M sound on / off,
 
 ## Pixels: fine, smart or solid
 
+A bigger window gives finer pictures, not bigger blocks: every game keeps the same view of its world and
+draws it with more detail when there are more pixels (smoothed and re-lit sprite art, finer textures, smooth
+terrain). Small windows look as before, and a big window gives no advantage in play. A large window with a
+small font (for example 250x70) looks best.
+
 The pictures are drawn with the half-block character `▀`: every character cell shows two pixels, the top one
 in the text colour and the bottom one in the background colour. WezTerm, iTerm2, kitty and Ghostty draw that
 character themselves and it fills the cell exactly. macOS Terminal.app takes it from the font instead, and
@@ -113,6 +118,7 @@ No dependencies: Python 3 on macOS or Linux (on Windows use WSL). Best in WezTer
 | **SPOREFIELD** | Stop the sporeworm before it reaches the roots: a fixed shooter on a glowing night meadow. Every hit splits the worm and leaves a toadstool; jitterlegs, plumbugs, gloam moths, puffballs and burrowgrubs get in the way, glowing seeds give double sap, piercing sap, slow time, bombs or a shell. Eight palettes, three difficulties. | 60x22+ |
 | **SCAFFOLD** | Climb an unfinished skyscraper at night while a runaway demolition robot, the Wrecker, throws oil drums, gears, crates, rivets and counterweights down at you. Five stages (sloped girders, conveyor decks, lift shafts, a windy crane yard, the breaker floor where you cut its power), then it topples and comes back faster the next night. | 60x22+ |
 | **VOIDLANCE** | A side-scrolling star fighter: charge the lance (three levels and a nova), dock the Warden pod at your nose or tail, feed it six kinds of crystal weapons, add missiles, crawler bombs, orbiting bits and shields. Eight stages from an orbital wreck yard to the Null Citadel, 41 kinds of enemies, each stage with its own caves, midboss and multi-phase boss. Easy / normal / hard, checkpoints, continues, stage select. | 70x22+ |
+| **SHATTERWICK** | A brick breaker with a living candle spark: bounce Wick off the brass tray and shatter tinted, frosted, iron, powder, sliding and lantern glass. Twenty-five halls in five districts, each ending with a keeper; moths, jellies, cogs and cinders turn the spark aside. Campaign and Endless, gifts and trouble capsules, combos up to x8. | 60x22+ |
 
 ## Screenshots
 
@@ -130,6 +136,8 @@ No dependencies: Python 3 on macOS or Linux (on Windows use WSL). Best in WezTer
 | **STACKFALL** | **DEPTHWELL** | **GLIMMER** |
 | <img src="docs/screenshots/sporefield.png" alt="SPOREFIELD" width="260"> | <img src="docs/screenshots/scaffold.png" alt="SCAFFOLD" width="260"> | <img src="docs/screenshots/voidlance.png" alt="VOIDLANCE" width="260"> |
 | **SPOREFIELD** | **SCAFFOLD** | **VOIDLANCE** |
+| <img src="docs/screenshots/shatterwick.png" alt="SHATTERWICK" width="260"> | | |
+| **SHATTERWICK** | | |
 
 The pictures come straight from the games' own canvases: `python3 scripts/screenshots.py` renders them again
 (needs Pillow).
@@ -356,6 +364,25 @@ the walls. Each stage has two checkpoints; stages unlock as you reach them and c
 Terminals with the kitty keyboard protocol (kitty, WezTerm, Ghostty, recent iTerm2) report key releases: tap
 Space to shoot, hold it to charge. In other terminals (macOS Terminal) holding Space gives rapid fire while the
 key repeats, and the lance is charged with `C` (press again to fire).
+
+## SHATTERWICK keys
+
+| Key | |
+|---|---|
+| Left / Right (`A` / `D`) | move the tray |
+| Space (Up / `W`) | launch the spark, release a caught spark, strike Flint bolts |
+| Esc / `P` | pause menu (`Q` there: back to the menu, `M`: sound on / off) |
+| `?` | help |
+
+Keep Wick, a living candle spark, bouncing off the lamplighter's brass tray and shatter the tinted glass the Gloam
+has sealed the lamp town with. Where the spark meets the tray sets its angle, and panes broken before it comes back
+build a combo up to x8. Panes come tinted, frosted (2-3 hits, they crack), as iron plates that never break, as
+powder panes that set off chain blasts, sliding, as lanterns that always drop a gift, and as frost that grows back.
+Twenty-five halls in five districts (Glasshouse, Tide Cellar, Clock Loft, Frost Spire, Kiln Heart) each end with a
+keeper. Moths, jellies, cogs, frost motes and cinders drift through the halls and turn the spark aside. Endless mode
+builds new halls with a keeper every fifth. Gifts: Broadwick, Tallow (catch), Kindle (three sparks), Needleflame
+(burns through glass), Flint (bolts), Lull, Hearth (a saving line) and Spare Wick; dark capsules are trouble
+(Pinch, Gust, Soot). `python3 shatterwick.py --selftest` shows that the autopilot clears every hall.
 
 ## Versions and releases
 

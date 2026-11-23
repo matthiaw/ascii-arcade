@@ -723,6 +723,7 @@ ACCENTS = {  # (top, bottom) of each game's title gradient
     "SPOREFIELD": ((200, 255, 140), (120, 70, 200)),
     "SCAFFOLD": ((255, 196, 90), (220, 80, 40)),
     "VOIDLANCE": ((140, 230, 255), (150, 80, 255)),
+    "SHATTERWICK": ((255, 222, 130), (96, 160, 246)),
 }
 
 

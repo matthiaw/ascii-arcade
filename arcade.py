@@ -92,17 +92,21 @@ GAMES = [
          info=["Charge the lance, dock the Warden pod at nose", "or tail, six crystal weapons, missiles, bits.",
                "Eight stages, eight midbosses, eight bosses."],
          keys="arrows fly   Space shoot/charge   F pod   B bomb", size=(70, 22), score="voidlance"),
+    dict(file="shatterwick.py", name="SHATTERWICK", tag="a spark against walls of glass",
+         info=["Bounce Wick, a living candle spark, off your", "brass tray and shatter tinted glass: 25 halls,",
+               "five districts, five keepers, gifts and combos."],
+         keys="arrows move   Space launch / release", size=(60, 22), score="shatterwick"),
 ]
 GENRE = {"hoverdrift.py": "flight", "emberfall.py": "role-playing", "blockfire.py": "shooter", "deepcall.py": "exploration",
          "lightkeeper.py": "action", "skyshot.py": "artillery", "nightdrive.py": "racing", "orbital.py": "puzzle",
          "leafling.py": "platformer", "stackfall.py": "blocks", "depthwell.py": "3D blocks",
          "glimmer.py": "maze chase", "sporefield.py": "fixed shooter", "scaffold.py": "climber",
-         "voidlance.py": "shoot 'em up"}
+         "voidlance.py": "shoot 'em up", "shatterwick.py": "brick breaker"}
 HELP = [
     "ASCII ARCADE - keys",
     "",
     "Up / Down            choose a game",
-    "1 - 9, 10 - 15       jump to a game (two digits: type them quickly)",
+    "1 - 9, 10 - 16       jump to a game (two digits: type them quickly)",
     "Enter / Space        play",
     "M                    sound on / off",
     "G                    pixels: fine / smart / solid",
@@ -340,7 +344,7 @@ def thumb_demo(module):
 THUMBS = {"nightdrive.py": thumb_night, "orbital.py": thumb_orbital, "leafling.py": thumb_leaf, "skyshot.py": thumb_sky, "lightkeeper.py": thumb_light, "deepcall.py": thumb_deep, "hoverdrift.py": thumb_hover, "emberfall.py": thumb_ember, "stackfall.py": thumb_stack,
           "depthwell.py": thumb_depth, "blockfire.py": thumb_block, "glimmer.py": thumb_demo("glimmer"),
           "sporefield.py": thumb_demo("sporefield"), "scaffold.py": thumb_demo("scaffold"),
-          "voidlance.py": thumb_demo("voidlance")}
+          "voidlance.py": thumb_demo("voidlance"), "shatterwick.py": thumb_demo("shatterwick")}
 
 
 def record_line(g):
@@ -485,7 +489,7 @@ def render(cols, rows, sel, t, note, help_=False):
     snd = SND.label().lower()
     pix = arcadekit.PIXEL_MODE
     if cols >= 112:
-        footer(cv, "Up/Down choose   1-15 jump   Enter play   M %s   G pixels: %s   ? help   Esc quit" % (snd, pix))
+        footer(cv, "Up/Down choose   1-16 jump   Enter play   M %s   G pixels: %s   ? help   Esc quit" % (snd, pix))
     elif cols >= 96:
         footer(cv, "Up/Down choose   Enter play   M %s   G pixels: %s   ? help   Esc quit" % (snd, pix))
     else:
@@ -531,10 +535,10 @@ def render_start(cols, rows, t, hi):
     cv.center(top, " %d games for your terminal " % len(GAMES), (200, 200, 222), (12, 8, 24))
     # the wall of games: every preview running live, names underneath
     n = len(GAMES)
-    nc = 5 if cols >= 90 else 3
+    nc = (5 if n <= 15 else 6) if cols >= 90 else 3      # three rows on a wide window
     nr = (n + nc - 1) // nc
     gap = 2
-    tw = (min(cols, 150) - 4 - gap * (nc - 1)) // nc
+    tw = (cols - 6 - gap * (nc - 1)) // nc
     avail = rows - top - 7                       # text rows left for the wall (info, prompt and footer below)
     cell = avail // nr                           # text rows per wall row: preview, name, gap
     th = min(2 * (cell - 3), tw * 9 // 16)       # preview height in pixels
@@ -544,7 +548,8 @@ def render_start(cols, rows, t, hi):
     if th >= 6:
         for i, g in enumerate(GAMES):
             c, r = i % nc, i // nc
-            x = x0 + c * (tw + gap)
+            in_row = min(nc, n - r * nc)                 # an unfinished last row sits in the middle
+            x = x0 + (nc - in_row) * (tw + gap) // 2 + c * (tw + gap)
             row = y0 + r * (th // 2 + 3)
             acc = accent(g)
             on = i == hi

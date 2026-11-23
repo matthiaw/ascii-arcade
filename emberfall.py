@@ -7117,6 +7117,7 @@ class UI:
         self.rng = random.Random(7)
         self.pics, self.shown_pics = [], []
         self.rawmap, self.shown_raw = None, False
+        self.raw_painted, self.raw_key, self.raw_view = {}, None, None   # what the last frame painted, and for which view
         self.pilot, self.watch_speed, self.paused, self.auto_next = None, 1.0, False, False
         self.view_pref = None
         self.mark_attr = self.C((1, K.COLOR_RED), BLACK)  # marks map cells the lit renderer may paint
@@ -7151,10 +7152,20 @@ class UI:
 
     def refresh(self):
         pics = [p for p in self.pics if self.pic_clear(*p)]
+        wiped = False
         if (self.shown_pics and self.shown_pics != pics) or (self.shown_raw and not self.rawmap):
             self.scr.redrawwin()  # wipe direct paint curses does not know about
+            wiped = True
         self.scr.refresh()
-        s = self.raw_map_escapes() if self.rawmap else ""
+        # Only the map cells that changed since the last frame go out, unless something may have touched the
+        # screen behind curses' back: a wipe, a new window size, a new map view (scrolling, another area or
+        # tile size) or a picture coming or going. Then the whole map is painted again.
+        view = (self.scr.getmaxyx(), self.raw_view, self.rawmap[:2] if self.rawmap else None, len(pics))
+        prev = None if wiped or view != self.raw_key else self.raw_painted
+        self.raw_key = view
+        s = self.raw_map_escapes(prev or {}) if self.rawmap else ""
+        if not self.rawmap:
+            self.raw_painted = {}
         if pics:
             s += "".join(pic_escapes(PICS[k], y, x, PIC_MODE == "true") for y, x, k in pics)
         if s:
@@ -7618,6 +7629,7 @@ class UI:
         if self.shake:
             ox += self.rng.choice((-1, 1))
             self.shake -= 1
+        self.raw_view = (id(A), cx, cy, ox, oy, mode_v, px)
         vis = g.visible
         over = {}
         for (p, it) in A.items.items():
@@ -8017,48 +8029,115 @@ class UI:
             marks[(t.x, t.y)] = (c, c)
         return marks
 
-    def raw_map_escapes(self):
-        """Paint the lit map straight to the terminal, skipping cells curses has drawn over."""
+    def raw_map_escapes(self, prev=None):
+        """Paint the lit map straight to the terminal, skipping cells curses has drawn over.
+
+        prev is what the last frame painted ({screen row: (x0, cells, cover)}, see refresh): cells that still
+        show the same thing are skipped, so a frame sends only what changed. A row whose cover by curses
+        changed is painted in full (curses may have rewritten any of its cells). The painted rows are left in
+        self.raw_painted for the next frame."""
         y0, x0, rows = self.rawmap
         want = self.mark_attr & curses.A_COLOR
+        inch = self.scr.inch
+        CH, CC = curses.A_CHARTEXT, curses.A_COLOR
         out = []
+        painted = {}
+        lf = lb = None                        # the colours the terminal is set to (they survive cursor moves)
+        HB, LB = "\u2580", "\u2584"
         for j, row in enumerate(rows):
             y = y0 + j
-            pending_move = True
-            lf = lb = None
-            for i, (ch, f, b) in enumerate(row):
+            free, cover = [], []
+            for i in range(len(row)):
                 try:
-                    v = self.scr.inch(y, x0 + i)
+                    v = inch(y, x0 + i)
                 except curses.error:
                     v = 0
-                if (v & curses.A_CHARTEXT) != 32 or (v & curses.A_COLOR) != want:
-                    pending_move = True
+                if (v & CH) != 32 or (v & CC) != want:
+                    free.append(False)
+                    cover.append((i, v))
+                else:
+                    free.append(True)
+            cover = tuple(cover)
+            old = prev.get(y) if prev else None
+            oc = old[1] if old is not None and old[0] == x0 and old[2] == cover and len(old[1]) == len(row) else None
+            painted[y] = (x0, row, cover)
+            at = -1                           # the column the cursor is at (-1: not on this row)
+            for i, cell in enumerate(row):
+                if not free[i] or (oc is not None and oc[i] == cell):
                     continue
-                if pending_move:
-                    out.append("\x1b[%d;%dH" % (y + 1, x0 + i + 1))
-                    pending_move = False
-                if SOLID_PIXELS and ch == "\u2580":
+                if at != i:
+                    if at < 0:
+                        out.append("\x1b[%d;%dH" % (y + 1, x0 + i + 1))
+                    else:
+                        out.append("\x1b[C" if i - at == 1 else "\x1b[%dC" % (i - at))
+                ch, f, b = cell
+                if SOLID_PIXELS and ch == HB:
                     c = solid_cell(f, b)
                     if c is not None:
                         ch, b = " ", c
-                if lf is None:
-                    out.append("\x1b[0;38;2;%d;%d;%d;48;2;%d;%d;%dm" % (f + b))
-                    lf, lb = f, b
-                elif f != lf or b != lb:                      # only the colour that changed (fine tiles change a lot)
-                    if ch == " ":
+                if ch == " ":
+                    if lf is None:
+                        out.append("\x1b[0;38;2;%d;%d;%d;48;2;%d;%d;%dm" % (f + b))
+                        lf, lb = f, b
+                    elif b != lb:
+                        out.append("\x1b[48;2;%d;%d;%dm" % b)
+                        lb = b
+                elif ch == HB and f == b:     # one colour: a space on that background, or a full block
+                    if lf is None or (b != lb and f != lf):
+                        if lf is None:
+                            out.append("\x1b[0;38;2;%d;%d;%d;48;2;%d;%d;%dm" % (f + b))
+                            lf, lb = f, b
+                        else:
+                            out.append("\x1b[48;2;%d;%d;%dm" % b)
+                            lb = b
+                        ch = " "
+                    elif b == lb:
+                        ch = " "
+                    else:
+                        ch = "\u2588"
+                elif ch == HB:                # a half block: upper or lower, whichever needs fewer colour changes
+                    if lf is None:
+                        out.append("\x1b[0;38;2;%d;%d;%d;48;2;%d;%d;%dm" % (f + b))
+                        lf, lb = f, b
+                    elif f == lf and b == lb:
+                        pass
+                    elif f == lb and b == lf:
+                        ch = LB
+                    elif f == lf:
                         out.append("\x1b[48;2;%d;%d;%dm" % b)
                         lb = b
                     elif b == lb:
                         out.append("\x1b[38;2;%d;%d;%dm" % f)
                         lf = f
-                    elif f == lf:
-                        out.append("\x1b[48;2;%d;%d;%dm" % b)
-                        lb = b
+                    elif b == lf:
+                        out.append("\x1b[48;2;%d;%d;%dm" % f)
+                        lb = f
+                        ch = LB
+                    elif f == lb:
+                        out.append("\x1b[38;2;%d;%d;%dm" % b)
+                        lf = b
+                        ch = LB
                     else:
                         out.append("\x1b[38;2;%d;%d;%d;48;2;%d;%d;%dm" % (f + b))
                         lf, lb = f, b
+                else:                         # a glyph (combat numbers, signs): exactly these colours
+                    if lf is None:
+                        out.append("\x1b[0;38;2;%d;%d;%d;48;2;%d;%d;%dm" % (f + b))
+                        lf, lb = f, b
+                    elif f != lf and b != lb:
+                        out.append("\x1b[38;2;%d;%d;%d;48;2;%d;%d;%dm" % (f + b))
+                        lf, lb = f, b
+                    elif f != lf:
+                        out.append("\x1b[38;2;%d;%d;%dm" % f)
+                        lf = f
+                    elif b != lb:
+                        out.append("\x1b[48;2;%d;%d;%dm" % b)
+                        lb = b
                 out.append(ch)
-        out.append("\x1b[0m")
+                at = i + 1
+        self.raw_painted = painted
+        if out:
+            out.append("\x1b[0m")
         return "".join(out)
 
     # --- main screen ------------------------------------------------------------------
@@ -10777,13 +10856,32 @@ def screenshot(cols=100, rows=32, seed=SHOT_SEED, at=SHOT_STEP, race=SHOT_HERO[0
         SFX_LIVE = saved[1]
 
 
+class _ShotClock:
+    """The time module with its clock stopped: blinking marks, pulsing plates, animated tiles and floating
+    numbers all follow time.time(), so the README picture is drawn at one fixed moment."""
+
+    def __init__(self, t):
+        self.t = t
+
+    def time(self):
+        return self.t
+
+    def __getattr__(self, name):
+        return getattr(_time_module, name)
+
+
+_time_module = time
+SHOT_CLOCK = 1000.4   # the moment the README picture shows (the same frame as the picture in docs/screenshots)
+
+
 def _shot_draw(g, cols, rows, view):
     """The main screen of game g as the UI draws it (curses cells, then the lit map and pictures painted over)."""
     import arcadekit
-    global PIC_MODE, Colors
-    saved = (PIC_MODE, Colors)
+    global PIC_MODE, Colors, time
+    saved = (PIC_MODE, Colors, time)
     try:
         Colors = _ShotColors
+        time = _ShotClock(SHOT_CLOCK)
         scr = _ShotScreen(rows, cols)
         ui = UI(scr, bot=1, save_path=os.devnull)
         PIC_MODE = "true"
@@ -10799,7 +10897,7 @@ def _shot_draw(g, cols, rows, view):
         _shot_ansi(cv, (ui.raw_map_escapes() if ui.rawmap else "") + "".join(pic_escapes(PICS[k], y, x) for y, x, k in pics))
         return cv
     finally:
-        PIC_MODE, Colors = saved
+        PIC_MODE, Colors, time = saved
 
 
 def dump_art():

@@ -4084,7 +4084,261 @@ def draw_boss(v, e, t, py):
         v.sphere(x - 6, y, 2.4, mix(ring_c, WHITE, 0.5 * pulse))
         v.rect(x - 26, y - 1, 12, 2, m2)
         v.rect(x - 26, y - 1, 12, 0.6, m4)
+    hi_art = v.s >= HI_ART and key != "scrapmonarch"     # the scrapmonarch draws its own finer art above
+    if hi_art:
+        boss_detail_hi(v, key, x, y, t, C, core, pulse, b, py)
     v.bevel(snapped)
+    if hi_art:
+        boss_light_hi(v, key, x, y, t, C, core, pulse, b, py)
+
+
+def _rivet(v, x, y, c, lit):
+    v.dot(x, y, mix(c, OUTLINE, 0.5))
+    v.dot(x - 0.35, y - 0.35, lit)
+
+
+def boss_detail_hi(v, key, x, y, t, C, core, pulse, b, py):
+    """Bosses 2-8 in a big window: seams, rivets, plates, veins, facets, drawn into the body before the bevel."""
+    if key == "mothergland":
+        vein, pale = C((120, 26, 66)), C((255, 190, 205))
+        for k in range(7):    # veins running from the eye across the body
+            a = -1.05 + k * 0.35
+            px_, py_ = x - 8 + math.cos(a) * 6.2, y + math.sin(a) * 6.2
+            for j in range(5):
+                a2 = a + 0.35 * math.sin(k * 1.7 + j * 1.3 + t * 0.8)
+                nx, ny = px_ + math.cos(a2) * 2.4, py_ + math.sin(a2) * 2.4
+                if (nx - x - 2) ** 2 + (ny - y) ** 2 > 12.5 ** 2:
+                    break
+                v.line(px_, py_, nx, ny, vein)
+                px_, py_ = nx, ny
+            v.dot(px_, py_, mix(vein, pale, 0.3))
+        for k in range(14):   # pores, lit on top
+            a, rr = k * 2.39, 4 + (k * 37 % 9)
+            px_, py_ = x + 3 + math.cos(a) * rr, y + math.sin(a) * rr * 0.9
+            v.dot(px_, py_, vein)
+            v.dot(px_, py_ - 0.4, pale)
+        for k in range(6):    # suckers along the tentacles
+            a = math.pi + (k - 2.5) * 0.35
+            px_, py_ = x - 6, y
+            for j in range(9):
+                a2 = a + 0.35 * math.sin(t * 2.5 + k + j * 0.6)
+                px_, py_ = px_ + math.cos(a2) * 2.2, py_ + math.sin(a2) * 2.2
+                if j % 2:
+                    v.dot(px_ + 0.4, py_ + 0.5, pale)
+        for k in range(5):    # the nodules get a dark pore
+            a = t * 0.7 + k * 1.3
+            v.dot(x + 4 + math.cos(a) * 7 + 0.5, y + math.sin(a) * 7 + 0.6, C((170, 60, 100)))
+        ang = math.atan2(py - y, -10)
+        ex, ey = x - 8 + math.cos(ang) * 2, y + math.sin(ang) * 2
+        for k in range(12):   # the iris: fibres round the pupil
+            a = k * TAU / 12
+            v.line(ex + math.cos(a) * 1.5, ey + math.sin(a) * 1.5, ex + math.cos(a) * 2.7, ey + math.sin(a) * 2.7,
+                   mix(core, (60, 20, 10), 0.35) if k % 2 else mix(core, WHITE, 0.3))
+        v.ring(x - 8, y, 5.2, C((210, 170, 170)))            # the eyelid rim
+    elif key == "dreadkiln":
+        H1, H2, H3, H4 = C((110, 96, 90)), C((150, 130, 116)), C((70, 60, 58)), C((186, 166, 148))
+        lit = C((214, 196, 178))
+        for k in range(8):   # rivets along the roof band and the hull edges
+            _rivet(v, x - 7 + k * 2.6, y - 15.4, H3, lit)
+        for k in range(9):
+            _rivet(v, x - 10.8, y - 13 + k * 2.8, H3, lit)
+        v.line(x + 9.7, y - 14, x + 9.7, y + 9.5, H3)        # the seam where the flank turns away
+        v.line(x + 10.3, y - 14, x + 10.3, y + 9.5, mix(H1, H4, 0.4))
+        for k in range(10):  # cooling slats on the side box
+            yy = y - 8.5 + k * 2.0
+            v.line(x - 15.5, yy, x - 10.5, yy, H1 if k % 2 else mix(H3, OUTLINE, 0.3))
+        for k in range(5):   # window sills and frames
+            for j in range(3):
+                v.line(x - 4.5 + k * 3.5, y - 10.2 + j * 4, x - 1.5 + k * 3.5, y - 10.2 + j * 4, H4)
+        for gx in (-25, -21, -17):    # bands on the main gun
+            v.line(gx, y + 2, gx, y + 5.6, H3)
+            v.line(gx + 0.45, y + 2, gx + 0.45, y + 3, H4)
+        v.rect(x - 30, y + 3, 1.2, 2, C((20, 16, 16)))      # the bore
+        for sx, sw, top in ((4, 4, -26), (10, 3, -24)):      # stack rims and soot
+            v.rect(x + sx - 0.5, y + top - 0.6, sw + 1, 1.0, H2)
+            v.rect(x + sx - 0.5, y + top - 0.6, sw + 1, 0.4, H4)
+            v.rect(x + sx + 0.6, y + top + 0.5, sw - 1.2, 1.2, C((36, 30, 30)))
+        for k in range(14):  # the furnace line flickers
+            if (k * 7 + int(t * 12)) % 5 < 2:
+                v.dot(x - 11.5 + k * 2, y + 14.2, C((255, 230, 140)))
+        for j in range(3):   # plate edges catch the light
+            v.line(x - 12, y + 3.1 + j * 4, x + 9, y + 3.1 + j * 4, mix(H1, H4, 0.45))
+    elif key == "drownedbell":
+        B1, B2, B3 = C((60, 140, 130)), C((120, 200, 180)), C((30, 80, 80))
+        moss, pale = C((70, 110, 60)), C((200, 230, 210))
+        for sx, ya, yb in ((-4.5, -12, 2), (-1.2, -14, 4), (2.5, -13, 0), (6, -6, 5), (-7.5, -4, 5)):
+            v.line(x + sx, y + ya, x + sx - sx * 0.1, y + yb, mix(B1, B2, 0.35))     # verdigris streaks
+            v.line(x + sx + 0.45, y + ya + 2, x + sx + 0.45 - sx * 0.1, y + yb - 1, mix(B1, B3, 0.35))
+        for k in range(11):  # rivets round the lip and the waist band
+            _rivet(v, x - 12.5 + k * 2.5, y + 6.5, B3, pale)
+        for k in range(6):
+            _rivet(v, x - 6.5 + k * 2.6, y - 5, B3, pale)
+        for bx, by_, n in ((-9, 2, 4), (5, -1, 3), (9, 4, 3), (-3, -10, 2)):   # barnacles
+            for k in range(n):
+                cx_, cy_ = x + bx + (k % 2) * 1.1, y + by_ + k * 0.7
+                v.disc(cx_, cy_, 0.55, C((190, 196, 170)))
+                v.dot(cx_ + 0.1, cy_ + 0.1, C((60, 60, 50)))
+        for k in range(4):   # moss hanging from the lip
+            v.line(x - 11 + k * 6.5, y + 8, x - 11 + k * 6.5, y + 9.2 + k % 2, moss)
+        v.ring(x, y - 20.6, 1.5, B3, 14)                     # the crown loop
+        v.rect(x - 2, y - 19, 4, 0.5, B2)
+        v.circle(x + 3 * math.sin(t * 1.6), y + 10, 2.6, mix(core, (40, 20, 10), 0.3))
+        v.sphere(x + 3 * math.sin(t * 1.6) - 0.1, y + 9.9, 2.1, core)
+    elif key == "cinderheart":
+        R1, R2 = C((70, 46, 36)), C((110, 70, 50))
+        crack = C((40, 24, 20))
+        lava = mix(C((255, 120, 40)), C((255, 220, 120)), pulse * 0.5)
+        for k in range(7):   # the lava rays become cracks with dark shoulders and a hot core
+            a = k * 0.9 + 0.3 * math.sin(t + k)
+            ca, sa = math.cos(a), math.sin(a)
+            nx_, ny_ = -sa * 0.5, ca * 0.5
+            v.line(x + ca * 5 + nx_, y + sa * 5 + ny_, x + ca * 11.5 + nx_, y + sa * 11.5 + ny_, crack)
+            v.line(x + ca * 5 - nx_, y + sa * 5 - ny_, x + ca * 11.5 - nx_, y + sa * 11.5 - ny_, crack)
+            v.line(x + ca * 5, y + sa * 5, x + ca * 11, y + sa * 11, lava)
+            v.dot(x + ca * 8, y + sa * 8, C((255, 240, 180)))
+        for cx_, cy_, r_ in ((-6, 5, 1.6), (5, -7, 1.3), (7, 5, 1.8), (-8, -2, 1.1), (1, 9, 1.2)):  # craters
+            v.circle(x + cx_, y + cy_, r_, R1)
+            v.circle(x + cx_ + 0.3, y + cy_ + 0.3, r_ * 0.6, mix(R1, OUTLINE, 0.3))
+            v.dot(x + cx_ - r_ * 0.6, y + cy_ - r_ * 0.6, mix(R2, WHITE, 0.25))
+        for k in range(16):  # a lit rim on the upper left of the crust
+            a = math.pi * 1.05 + k * 0.06
+            v.dot(x + math.cos(a) * 12, y + math.sin(a) * 12, C((170, 120, 90)))
+        for k in range(10):  # embers glowing in the crust
+            a = k * 2.1 + 0.4
+            rr = 6 + (k * 3) % 5
+            if (k + int(t * 5)) % 3:
+                v.dot(x + math.cos(a) * rr, y + math.sin(a) * rr, C((255, 160, 70)))
+        v.ring(x, y, 5 + 1.2 * pulse, mix(lava, (255, 250, 210), 0.5))
+    elif key == "ambersovereign":
+        Y1, Y2, K1, wing = C((230, 170, 40)), C((255, 220, 100)), C((40, 30, 16)), C((200, 220, 230))
+        fl_ = 4 * math.sin(t * 18)
+        vein = mix(wing, (60, 50, 30), 0.65)
+        # veins and cells on the near wing (the far one is behind the body)
+        for ex, ey in ((11.2, -15.2), (13.6, -13.6), (15, -12.6)):
+            v.line(x + 1, y - 5, x + ex, y + ey - fl_, vein)
+        v.line(x + 5.5, y - 8.3 - fl_ * 0.45, x + 7.5, y - 6.2 - fl_ * 0.45, vein)
+        v.line(x + 9.5, y - 12.2 - fl_ * 0.75, x + 11.5, y - 10.2 - fl_ * 0.75, vein)
+        v.dot(x + 13.2, y - 14.2 - fl_, mix(wing, WHITE, 0.6))
+        for k in range(5):   # fuzz along the stripes, a sheen on each band
+            cx_, cy_, r_ = x + 6 + k * 2.2, y + 3 + k * 1.2, 6 - k * 0.6
+            for j in range(5):
+                a = -0.6 + j * 0.45
+                v.dot(cx_ + math.cos(a) * r_ * 0.98, cy_ + math.sin(a) * r_ * 0.98,
+                      mix(Y2, WHITE, 0.3) if k % 2 == 0 else mix(K1, Y1, 0.35))
+        v.poly([(x + 16.5, y + 7.5), (x + 21, y + 11), (x + 16, y + 9.8)], K1)        # the sting
+        v.line(x + 17, y + 8.2, x + 20.5, y + 10.8, mix(K1, Y2, 0.4))
+        for k in range(7):   # hairs on the thorax
+            a = math.pi * 1.1 + k * 0.28
+            v.line(x - 2 + math.cos(a) * 5.4, y - 1 + math.sin(a) * 5.4,
+                   x - 2 + math.cos(a) * 6.3, y - 1 + math.sin(a) * 6.3, mix(Y1, K1, 0.5))
+        for k in range(6):   # compound-eye facets
+            v.dot(x - 12 + (k % 2) * 0.8, y - 4.6 + k * 0.6, C((120, 10, 10)))
+        v.line(x - 13, y - 1, x - 15, y + 1.5, C((120, 80, 30)))                     # mandibles
+        v.line(x - 13, y + 1, x - 14.6, y + 3.2, C((120, 80, 30)))
+    elif key == "chronoprism":
+        c1, c2, c3 = C((120, 200, 250)), C((200, 240, 255)), C((80, 90, 200))
+        v.line(x, y - 15, x - 10, y, mix(c2, WHITE, 0.4))     # lit outer edges, shadowed ones
+        v.line(x, y - 15, x + 10, y, mix(c1, c2, 0.4))
+        v.line(x + 10, y, x, y + 15, mix(c3, OUTLINE, 0.4))
+        v.line(x, y - 12, x - 7, y, c2)                       # the inner girdle
+        v.line(x - 7, y, x, y + 12, mix(c1, c3, 0.3))
+        for k in range(12):  # hour marks round the core, one running
+            a = k * TAU / 12 - math.pi / 2
+            on = k == int(t * 2) % 12
+            v.dot(x + math.cos(a) * 5.2, y + math.sin(a) * 6.5, WHITE if on else mix(c3, c1, 0.5))
+        for k in range(4):   # refractions inside the facets
+            a = 0.6 + k * TAU / 4 + t * 0.4
+            v.line(x + math.cos(a) * 2, y + math.sin(a) * 3, x + math.cos(a) * 4.5, y + math.sin(a) * 7,
+                   mix(c1, WHITE, 0.25))
+    else:   # the void engine
+        m1, m2, m3, m4 = C((60, 50, 70)), C((100, 86, 110)), C((30, 24, 36)), C((140, 124, 152))
+        ring_c = C(PHASE_CORE[min(3, b["phase"])])
+        for yy in (-11, 10):  # panel seams in the dark core
+            v.line(x + 2, y + yy, x + 13, y + yy, mix(m3, OUTLINE, 0.5))
+            v.line(x + 2, y + yy + 0.45, x + 13, y + yy + 0.45, mix(m3, m2, 0.5))
+        v.line(x + 6, y - 17.5, x + 6, y + 17.5, mix(m3, OUTLINE, 0.5))
+        for k in range(8):   # rivets on the frame
+            _rivet(v, x - 0.5 + k * 2.2, y - 19.3, m1, m4)
+            _rivet(v, x - 0.5 + k * 2.2, y + 19.4, m1, m4)
+        for k in range(4):   # conduits from the fins into the core, and slits in each fin
+            yy = y - 16 + k * 10 + 2 * math.sin(t * 3 + k)
+            v.line(x + 8, yy + 1.5, x + 2, y - 2 + k * 1.3, mix(ring_c, m3, 0.55))
+            for j in range(3):
+                v.line(x + 10.5 + j * 2.5, yy + 0.8, x + 10.5 + j * 2.5, yy + 2.6, m3)
+            v.dot(x + 17.6, yy + 1.4, mix(ring_c, WHITE, 0.4))
+        for k in range(16):  # the socket rim lights round the eye
+            a = k * TAU / 16
+            v.dot(x - 6 + math.cos(a) * 7.6, y + math.sin(a) * 7.6, m4 if k % 4 else mix(ring_c, WHITE, 0.3))
+        for gx in (-24, -20, -16):   # bands on the cannon
+            v.line(gx, y - 1, gx, y + 1, m3)
+
+
+def boss_light_hi(v, key, x, y, t, C, core, pulse, b, py):
+    """Bosses 2-8 in a big window: what glows (eyes, cores, fires), catchlights, after the bevel."""
+    if key == "mothergland":
+        ang = math.atan2(py - y, -10)
+        ex, ey = x - 8 + math.cos(ang) * 2.4, y + math.sin(ang) * 2.4
+        v.glow(ex, ey, 6, core, 0.18 + 0.1 * pulse)
+        v.disc(ex - 0.7, ey - 0.8, 0.5, WHITE)                # catchlights on the eye
+        v.dot(ex + 0.9, ey + 0.8, mix(core, WHITE, 0.6))
+        for k in range(5):
+            a = t * 0.7 + k * 1.3
+            v.dot(x + 4 + math.cos(a) * 7 - 0.9, y + math.sin(a) * 7 - 0.9, WHITE)
+        v.dot(x - 10.3, y - 2.6, WHITE)
+    elif key == "dreadkiln":
+        fire = C((255, 140, 50))
+        v.glow(x - 8, y - 5, 6, mix(core, WHITE, 0.3 * pulse), 0.3)
+        v.disc(x - 10.2, y - 6.2, 0.45, WHITE)
+        v.hglow(x - 12, y + 14, 28, 1, fire, max(2, int(v.s * 1.2)), 0.45)
+        for k, (sx, top) in enumerate(((6, -26.5), (11.5, -24.5))):   # heat over the stacks
+            f = 0.5 + 0.5 * math.sin(t * 9 + k * 2)
+            v.glow(x + sx, y + top - 1, 3 + f, fire, 0.25 + 0.15 * f)
+            v.spark(x + sx + math.sin(t * 5 + k) * 0.8, y + top - 2 - (t * 6 + k * 2) % 4, C((255, 200, 120)))
+        v.glow(x + 2.5, y - 8, 7, C((255, 220, 140)), 0.1)
+    elif key == "drownedbell":
+        cx_ = x + 3 * math.sin(t * 1.6)
+        v.glow(cx_, y + 10, 5, core, 0.3)
+        v.disc(cx_ - 0.8, y + 9.2, 0.45, WHITE)
+        for k in range(6):   # bubbles rising off the bell
+            ph = (t * 0.35 + k * 0.17) % 1.0
+            bx = x - 10 + k * 4 + 1.2 * math.sin(t * 2 + k)
+            by_ = y - 6 - ph * 18
+            v.ring(bx, by_, 0.6 + 0.3 * (k % 2), C((170, 240, 230)), 10)
+            v.dot(bx - 0.25, by_ - 0.3, WHITE)
+    elif key == "cinderheart":
+        v.glow(x, y, 10, mix(C((255, 120, 40)), core, 0.5), 0.22 + 0.12 * pulse)
+        v.disc(x - 1.1, y - 1.2, 0.6, WHITE)
+        for k in range(8):   # embers drifting off
+            ph = (t * 0.6 + k * 0.125) % 1.0
+            a = k * 0.8 + 0.4
+            rr = 12.5 + ph * 8
+            v.spark(x + math.cos(a) * rr, y + math.sin(a) * rr - ph * 3,
+                    C((255, 220, 120)) if ph < 0.5 else C((255, 120, 40)))
+    elif key == "ambersovereign":
+        v.glow(x - 6, y - 4, 4, core, 0.3)
+        v.dot(x - 6.6, y - 4.6, WHITE)
+        v.dot(x - 11.5, y - 4.5, WHITE)                       # catchlights on both eyes
+        v.dot(x - 11.5, y - 2.0, C((255, 160, 140)))
+        fl_ = 4 * math.sin(t * 18)
+        for sg in (-1, 1):   # a shimmer running over the wings
+            f = (t * 1.5) % 1.0
+            v.spark(x + 2 + f * 12, y + sg * (5 + f * 9 + fl_ * f), C((235, 245, 255)))
+    elif key == "chronoprism":
+        c2 = C((200, 240, 255))
+        v.glow(x, y, 7, mix(core, c2, 0.4), 0.22 + 0.15 * pulse)
+        v.disc(x - 0.9, y - 1.0, 0.55, WHITE)
+        for k in range(0, 12, 3):    # the core motes twinkle
+            a = -t * 0.8 + k * TAU / 12
+            _twinkle(v, x + math.cos(a) * 14, y + math.sin(a) * 14, mix(core, WHITE, 0.5), 1.3)
+        k = (t * 0.9) % 1.0          # a glint travelling up the lit edge
+        _twinkle(v, x - 10 + k * 10, y - k * 15, WHITE, 1.2)
+    else:
+        ring_c = C(PHASE_CORE[min(3, b["phase"])])
+        v.glow(x - 6, y, 9, ring_c, 0.2 + 0.12 * pulse)
+        v.disc(x - 6.7, y - 0.8, 0.5, WHITE)
+        for k in range(4):
+            yy = y - 16 + k * 10 + 2 * math.sin(t * 3 + k)
+            v.glow(x + 18, yy + 1.5, 2.5, ring_c, 0.25)
 
 
 # --- the rest of the picture -------------------------------------------------------------------
@@ -4175,7 +4429,18 @@ def draw_actors(g, v):
                     c = (255, 240, 220) if off == 0 else (255, 80, 70)
                     v.line(ox - dy * off, oy + dx * off, ox + dx * 150 - dy * off, oy + dy * 150 + dx * off, c)
     # items
+    hi_art = s >= HI_ART
     for it in g.items:
+        if hi_art:
+            if it.kind == "crystal":
+                draw_crystal_hi(v, it)
+                continue
+            draw_capsule_hi(v, it)
+            c, letter, _ = ITEMS[it.kind]
+            col, row = v.X(it.x), v.Y(it.y) // 2
+            if v.x0 <= col < v.x1 and v.y0 // 2 <= row < (v.y1 - 1) // 2 + 1:
+                v.cv.put(col, row, letter, (10, 10, 16), c)
+            continue
         if it.kind == "crystal":   # a cut gem: lit upper left facet, dark lower right, a glint
             c = CRYSTAL_C[it.color]
             r = 3 + 0.4 * math.sin(it.t * 8)
@@ -4277,6 +4542,9 @@ def draw_actors(g, v):
         if g.shield:
             v.ring(g.px, g.py, 7 + 0.5 * math.sin(t * 8), (120, 210, 255), 30)
         for bx, by in g.bits():
+            if hi_art:
+                draw_bit_hi(v, bx, by, t)
+                continue
             v.circle(bx, by, 1.7 + 1.0 / s, OUTLINE, True)
             if v.hi:
                 v.ball(bx, by, 1.7, (80, 150, 210), (220, 245, 255))
@@ -4285,7 +4553,9 @@ def draw_actors(g, v):
             v.circle(bx - 0.3, by - 0.3, 1.2, (120, 200, 240))
             v.dot(bx - 0.6, by - 0.6, (230, 250, 255))
     p = g.pod
-    if p is not None:   # a steel ball with the crystal's colour glowing in its open side, two prongs
+    if p is not None and hi_art:
+        draw_pod_hi(v, p, CRYSTAL_C.get(g.pod_color, (200, 200, 220)), -1 if p.state == "back" else 1, t)
+    elif p is not None:   # a steel ball with the crystal's colour glowing in its open side, two prongs
         col = CRYSTAL_C.get(g.pod_color, (200, 200, 220))
         d = -1 if p.state == "back" else 1
         o = 1.0 / s
@@ -4346,6 +4616,145 @@ def draw_actors(g, v):
             v.dot(pp[0], pp[1], pp[6] if pp[4] > pp[5] * 0.4 else shade(pp[6], 0.6))
     for x, y, wt, dur in g.waves:
         v.ring(x, y, 4 + wt / dur * 90, (255, 240, 220), 80)
+
+
+# --- pickups, pod and bits in big windows (s >= HI_ART): the same shapes with rims, glints, glows and markings ---
+def _twinkle(v, x, y, c, n):
+    """A small four-pointed star of light, n field units long."""
+    v.spark(x, y, c)
+    if n > 0.4:
+        for dx, dy in ((n, 0), (-n, 0), (0, n * 0.9), (0, -n * 0.9)):
+            v.line(x + dx * 0.4, y + dy * 0.4, x + dx * 0.75, y + dy * 0.75, c)
+
+
+def _mark(v, kind, x, y, c, t):
+    """A small sign per pickup kind on the lower half of its capsule (the letter sits in the middle)."""
+    lt, dk = mix(c, WHITE, 0.7), mix(c, OUTLINE, 0.65)
+    if kind == "missile":            # a tiny rocket with a flame
+        v.line(x - 1.1, y + 1.65, x + 0.9, y + 1.65, lt)
+        v.dot(x + 1.25, y + 1.65, WHITE)
+        v.line(x - 1.0, y + 1.2, x - 1.0, y + 2.1, dk)
+        v.dot(x - 1.6, y + 1.65, (255, 210, 90) if int(t * 14) % 2 else (255, 120, 40))
+    elif kind == "crawlbomb":        # treads
+        v.line(x - 1.4, y + 2.05, x + 1.4, y + 2.05, dk)
+        for k in range(4):
+            v.dot(x - 1.2 + k * 0.8, y + 1.6, lt if (k + int(t * 8)) % 2 else dk)
+    elif kind == "bit":              # two little bits on an orbit around the capsule
+        for k in (0, 1):
+            a = t * 3 + k * math.pi
+            bx, by = x + math.cos(a) * 4.3, y + math.sin(a) * 3.4
+            v.disc(bx, by, 0.55, mix(c, OUTLINE, 0.3))
+            v.dot(bx - 0.15, by - 0.15, WHITE)
+    elif kind in ("speed", "slow"):  # chevrons, forwards or back
+        d = 1 if kind == "speed" else -1
+        for k in (-0.7, 0.4):
+            xa = x + k * d
+            v.line(xa, y + 1.0, xa + 0.6 * d, y + 1.55, lt)
+            v.line(xa + 0.6 * d, y + 1.55, xa, y + 2.1, lt)
+    elif kind == "shield":           # an arc of shield light around the shell
+        for k in range(9):
+            a = -1.9 + k * 0.28 + 0.3 * math.sin(t * 3)
+            v.dot(x + math.cos(a) * 4.0, y + math.sin(a) * 4.0, mix(c, WHITE, 0.3 + 0.07 * k))
+    elif kind == "bomb":             # a fuse with a spark
+        v.line(x + 1.7, y - 2.1, x + 2.6, y - 3.5, (120, 96, 70))
+        _twinkle(v, x + 2.7, y - 3.7, (255, 240, 160) if int(t * 16) % 2 else (255, 160, 60), 0.9)
+    elif kind == "life":             # a tiny ship
+        v.line(x - 1.3, y + 1.9, x + 1.3, y + 1.4, lt)
+        v.line(x - 1.3, y + 1.4, x - 1.3, y + 2.1, lt)
+        v.dot(x + 1.5, y + 1.35, WHITE)
+    elif kind == "gem":              # it sparkles
+        k = int(t * 3) % 3
+        _twinkle(v, x + 2.4 - k * 0.7, y - 2.4 + k * 0.4, WHITE, 1.0)
+        v.line(x - 1.2, y + 1.7, x + 1.2, y + 1.7, dk)
+
+
+def draw_capsule_hi(v, it):
+    c = ITEMS[it.kind][0]
+    x, y, t = it.x, it.y, it.t
+    v.glow(x, y, 5.4, c, 0.18 + 0.12 * math.sin(t * 5))
+    v.disc(x, y, 3 + 1.0 / v.s, OUTLINE)
+    v.disc(x, y, 3, shade(c, 0.45))
+    v.ball(x - 0.2, y - 0.2, 2.45, c)
+    for k in range(12):                                                  # light caught on the upper-left rim
+        a = math.pi * 1.0 + k * 0.07
+        v.dot(x + math.cos(a) * 2.7, y + math.sin(a) * 2.7, mix(c, WHITE, 0.7))
+    for k in range(10):                                                  # bounce light on the lower-right rim
+        a = 0.15 + k * 0.12
+        v.dot(x + math.cos(a) * 2.55, y + math.sin(a) * 2.55, mix(c, WHITE, 0.22))
+    _mark(v, it.kind, x, y, c, t)
+    a = t * 2.2                                                          # a glint running round the rim
+    v.spark(x + math.cos(a) * 3.05, y + math.sin(a) * 3.05, mix(c, WHITE, 0.85))
+
+
+def draw_crystal_hi(v, it):
+    c = CRYSTAL_C[it.color]
+    t = it.t
+    r = 3 + 0.4 * math.sin(t * 8)
+    x, y, o = it.x, it.y, 1.0 / v.s
+    w = r * 0.8
+    v.glow(x, y, r * 2.0, c, 0.3)
+    v.poly([(x, y - r - o), (x + w + o, y), (x, y + r + o), (x - w - o, y)], OUTLINE)
+    lite, dark = mix(c, WHITE, 0.5), mix(c, (24, 14, 46), 0.5)
+    v.poly([(x, y - r), (x, y), (x - w, y)], lite)                       # four crown facets, lit from the top left
+    v.poly([(x, y - r), (x + w, y), (x, y)], mix(c, WHITE, 0.12))
+    v.poly([(x - w, y), (x, y), (x, y + r)], mix(c, (24, 14, 46), 0.15))
+    v.poly([(x, y), (x + w, y), (x, y + r)], dark)
+    tr = 0.42                                                            # the table: a small flat facet on top
+    ty = y - r * 0.12
+    v.poly([(x, ty - r * tr), (x + w * tr, ty), (x, ty + r * tr), (x - w * tr, ty)], mix(c, WHITE, 0.3))
+    v.poly([(x, ty - r * tr), (x, ty), (x - w * tr, ty)], mix(c, WHITE, 0.62))
+    v.line(x, y - r, x - w, y, mix(c, WHITE, 0.8))                       # lit edges, a shadowed one
+    v.line(x, y - r, x + w, y, mix(c, WHITE, 0.35))
+    v.line(x + w, y, x, y + r, mix(c, OUTLINE, 0.55))
+    for k in range(3):                                                   # light refracted inside
+        v.dot(x + 0.5 - k * 0.45, y + r * 0.35 + k * 0.4, mix(c, WHITE, 0.45))
+    v.dot(x - w * 0.35, y - r * 0.4, WHITE)
+    k = (t * 1.6) % 1.0                                                  # a star twinkles over the top corner
+    if k < 0.55:
+        _twinkle(v, x - w * 0.3, y - r * 0.62, WHITE, 1.4 * math.sin(k / 0.55 * math.pi))
+
+
+def draw_bit_hi(v, bx, by, t):
+    s = v.s
+    v.glow(bx, by, 3.2, (90, 170, 240), 0.25)
+    v.disc(bx, by, 1.7 + 1.0 / s, OUTLINE)
+    v.ball(bx, by, 1.7, (80, 150, 210), (220, 245, 255))
+    v.ring(bx, by, 1.45, (50, 96, 150))                                  # a dark seam round the shell
+    v.line(bx - 1.3, by + 0.15, bx + 1.3, by + 0.15, (44, 90, 140))       # the equator band
+    v.disc(bx, by + 0.15, 0.5, mix((120, 230, 255), WHITE, 0.4 + 0.4 * math.sin(t * 9)))
+    v.dot(bx - 0.75, by - 0.8, WHITE)
+
+
+def draw_pod_hi(v, p, col, d, t):
+    """The pod in a big window: a riveted steel ball, a glass lens in the crystal's colour, lit prongs."""
+    o = 1.0 / v.s
+    lx = p.x + d * 0.8
+    pr = 0.3 * math.sin(t * 10)
+    v.glow(lx + d * 1.2, p.y, 5.5, col, 0.28)
+    v.rect(p.x + d * 2.4 - 0.5 - o, p.y - 3.5 - o, 1 + 2 * o, 5.5 + 2 * o, OUTLINE)
+    v.disc(p.x, p.y, 3.3 + o, OUTLINE)
+    v.ball(p.x, p.y, 3.3, (140, 146, 168), (214, 218, 232))
+    for k in range(31):                                                  # the panel seam on the closed side
+        a = (k - 15) * 0.075
+        v.dot(p.x - d * math.cos(a) * 2.55, p.y + math.sin(a) * 2.55, (88, 92, 112))
+    for k in (-2, 0, 2):                                                 # rivets with a lit top
+        a = k * 0.55
+        rx, ry = p.x - d * math.cos(a) * 1.9, p.y + math.sin(a) * 1.9
+        v.dot(rx, ry + 0.4 / v.s * 1.1, (70, 74, 92))
+        v.dot(rx, ry, (232, 236, 246))
+    v.disc(lx, p.y, 2.25 + pr, (40, 42, 56))                             # the socket and its rim
+    v.ring(lx, p.y, 2.15 + pr, (186, 190, 208))
+    v.disc(lx, p.y, 1.65 + pr, mix(col, OUTLINE, 0.45))
+    v.ball(lx, p.y, 1.45 + pr, col, mix(col, WHITE, 0.7))                # the glass lens
+    v.ring(lx, p.y, 0.8, mix(col, WHITE, 0.25))
+    v.dot(lx - 0.6, p.y - 0.7, WHITE)                                    # catchlights
+    v.dot(lx + 0.5, p.y + 0.55, mix(col, WHITE, 0.5))
+    for yy, h, top in ((p.y - 3.5, 1.5, True), (p.y + 2, 1.5, False)):  # the prongs
+        xa = p.x + d * 2.4 - 0.5
+        v.rect(xa, yy, 1, h, (210, 214, 230) if top else (130, 136, 156))
+        v.rect(xa, yy, 1, 0.4, (240, 244, 252) if top else (170, 176, 192))
+        v.rect(xa + 0.6, yy, 0.4, h, (110, 114, 134))
+        v.dot(xa + 0.5 + d * 0.2, yy + (0.2 if top else h - 0.3), mix(col, WHITE, 0.4 + 0.4 * math.sin(t * 7)))
 
 
 def draw_shot_hi(v, sh, k, x, y):
@@ -5076,10 +5485,10 @@ def render_auto(g, auto, cols, rows):
     return cv
 
 
-def play_auto(term, stage, diff, hook=None):
+def play_auto(term, stage, diff, hook=None, clock=time.time, sleep=time.sleep):
     """Auto mode: the real game (same stage and difficulty as chosen, no invulnerability) flown by the pilot.
     After a game over or the last stage the result box shows for three seconds, then a new round starts.
-    Never records a score or unlocks a stage."""
+    Never records a score or unlocks a stage. clock/sleep are the wall clock unless a test supplies its own."""
     auto = AutoMode()
     rounds = 0
 
@@ -5087,10 +5496,10 @@ def play_auto(term, stage, diff, hook=None):
         g = Game(stage, DIFFS[diff])
         return g, Pilot(seed=rounds)
     g, pilot = new_round()
-    last = time.time()
+    last = clock()
     shown = 0.0
     while True:
-        now = time.time()
+        now = clock()
         frame = min(0.1, now - last)
         last = now
         for k, kind in term.events(0):
@@ -5115,14 +5524,14 @@ def play_auto(term, stage, diff, hook=None):
         cols, rows = term.size()
         if cols < MIN_COLS or rows < MIN_ROWS:
             too_small(term)
-            time.sleep(0.2)
-            last = time.time()
+            sleep(0.2)
+            last = clock()
             continue
         cv = render_auto(g, auto, cols, rows)
         if g.phase in ("over", "won") and g.phase_t > 0.8:
             render_over(g, cv, False, g.phase == "won", auto=True)
         term.write(cv.emit())
-        time.sleep(max(0.0, 1 / 60 - (time.time() - now)))
+        sleep(max(0.0, 1 / 60 - (clock() - now)))
 
 
 def main():
@@ -5402,11 +5811,19 @@ def selftest():
     real_submit, submit = submit, (lambda *a, **k: calls.append(a))
 
     class FakeTerm:
+        """A terminal with its own clock: every loop pass takes exactly one 60 Hz frame of game time, however
+        slow the machine is, so the round-trip below is a fixed number of frames, not a race with the wall."""
         kitty = False
 
         def __init__(self):
-            self.t0 = time.time()
+            self.t0 = self.now = 0.0
             self.n = 0
+
+        def clock(self):
+            return self.now
+
+        def sleep(self, d):
+            self.now += max(d, 1e-6)
 
         def events(self, timeout=0.0):
             self.n += 1
@@ -5416,7 +5833,7 @@ def selftest():
                 return [("?", "press")]
             if self.n == 5:
                 return [("x", "press")]           # closes the help
-            return [("esc", "press")] if time.time() - self.t0 > 6.0 else []
+            return [("esc", "press")] if self.now - self.t0 > 7.0 else []   # the new round comes at ~5.9 s
 
         def size(self):
             return (70, 22)
@@ -5428,21 +5845,21 @@ def selftest():
     def hook(g):
         seen["games"].add(id(g))
         seen["far"] = max(seen["far"], g.cam)
-        if time.time() - ft.t0 > 2.5 and not seen["over"]:
+        if ft.now - ft.t0 > 2.5 and not seen["over"]:
             seen["over"] = True
             g.lives = 0
             g.player_hit()
     snd, SND.enabled = SND.enabled, False          # silent, without touching the saved setting
     try:
         ft = FakeTerm()
-        rounds = play_auto(ft, 0, 1, hook=hook)
+        rounds = play_auto(ft, 0, 1, hook=hook, clock=ft.clock, sleep=ft.sleep)
     finally:
         submit = real_submit
         SND.enabled = snd
     assert not calls, "auto mode submitted a score"
     assert rounds >= 1 and len(seen["games"]) >= 2, "auto mode did not start a new round (%d)" % rounds
-    report.append("auto mode: %.0fs at x8 headless, %d new round(s), no scores submitted, flew %d units" % (
-        time.time() - ft.t0, rounds, seen["far"]))
+    report.append("auto mode: %.0fs of frames at x8 headless, %d new round(s), no scores submitted, flew %d units" % (
+        ft.now - ft.t0, rounds, seen["far"]))
     for line in report:
         print("  " + line)
     for c in (70, 120, 200):

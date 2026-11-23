@@ -592,6 +592,84 @@ def face_detail(cv, q, col):
             px[y0 + b + 2][x0 + b + 1] = mix(g, px[y0 + b + 2][x0 + b + 1], 0.5)
 
 
+FACE_LIGHT = {(-1, 0): 1.08, (1, 0): 0.9, (0, -1): 1.14, (0, 1): 0.92}   # by the way a side faces: lit from top left
+SIDE_MIN = 16      # px: cubes at least this big at the rim get the finer side faces ...
+SIDE_ROWS = 45     # ... in windows at least this many rows tall (smaller windows keep their look exactly)
+
+
+def big_sides(cv, v):
+    return cv.rows >= SIDE_ROWS and v.cs >= SIDE_MIN
+
+
+def side_face(cv, q, col, edge, light, k0=1.08, k1=0.74, soft=(True, True)):
+    """A side face of a cube, seen in perspective: a trapezoid whose near edge (q[0]-q[1]) is the cube top's edge
+    and whose far edge (q[2]-q[3]) lies one layer deeper. Big faces get anti-aliased slanted edges (coverage from
+    the distance to each edge, mixed into what is underneath), a gradient from k0 at the near edge to k1 at the far
+    one, a tint by the way the face is turned (light) and a thin anti-aliased line along the slanted and far edges,
+    which fades out on faces too thin to carry it. soft says which slanted edge (q[1]-q[2], q[3]-q[0]) is a
+    silhouette; an edge shared with a neighbouring face in the same plane is cut hard, as are the near and far
+    edges (they run straight across the screen), so faces that meet show no seam."""
+    xs, ys = [p[0] for p in q], [p[1] for p in q]
+    area = sum(q[i][0] * q[(i + 1) % 4][1] - q[(i + 1) % 4][0] * q[i][1] for i in range(4))
+    if abs(area) < 1.0:
+        return
+    sg = 1.0 if area > 0 else -1.0
+    E = []                    # inward unit normals: d = a*x + b*y + c > 0 inside
+    for i in range(4):
+        (ax, ay), (bx, by) = q[i], q[(i + 1) % 4]
+        dx, dy = bx - ax, by - ay
+        L = math.hypot(dx, dy)
+        if L < 1e-6:
+            E.append(None)
+            continue
+        a, b = -dy * sg / L, dx * sg / L
+        E.append((a, b, -(a * ax + b * ay)))
+    near = E[0]
+    if near is None:
+        return
+    depth = near[0] * q[2][0] + near[1] * q[2][1] + near[2]
+    if depth < 0.5:
+        return
+    px, W, H = cv.px, cv.W, cv.H
+    lit = tuple(min(255, int(c * light)) for c in col)
+    x0, x1 = max(0, int(min(xs)) - 1), min(W, int(max(xs)) + 2)
+    y0, y1 = max(0, int(min(ys)) - 1), min(H, int(max(ys)) + 2)
+    lines = [E[i] for i in (1, 2, 3) if E[i] is not None]
+    S = [E[i] for i in (1, 3) if E[i] is not None and soft[i // 2]]          # anti-aliased edges
+    Hd = [E[i] for i in (0, 1, 2, 3) if E[i] is not None and (i in (0, 2) or not soft[i // 2])]
+    la = 0.7 * clamp((depth - 2.5) / 4, 0.0, 1.0)
+    for y in range(y0, y1):
+        yc = y + 0.5
+        row = px[y]
+        for x in range(x0, x1):
+            xc = x + 0.5
+            out = False
+            for e in Hd:
+                if e[0] * xc + e[1] * yc + e[2] < -0.001:
+                    out = True
+                    break
+            if out:
+                continue
+            cover = 1.0
+            for e in S:
+                d = e[0] * xc + e[1] * yc + e[2] + 0.5
+                if d < cover:
+                    cover = d
+            if cover <= 0:
+                continue
+            t = clamp((near[0] * xc + near[1] * yc + near[2]) / depth, 0.0, 1.0)
+            c = shade(lit, k0 + (k1 - k0) * t)
+            ln = 0.0
+            if la:
+                for e in lines:          # the thin edge line along the slanted and far edges
+                    d = e[0] * xc + e[1] * yc + e[2]
+                    if d < 1.2:
+                        ln = max(ln, 1.0 - abs(d - 0.45) / 0.75)
+                if ln > 0:
+                    c = mix(c, edge, min(1.0, ln) * la)
+            row[x] = c if cover >= 1 else mix(row[x], c, cover)
+
+
 def draw_cubes(cv, v, flash=()):
     g = v.g
     W, H, D, cell = g.W, g.H, g.D, g.cell
@@ -605,16 +683,29 @@ def draw_cubes(cv, v, flash=()):
         top, sx, sy, edge = fog, shade(fog, 0.74), shade(fog, 0.56), shade(fog, 0.42)
         order = sorted(((x, y) for y in range(H) for x in range(W) if cell[z][y][x]),
                        key=lambda c: -max(abs(c[0] + 0.5 - hw), abs(c[1] + 0.5 - hh)))
+        fine = big_sides(cv, v) and v.p(1, 0, z)[0] - v.p(0, 0, z)[0] >= 6     # per layer, so all its faces agree
+        lay = cell[z]
+
+        def solid(x, y):
+            return 0 <= x < W and 0 <= y < H and lay[y][x]
+
         for x, y in order:
             # side faces turned towards the middle of the well, unless a neighbour covers them
-            if x > hw - 0.01 and (x == 0 or not cell[z][y][x - 1]):
-                cv.poly([p(x, y, z), p(x, y + 1, z), p(x, y + 1, z + 1), p(x, y, z + 1)], sx)
-            if x + 1 < hw + 0.01 and (x + 1 >= W or not cell[z][y][x + 1]):
-                cv.poly([p(x + 1, y, z), p(x + 1, y + 1, z), p(x + 1, y + 1, z + 1), p(x + 1, y, z + 1)], sx)
-            if y > hh - 0.01 and (y == 0 or not cell[z][y - 1][x]):
-                cv.poly([p(x, y, z), p(x + 1, y, z), p(x + 1, y, z + 1), p(x, y, z + 1)], sy)
-            if y + 1 < hh + 0.01 and (y + 1 >= H or not cell[z][y + 1][x]):
-                cv.poly([p(x, y + 1, z), p(x + 1, y + 1, z), p(x + 1, y + 1, z + 1), p(x, y + 1, z + 1)], sy)
+            for dx, dy, a, b, sc, ok in (
+                    (-1, 0, (x, y), (x, y + 1), sx, x > hw - 0.01 and (x == 0 or not lay[y][x - 1])),
+                    (1, 0, (x + 1, y), (x + 1, y + 1), sx, x + 1 < hw + 0.01 and (x + 1 >= W or not lay[y][x + 1])),
+                    (0, -1, (x, y), (x + 1, y), sy, y > hh - 0.01 and (y == 0 or not lay[y - 1][x])),
+                    (0, 1, (x, y + 1), (x + 1, y + 1), sy, y + 1 < hh + 0.01 and (y + 1 >= H or not lay[y + 1][x]))):
+                if not ok:
+                    continue
+                f = [p(*a, z), p(*b, z), p(*b, z + 1), p(*a, z + 1)]
+                if fine:   # a slanted edge is soft unless the neighbour along it shows the same face
+                    ex, ey = b[0] - a[0], b[1] - a[1]
+                    soft = tuple(not (solid(x + sgn * ex, y + sgn * ey) and not solid(x + sgn * ex + dx, y + sgn * ey + dy))
+                                 for sgn in (1, -1))
+                    side_face(cv, f, sc, edge, FACE_LIGHT[dx, dy], soft=soft)
+                else:
+                    cv.poly(f, sc)
             if z == 0 or not cell[z - 1][y][x]:
                 q = [p(x, y, z), p(x + 1, y, z), p(x + 1, y + 1, z), p(x, y + 1, z)]
                 cv.poly(q, top)
@@ -662,13 +753,23 @@ def solid_piece(cv, v, cubes, g):
     p = v.p
     occupied = set(cubes)
     base = (226, 230, 246)
+    zt = min(c[2] for c in cubes) if cubes else 0
     for x, y, z in sorted(cubes, key=lambda c: -c[2]):
+        fine = big_sides(cv, v) and p(x + 1, y, z)[0] - p(x, y, z)[0] >= 6
+        k0 = 1.12 - 0.14 * (z - zt)          # one gradient down the whole piece, not one per cube
         for dx, dy, face in ((-1, 0, ((x, y), (x, y + 1))), (1, 0, ((x + 1, y), (x + 1, y + 1))),
                              (0, -1, ((x, y), (x + 1, y))), (0, 1, ((x, y + 1), (x + 1, y + 1)))):
             if (x + dx, y + dy, z) in occupied:
                 continue
             (ax, ay), (bx, by) = face
-            cv.poly([p(ax, ay, z), p(bx, by, z), p(bx, by, z + 1), p(ax, ay, z + 1)], (110, 116, 140))
+            f = [p(ax, ay, z), p(bx, by, z), p(bx, by, z + 1), p(ax, ay, z + 1)]
+            if fine:
+                ex, ey = bx - ax, by - ay
+                soft = tuple(not ((x + sg * ex, y + sg * ey, z) in occupied and
+                                  (x + sg * ex + dx, y + sg * ey + dy, z) not in occupied) for sg in (1, -1))
+                side_face(cv, f, (110, 116, 140), (196, 202, 226), FACE_LIGHT[dx, dy], k0, k0 - 0.14, soft)
+            else:
+                cv.poly(f, (110, 116, 140))
         if (x, y, z - 1) not in occupied:
             q = [p(x, y, z), p(x + 1, y, z), p(x + 1, y + 1, z), p(x, y + 1, z)]
             cv.poly(q, base)

@@ -1176,6 +1176,15 @@ def sky(W, H, seed):
     return rows
 
 
+def leaves(x, y, n):
+    """Big hedges: clumps of leaves three pixels across, each lit from the top left (n: the pixel's own noise)."""
+    lr = y // 3
+    lx = (x + (lr % 2) * 1.5 + 0.5) % 3 - 1.5
+    ly = y % 3 - 1.0
+    leaf = 0.3 if lx + ly < -1.2 else -0.26 if lx + ly > 1.4 else 0.0
+    return 0.55 * hsh(int(x + (lr % 2) * 1.5) // 3, lr, 5) + 0.45 * n + leaf
+
+
 _LAYERS = {}
 
 
@@ -1198,6 +1207,26 @@ def layers(m, cols, rows, T, ox, oy):
     def is_wall(tx, ty):
         return not (0 <= tx < MW and 0 <= ty < MH) or wall[ty][tx]
 
+    def hedge_at(tx, ty):
+        return 0 <= tx < MW and 0 <= ty < MH and m.g[ty][tx] == "#"
+
+    def inner(tx, ty, sx, sy):
+        """Big tiles: does the path tile (tx, ty) carry a rounded inner hedge corner towards (sx, sy)? It does where
+        hedges close in on two sides and across the corner (a concave corner of the maze walls)."""
+        return (T >= 5 and 0 <= tx < MW and 0 <= ty < MH and m.g[ty][tx] in ".o P%" and hedge_at(tx + sx, ty)
+                and hedge_at(tx, ty + sy) and hedge_at(tx + sx, ty + sy))
+
+    ri = T * 0.6                      # radius of the inner corners, the same as the outer ones
+
+    def fillet(xx, yy, sx, sy):
+        """How much of pixel (xx, yy) of a path tile the inner corner towards (sx, sy) fills with hedge, and the
+        distance from the arc's centre."""
+        ux, uy = xx + 0.5 - (T / 2 + sx * (T / 2 - ri)), yy + 0.5 - (T / 2 + sy * (T / 2 - ri))
+        if ux * sx <= 0 or uy * sy <= 0:
+            return 0.0, 0.0
+        d = math.hypot(ux, uy)
+        return clamp(d - ri + 0.5, 0.0, 1.0), d
+
     for ty in range(MH):
         for tx in range(MW):
             c = m.g[ty][tx]
@@ -1209,6 +1238,14 @@ def layers(m, cols, rows, T, ox, oy):
             corners = [] if not rc else [(cx_, cy_, sx_, sy_) for cx_, cy_, sx_, sy_, open_ in (
                 (rc, rc, -1, -1, not up and not left), (T - rc, rc, 1, -1, not up and not right),
                 (rc, T - rc, -1, 1, not down and not left), (T - rc, T - rc, 1, 1, not down and not right)) if open_]
+            # rounded inner corners: a path tile gets a fillet of hedge in each concave corner ...
+            fillets = [] if c == "#" or T < 5 else [(sx_, sy_) for sx_ in (-1, 1) for sy_ in (-1, 1)
+                                                   if inner(tx, ty, sx_, sy_)]
+            # ... and the hedge tiles beside it drop their straight rim where the fillet takes over
+            calm = [] if c != "#" or T < 5 else [(sx_, sy_, ax_) for sx_, sy_, ax_ in (
+                (-1, -1, "x"), (1, -1, "x"), (-1, 1, "x"), (1, 1, "x"),
+                (-1, -1, "y"), (1, -1, "y"), (-1, 1, "y"), (1, 1, "y"))
+                if (ax_ == "x" and inner(tx, ty + sy_, sx_, -sy_)) or (ax_ == "y" and inner(tx + sx_, ty, -sx_, sy_))]
             for yy in range(T):
                 y = y0 + yy
                 if not 0 <= y < H:
@@ -1221,15 +1258,20 @@ def layers(m, cols, rows, T, ox, oy):
                     n = hsh(x, y)
                     if c == "#":
                         if T >= 5:      # big tiles: clumps of leaves, each lit from the top left
-                            lr = y // 3
-                            lx = (x + (lr % 2) * 1.5 + 0.5) % 3 - 1.5
-                            ly = y % 3 - 1.0
-                            leaf = 0.3 if lx + ly < -1.2 else -0.26 if lx + ly > 1.4 else 0.0
-                            n = 0.55 * hsh(int(x + (lr % 2) * 1.5) // 3, lr, 5) + 0.45 * n + leaf
+                            n = leaves(x, y, n)
                         col = shade(hedge, 0.74 + 0.5 * n)
                         if speck and hsh(x, y, 3) < 0.05:
                             col = mix(col, speck, 0.8)
-                        if yy == 0 and not up:
+                        flat = False
+                        for sx_, sy_, ax_ in calm:     # this rim pixel lies under a neighbour's inner fillet
+                            if ax_ == "x":   # the path is above / below (sy_), the fillet in its corner on side sx_
+                                if yy == (0 if sy_ < 0 else T - 1) and fillet(xx, T - 1 if sy_ < 0 else 0, sx_, -sy_)[0] >= 0.5:
+                                    flat = True
+                            elif xx == (0 if sx_ < 0 else T - 1) and fillet(T - 1 if sx_ < 0 else 0, yy, -sx_, sy_)[0] >= 0.5:
+                                flat = True
+                        if flat:
+                            pass
+                        elif yy == 0 and not up:
                             col = shade(col, 1.45)
                         elif yy == T - 1 and not down:
                             col = shade(col, 0.55)
@@ -1253,6 +1295,17 @@ def layers(m, cols, rows, T, ox, oy):
                         col = fl = shade((30, 18, 36), 0.85 + 0.3 * n)
                     else:
                         col = shade(ground, 0.86 + 0.28 * n)
+                        for csx, csy in fillets:
+                            cover, d = fillet(xx, yy, csx, csy)
+                            if cover > 0:                # in the corner, beyond the arc: hedge
+                                nn = leaves(x, y, n)     # the same leaf clumps as the hedge tiles
+                                hc = shade(hedge, 0.74 + 0.5 * nn)
+                                if speck and hsh(x, y, 3) < 0.05:
+                                    hc = mix(hc, speck, 0.8)
+                                if d < ri + 1.1:         # the rim follows the curve, as on the outer corners:
+                                    hc = shade(shade(hedge, 0.74 + 0.5 * max(nn, 0.5)), 1.45 if csy > 0 else 0.55)
+                                    #   lit where the hedge is below, and kept out of the leaves' shadows so it reads
+                                col = mix(col, hc, cover)
                         if c == "t":
                             col = shade(col, 0.6)
                         elif c == "-" and yy < max(1, T // 3):
@@ -1344,21 +1397,33 @@ def spirit_mask(S, ph):
         rows[0] = (".#..", "..#.", ".#..", ".##.")[ph]
     else:
         sway = (-0.3, 0.0, 0.3, 0.0)[ph]
+
+        def ins(i, u, v):
+            body = u * u + ((v - 0.16) / 0.86) ** 2 <= 0.74
+            tip = v <= -0.2 and abs(u - sway * (-0.2 - v)) <= (v + 1.1) * 0.8
+            return (body or tip) and not ((i + ph) % 2 == 0 and v > 0.6)     # the ragged hem
+
         rows = []
+        cover = {} if S >= 16 else None       # very big spirits: anti-aliased outline (4x4 samples a pixel)
         for j in range(S):
             v = (j + 0.5) / S * 2 - 1
             row = ""
             for i in range(S):
                 u = (i + 0.5) / S * 2 - 1
-                body = u * u + ((v - 0.16) / 0.86) ** 2 <= 0.74
-                tip = v <= -0.2 and abs(u - sway * (-0.2 - v)) <= (v + 1.1) * 0.8
-                ins = body or tip
-                if ins and v > 0.6 and (i + ph) % 2 == 0:
-                    ins = False
-                row += "#" if ins else "."
+                inside_ = ins(i, u, v)
+                row += "#" if inside_ else "."
+                if cover is not None:
+                    k = sum(ins(i, (i + (a + 0.5) / 4) / S * 2 - 1, (j + (b + 0.5) / 4) / S * 2 - 1)
+                            for a in range(4) for b in range(4)) / 16
+                    if 0 < k < 1:
+                        cover[i, j] = k
             rows.append(row)
     pts = [(i, j) for j, r in enumerate(rows) for i, ch in enumerate(r) if ch == "#"]
-    got = (pts, set(pts))
+    if S >= 16:
+        pts += [p for p in cover if p not in set(pts)]
+    else:
+        cover = None
+    got = (pts, {(i, j) for j, r in enumerate(rows) for i, ch in enumerate(r) if ch == "#"}, cover or {})
     _MASK[key] = got
     return got
 
@@ -1367,7 +1432,7 @@ def draw_spirit(cv, cx, cy, S, color, look, ph, mode="normal", vis=1.0, clip=Non
     """mode: normal, pale, pale2 (flicker), eyes (only the eyes, on their way home)."""
     x0c, y0c, x1c, y1c = clip or (0, 0, cv.W, cv.H)
     left, top = int(round(cx - S / 2)), int(round(cy - S / 2))
-    pts, inside = spirit_mask(S, ph % 4)
+    pts, inside, cover = spirit_mask(S, ph % 4)
     px = cv.px
     if mode != "eyes":
         body = PALE if mode == "pale" else PALE2 if mode == "pale2" else color
@@ -1380,7 +1445,8 @@ def draw_spirit(cv, cx, cy, S, color, look, ph, mode="normal", vis=1.0, clip=Non
                 c = shade(body, k)
                 if vis < 1:
                     c = mix(ground, c, vis)
-                px[y][x] = c
+                a = cover.get((i, j), 1.0) if cover else 1.0
+                px[y][x] = c if a >= 1 else mix(px[y][x], c, a)
     dx, dy = DIRS[look if look is not None else 2]
     scared = mode in ("pale", "pale2")
     white = (246, 246, 255) if not scared else (60, 54, 96)
@@ -1399,8 +1465,8 @@ def draw_spirit(cv, cx, cy, S, color, look, ph, mode="normal", vis=1.0, clip=Non
         ey = 1
         eyes = [(clamp(1 + dx, 0, 3), ey, white), (clamp(2 + dx, 0, 3), ey, white)]
     else:
-        ew = 2 if S >= 8 else 1
-        eh = 2 if S >= 8 else 1
+        ew = S // 6 if S >= 16 else 2 if S >= 8 else 1      # very big spirits (the interlude): bigger eyes
+        eh = ew
         ey = int(S * 0.52) - eh // 2 + (dy if ew == 1 else 0)
         for exc in (S * 0.32, S * 0.68):
             ex = int(exc - ew / 2 + 0.5) + (dx if ew == 1 else 0)
@@ -1411,10 +1477,19 @@ def draw_spirit(cv, cx, cy, S, color, look, ph, mode="normal", vis=1.0, clip=Non
                 ppx = ex + (1 if dx > 0 else 0 if dx < 0 else (1 if exc > S / 2 else 0))
                 ppy = ey + (1 if dy >= 0 else 0)
                 eyes.append((ppx, ppy, pupil))
+            elif ew > 2 and not scared:     # a pupil half the eye's size, looking the way the spirit goes
+                pw = ew // 2
+                ppx = ex + (ew - pw if dx > 0 else 0 if dx < 0 else (ew - pw if exc > S / 2 else 0))
+                ppy = ey + (eh - pw if dy >= 0 else 0)
+                for a in range(pw):
+                    for b in range(pw):
+                        eyes.append((ppx + a, ppy + b, pupil))
         if scared and S >= 8:   # a wobbly mouth
             my = int(S * 0.72)
+            th = 1 if S < 16 else S // 12
             for i in range(int(S * 0.25) + 1, int(S * 0.75)):
-                eyes.append((i, my + (i % 2), (60, 54, 96)))
+                for k in range(th):
+                    eyes.append((i, my + ((i // th) % 2) * th + k, (60, 54, 96)))
     for i, j, c in eyes:
         x, y = left + i, top + j
         if x0c <= x < x1c and y0c <= y < y1c:
@@ -1640,6 +1715,77 @@ def render(g, cols, rows, hud=True):
     return cv
 
 
+_LAWN = {}
+
+
+def interlude_lawn(cv, m, lane, S, band):
+    """The interlude's lawn in a big window: the hedge bands with the maze's leaf clumps and rim light (lit along
+    the top, shaded along the bottom) and a bushy, softly edged outline; the lawn between them as in the maze.
+    Drawn once per maze style and window size, then copied."""
+    key = (m.idx, cv.W, cv.H)
+    got = _LAWN.get(key)
+    if got is None:
+        if len(_LAWN) > 8:
+            _LAWN.clear()
+        got = _LAWN[key] = [r[:] for r in cv.px]
+        _lawn(got, cv.W, cv.H, m, lane, S, band)
+    cv.px = [r[:] for r in got]
+
+
+def _lawn(px, W, H, m, lane, S, band):
+    hedge, ground, speck = m.hedge, m.ground, m.speck
+    for y in range(max(0, lane - S), min(H, lane + S)):
+        px[y] = [shade(ground, 0.86 + 0.28 * hsh(x, y)) for x in range(W)]
+    for top, bot in ((lane - S - band, lane - S), (lane + S, lane + S + band)):
+        for x in range(W):
+            # the outline bulges a little with the leaf clumps, so the band reads as a hedge, not a stripe
+            bump = 0.9 * (0.5 + 0.5 * math.sin(x * 0.55 + hsh(x // 5, top, 9) * 3)) * min(1.0, band / 8)
+            t, b = top - bump, bot + bump * 0.6
+            for y in range(max(0, int(t) - 1), min(H, int(b) + 2)):
+                cover = clamp(min(y + 1 - t, b - y), 0.0, 1.0)
+                if cover <= 0:
+                    continue
+                n = leaves(x, y, hsh(x, y))
+                c = shade(hedge, 0.74 + 0.5 * n)
+                if speck and hsh(x, y, 3) < 0.05:
+                    c = mix(c, speck, 0.8)
+                if y < t + 1.6:
+                    c = shade(shade(hedge, 0.74 + 0.5 * max(n, 0.5)), 1.45)
+                elif y > b - 1.6:
+                    c = shade(c, 0.55)
+                px[y][x] = c if cover >= 1 else mix(px[y][x], c, cover)
+
+
+def lawn_glow(cv, cx, cy, R, k, y0, y1):
+    """The wisp's warm light on the lawn and the hedges around it (the maze's glow, worked out on the spot)."""
+    if R < 1:
+        return
+    px, W = cv.px, cv.W
+    for y in range(max(0, int(cy - R), y0), min(cv.H, int(cy + R) + 1, y1)):
+        dy = y + 0.5 - cy
+        row = px[y]
+        for x in range(max(0, int(cx - R)), min(W, int(cx + R) + 1)):
+            dx = x + 0.5 - cx
+            d = math.sqrt(dx * dx + dy * dy)
+            if d < R:
+                w = (1 - d / R) ** 1.3 * k
+                c = row[x]
+                row[x] = mix(c, mix(shade(c, 1.9), WARM, 0.2), w)
+
+
+def ground_shadow(cv, cx, cy, rx, ry):
+    """A soft oval shadow on the ground."""
+    px = cv.px
+    for y in range(max(0, int(cy - ry - 2)), min(cv.H, int(cy + ry + 2))):
+        v = (y + 0.5 - cy) / (ry + 1)
+        row = px[y]
+        for x in range(max(0, int(cx - rx - 2)), min(cv.W, int(cx + rx + 2))):
+            u = (x + 0.5 - cx) / (rx + 1)
+            d = u * u + v * v
+            if d < 1:
+                row[x] = mix(row[x], (4, 4, 10), 0.55 * (1 - d))
+
+
 def render_interlude(g, cols, rows):
     """Every third maze: a short scene in the moonlight. The spirits chase Glimmer across the lawn, then
     a sun blossom opens and the chase runs the other way."""
@@ -1647,36 +1793,56 @@ def render_interlude(g, cols, rows):
     cv = Canvas(cols, rows)
     cv.px = sky(cols, rows * 2, 99)
     W, H = cv.W, cv.H
-    S = clamp(min(W // 10, H // 5), 3, 14)
+    S = max(3, min(W // 10, H // 5))
+    fine = S > 14              # big windows: the scene keeps its size and gets the maze's finer drawing
     lane = H // 2
     band = max(2, S // 2)
-    for y0 in (lane - S - band, lane + S):
-        for y in range(y0, y0 + band):
-            for x in range(W):
-                if 0 <= y < H:
-                    cv.px[y][x] = shade(m.hedge, 0.7 + 0.5 * hsh(x, y))
-    for y in range(lane - S, lane + S):
-        if 0 <= y < H:
-            cv.px[y] = [shade(m.ground, 0.9 + 0.2 * hsh(x, y)) for x in range(W)]
     e = 7.0 - g.state_t
     ph = int(e * 6) % 4
+    if not fine:
+        for y0 in (lane - S - band, lane + S):
+            for y in range(y0, y0 + band):
+                for x in range(W):
+                    if 0 <= y < H:
+                        cv.px[y][x] = shade(m.hedge, 0.7 + 0.5 * hsh(x, y))
+        for y in range(lane - S, lane + S):
+            if 0 <= y < H:
+                cv.px[y] = [shade(m.ground, 0.9 + 0.2 * hsh(x, y)) for x in range(W)]
+    else:
+        interlude_lawn(cv, m, lane, S, band)
+        # where the wisp is, it lights the lawn and the hedges, as in the maze
+        if e < 3.4:
+            gx, gs = W + S - e * (W + 5 * S) / 3.2, 1.0
+        elif e < 4.0:
+            gx, gs = S, (e - 3.4) / 0.6
+        else:
+            gx, gs = -S + (e - 4.0) / 3.0 * (W + 6 * S), 1.0 + 0.3 * (e - 4.0) / 3.0
+        lawn_glow(cv, gx, lane, S * 3.2 * gs, 0.6 + 0.08 * math.sin(e * 11), lane - S - band, lane + S + band)
+
+    def shadow(x):             # a soft shadow on the lawn under a spirit (big windows)
+        if fine:
+            ground_shadow(cv, x, lane + S * 0.56, S * 0.42, S * 0.1)
+
     if e < 3.4:
         wx = W + S - e * (W + 5 * S) / 3.2
         draw_wisp(cv, wx, lane, S * 0.8, e)
         for n, i in enumerate((0, 1)):
+            shadow(wx + (2.0 + 1.5 * n) * S)
             draw_spirit(cv, wx + (2.0 + 1.5 * n) * S, lane, S, SPIRITS[i][1], 1, ph + n)
     elif e < 4.0:
         u = (e - 3.4) / 0.6
         for a in range(5):
             ang = e * 2 + a * 2 * math.pi / 5
-            disc(cv, S + math.cos(ang) * S * 0.6 * u, lane + math.sin(ang) * S * 0.6 * u, S * 0.4 * u + 0.6, BLOSSOM[0])
-        disc(cv, S, lane, S * 0.3 * u + 0.6, (255, 250, 220))
+            disc(cv, S + math.cos(ang) * S * 0.6 * u, lane + math.sin(ang) * S * 0.6 * u, S * 0.4 * u + 0.6, BLOSSOM[0],
+                 edge=1.0 if fine else 0.0)
+        disc(cv, S, lane, S * 0.3 * u + 0.6, (255, 250, 220), edge=1.0 if fine else 0.0)
     else:
         u = (e - 4.0) / 3.0
         wx = -S + u * (W + 6 * S)
         draw_wisp(cv, wx, lane, S * (0.8 + 0.3 * u), e)
         for n in range(2):
             sx = wx + (2.6 + 1.6 * n) * S * (1 - 0.35 * u) + u * S
+            shadow(sx)
             draw_spirit(cv, sx, lane, S, SPIRITS[n][1], 3, ph + n, "pale2" if int(e * 5) % 2 else "pale")
     cv.center(max(0, (lane - S - band) // 2 - 2), "  ~ interlude ~  ", (230, 220, 255), HUD_BG)
     cv.center(min(rows - 1, (lane + S + band) // 2 + 2), "  maze %d cleared: the night grows deeper  " % g.level,
