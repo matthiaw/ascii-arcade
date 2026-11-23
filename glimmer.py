@@ -2061,6 +2061,26 @@ def selftest():
              auto_secs, run.rounds, auto_levels, auto_scores, auto_time, time.time() - t0))
 
 
+def screenshot(cols=100, rows=32, maze=0, seed=1, secs=26.0):
+    """README picture: real play (the auto-mode Pilot) with a fixed seed, at a good moment, HUD and all.
+    Moonlit Lawn, seed 1, 26 s in: all four spirits roaming in colour, a fresh +100, a third of the lawn eaten. The maze is
+    27x21 tiles, one pixel row short of 3-pixel tiles at 32 rows, so the frame is drawn one text row
+    taller and the empty last row (and the outer hedge's bottom pixel line) is cut off."""
+    g = Game(maze, auto=True, sound=False, seed=seed)
+    g.pilot = Pilot(seed)
+    for _ in range(int(secs * 60)):
+        g.step(1 / 60)
+    T = layout(cols, rows)[0]
+    extra = 1 if layout(cols, rows + 1)[0] > T else 0
+    cv = render(g, cols, rows + extra)
+    if extra:
+        out = Canvas(cols, rows)
+        out.px = cv.px[:rows * 2]
+        out.text = {k: v for k, v in cv.text.items() if k[1] < rows}
+        cv = out
+    return cv
+
+
 def dump(idx=0, cols=70, rows=22, secs=3.0):
     """--dump [maze] [cols] [rows] [seconds]: print one frame of the autopilot as plain text (for checking)."""
     g = Game(idx, auto=True, sound=False, seed=1)

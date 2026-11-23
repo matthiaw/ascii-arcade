@@ -1,6 +1,6 @@
 # ASCII ARCADE
 
-![The ASCII ARCADE start screen: all fifteen games playing at once](docs/screenshots/start.png)
+![The ASCII ARCADE start screen: all fifteen games playing at once](docs/screenshots/start.gif)
 
 A little collection of games for the terminal. Start the launcher: the start screen shows all games playing at once
 (Enter starts the highlighted one, any other key opens the menu). Pick a game with the arrow keys (or its number:

@@ -2628,7 +2628,9 @@ class Game:
                 self.pending.append(("message", e.T["name"], BESTIARY[e.tmpl], e.tmpl))
         surprise = self.flags.pop("surprise", False)
         order = []
-        for a in list(self.living()) + list(eng):
+        foes = [a for a in A.actors if a in eng]       # in map order, not set order: the same seed rolls the
+        foes += [a for a in eng if a not in foes]       # same initiative every time
+        for a in list(self.living()) + foes:
             a.engaged = True if a.faction == "hostile" else a.engaged
             ini = d20() + a.m("DEX") + (10 if surprise and a.is_pc else 0)
             order.append((ini, random.random(), a))
@@ -10185,6 +10187,164 @@ def selftest(verbose=True):
         for f in sorted(set(fails))[:30]:
             print("  FAIL:", f)
     return not fails
+
+
+# the README picture: day 2 in the Whisperwood, the party fighting Snagtooth's goblins, pixel tiles
+SHOT_SEED, SHOT_STEP, SHOT_HERO, SHOT_VIEW = 5, 908, ("human", "fighter"), "sprite"
+
+
+# =============================================================================
+# README screenshot: the real UI drawn into an arcadekit.Canvas instead of a terminal
+# =============================================================================
+class _ShotColors:
+    """Stands in for Colors: a colour pair number per (fg, bg), remembered so the cells can be turned into RGB."""
+    ok, c256, maxp = True, True, 254
+
+    def __init__(self):
+        self.ids, self.rev = {}, {}
+
+    def __call__(self, fg, bg=BLACK, bold=False):
+        p = self.ids.get((fg, bg))
+        if p is None:
+            p = self.ids[(fg, bg)] = min(len(self.ids) + 1, 255)
+            self.rev.setdefault(p, (fg, bg))
+        return (p << 8) | (curses.A_BOLD if bold else 0)
+
+
+class _ShotScreen:
+    """Stands in for the curses window: keeps what was drawn, cell by cell."""
+
+    def __init__(self, rows, cols):
+        self.size, self.cells = (rows, cols), {}
+
+    def getmaxyx(self):
+        return self.size
+
+    def erase(self):
+        self.cells = {}
+
+    def addstr(self, y, x, s, attr=0):
+        for i, ch in enumerate(s):
+            if x + i < self.size[1]:
+                self.cells[(y, x + i)] = (ch, attr)
+
+    def inch(self, y, x):
+        ch, a = self.cells.get((y, x), (" ", 0))
+        return (32 if ch == " " else 33) | a
+
+    def __getattr__(self, name):              # refresh, keypad, timeout, ...: nothing to do
+        return lambda *a, **k: None
+
+
+def _shot_cell(cv, x, y, ch, fg, bg):
+    if not (0 <= x < cv.W and 0 <= y < cv.rows):
+        return
+    top, bot = 2 * y, 2 * y + 1
+    if ch == " ":
+        cv.px[top][x] = cv.px[bot][x] = bg
+    elif ch == "\u2580":
+        cv.px[top][x], cv.px[bot][x] = fg, bg
+    elif ch == "\u2584":
+        cv.px[top][x], cv.px[bot][x] = bg, fg
+    elif ch == "\u2588":
+        cv.px[top][x] = cv.px[bot][x] = fg
+    else:
+        cv.px[top][x] = cv.px[bot][x] = bg
+        cv.text[(x, y)] = (ch, fg, bg)
+        return
+    cv.text.pop((x, y), None)
+
+
+def _shot_ansi(cv, s):
+    """Paint what the UI writes straight to the terminal (the lit map, the pictures) onto the canvas."""
+    fg = bg = (0, 0, 0)
+    x = y = 0
+    for m in re.finditer(r"\x1b\[([0-9;]*)([A-Za-z])|\x1b[78]|([^\x1b])", s):
+        if m.group(3) is not None:
+            _shot_cell(cv, x, y, m.group(3), fg, bg)
+            x += 1
+            continue
+        code = m.group(2)
+        p = [int(v) for v in (m.group(1) or "").split(";") if v.isdigit()]
+        if code == "H":
+            y, x = (p + [1, 1])[0] - 1, (p + [1, 1])[1] - 1
+        elif code == "C":
+            x += p[0] if p else 1
+        elif code == "m":
+            i = 0
+            while i < len(p):
+                if p[i] in (38, 48) and i + 4 < len(p) and p[i + 1] == 2:
+                    if p[i] == 38:
+                        fg = tuple(p[i + 2:i + 5])
+                    else:
+                        bg = tuple(p[i + 2:i + 5])
+                    i += 5
+                elif p[i] in (38, 48) and i + 2 < len(p) and p[i + 1] == 5:
+                    c = rgb_of((p[i + 2], 0))
+                    if p[i] == 38:
+                        fg = c
+                    else:
+                        bg = c
+                    i += 3
+                else:
+                    i += 1
+
+
+def screenshot(cols=100, rows=32, seed=SHOT_SEED, at=SHOT_STEP, race=SHOT_HERO[0], cls=SHOT_HERO[1], view=SHOT_VIEW):
+    """README picture: Auto mode's Autopilot plays a fixed-seed adventure; the main screen after `at` steps
+    (map, party panel, log), drawn by the real UI into an arcadekit.Canvas. No sound, no save file."""
+    global SFX_LIVE
+    saved = (random.getstate(), SFX_LIVE)
+    random.seed(seed)
+    SFX_LIVE = False
+    try:
+        g = Game(seed=seed)
+        g.new_game(make_pc(random.Random(seed).choice(NAMES), race, cls, assign_stats(roll_stats(), cls),
+                           portrait=race + "_" + cls))
+        pilot = Autopilot(seed)
+        pilot.setup(g)
+        for _ in range(at):
+            if g.over:
+                break
+            if g.pending:
+                pilot_pending(g, pilot)
+                pilot.setup(g)
+                continue
+            if g.combat:
+                g.step_ai()
+            else:
+                pilot.step(g)
+            if _ < at - 1:
+                g.events.clear()
+        return _shot_draw(g, cols, rows, view)
+    finally:
+        random.setstate(saved[0])
+        SFX_LIVE = saved[1]
+
+
+def _shot_draw(g, cols, rows, view):
+    """The main screen of game g as the UI draws it (curses cells, then the lit map and pictures painted over)."""
+    import arcadekit
+    global PIC_MODE, Colors
+    saved = (PIC_MODE, Colors)
+    try:
+        Colors = _ShotColors
+        scr = _ShotScreen(rows, cols)
+        ui = UI(scr, bot=1, save_path=os.devnull)
+        PIC_MODE = "true"
+        ui.view_pref = view
+        ui.animate(g)                         # the floating numbers of the last step
+        ui.draw_main(g, refresh=False)
+        cv = arcadekit.Canvas(cols, rows, rgb_of(BLACK))
+        rev = ui.C.rev
+        for (y, x), (ch, a) in scr.cells.items():
+            fg, bg = rev.get((a & curses.A_COLOR) >> 8, (LIGHT, BLACK))
+            _shot_cell(cv, x, y, ch, rgb_of(fg), rgb_of(bg))
+        pics = [p for p in ui.pics if ui.pic_clear(*p)]
+        _shot_ansi(cv, (ui.raw_map_escapes() if ui.rawmap else "") + "".join(pic_escapes(PICS[k], y, x) for y, x, k in pics))
+        return cv
+    finally:
+        PIC_MODE, Colors = saved
 
 
 def dump_art():

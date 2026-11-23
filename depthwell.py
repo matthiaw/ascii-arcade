@@ -961,6 +961,27 @@ def main():
 # =============================================================================================
 # Self-test:  python3 depthwell.py --selftest
 # =============================================================================================
+def screenshot(cols=100, rows=32, pit=2, si=2, level=1, seed=2, secs=186.26):
+    """README picture: real play (the auto-mode WellBot) with a fixed seed, at a good moment, HUD and all.
+    The 5x5x12 well with the Wild pieces, seed 2, 186 s in (level 5): five coloured layers deep, a piece
+    on its way down with its landing outlined."""
+    state, quiet = random.getstate(), SND.enabled
+    SND.enabled = False
+    try:
+        random.seed(seed)
+        g = Well(PITS[pit], SETS[si][2], level)
+        bot = WellBot(random.Random(seed))
+        for _ in range(int(secs / STEP)):
+            if g.over:
+                break
+            bot.update(g, STEP)
+            g.update(STEP)
+        return render(g, cols, rows)
+    finally:
+        random.setstate(state)
+        SND.enabled = quiet
+
+
 class FakeTerm:
     """Stands in for the terminal: scripted keys by time, a fixed size, output thrown away."""
 

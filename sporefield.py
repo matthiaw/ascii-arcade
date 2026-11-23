@@ -1869,6 +1869,20 @@ def selftest():
     print("selftest ok: %d steps in %.1f s" % (steps, time.time() - t0))
 
 
+def screenshot(cols=100, rows=32):
+    """README picture: real play on Normal (seed 23) by the auto-mode pilot, 230 s in, wave 7 (Tidepool): a worm
+    winding down through the caps, critters about, the beetle firing from the roots, HUD and footer. Silent (a demo
+    game never plays sound or touches the score file). The meadow is 32 cells tall, so it needs 34 rows to be
+    drawn at two pixels per cell; below that it shrinks to one, which is too small for a picture."""
+    rows = max(rows, 34)
+    g = Game(1, demo=True, seed=23)
+    pilot = Pilot()
+    for _ in range(int(round(230.0 / DT))):
+        g.inp = pilot(g, DT)
+        g.step(DT)
+    return render(g, cols, rows)
+
+
 if __name__ == "__main__":
     if "--selftest" in sys.argv:
         selftest()

@@ -1306,6 +1306,17 @@ def auto_step(m, auto, dt, budget=0.012):
     return n
 
 
+def screenshot(cols=100, rows=32):
+    """README picture: real play (computer vs computer, normal) with a fixed seed, at a good moment, HUD and all.
+    Seed 4, round 3 on cratered hills: RED's splitter lands on BLUE (direct hit, 2 hp left) with two more
+    bomblets still falling."""
+    m = Match(*world_size(cols, rows - 1), mode="auto", diff=1, seed=4)
+    m.quiet = True
+    for _ in range(4286):                     # physics steps (71 s of play)
+        m.update(PH)
+    return render(m, cols, rows)
+
+
 def run_auto(term, diff, seconds=None, headless=None):
     """Auto mode: computer vs computer at the chosen difficulty, one match after the other, until Esc.
     headless=(cols, rows) runs without a terminal at x8 for `seconds` (the self-test); never records scores."""

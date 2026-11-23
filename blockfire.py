@@ -2370,6 +2370,68 @@ def selftest_auto(seconds=100, frame_dt=1 / 30):
           % (seconds, game_t, time.time() - t0, rounds, waves))
 
 
+SHOT_SEED, SHOT_T = 5, 140.3   # the README picture: wave 6, three bots close up, the gun firing
+
+
+def ansi_canvas(s, cols, rows):
+    """The terminal frame render() writes, read back into an arcadekit.Canvas (for the README screenshot)."""
+    import arcadekit
+    cv = arcadekit.Canvas(cols, rows)
+    fg = bg = (0, 0, 0)
+    x = y = 0
+    for m in re.finditer(r"\x1b\[([0-9;?]*)([A-Za-z])|\r\n|([^\x1b])", s):
+        if m.group(2):
+            if m.group(2) != "m":
+                continue
+            p = [int(v) for v in m.group(1).split(";") if v.isdigit()]
+            i = 0
+            while i < len(p):
+                if p[i] in (38, 48) and i + 4 < len(p) and p[i + 1] == 2:
+                    if p[i] == 38:
+                        fg = tuple(p[i + 2:i + 5])
+                    else:
+                        bg = tuple(p[i + 2:i + 5])
+                    i += 5
+                else:
+                    i += 1
+        elif m.group(3) is None:
+            x, y = 0, y + 1
+        elif x < cols and y < rows:
+            ch = m.group(3)
+            if ch == "\u2580":
+                cv.px[2 * y][x], cv.px[2 * y + 1][x] = fg, bg
+            elif ch == " ":
+                cv.px[2 * y][x] = cv.px[2 * y + 1][x] = bg
+            else:
+                cv.px[2 * y][x] = cv.px[2 * y + 1][x] = bg
+                cv.text[(x, y)] = (ch, fg, bg)
+            x += 1
+    return cv
+
+
+def screenshot(cols=100, rows=32, seed=SHOT_SEED, at=SHOT_T):
+    """README picture: the auto-mode AutoPilot plays a round with a fixed seed; the frame at `at` seconds of
+    game time, HUD and all (no AUTO bar, no best score read or written)."""
+    global BEST_FILE, SOLID_PIXELS
+    saved = (random.getstate(), SND.enabled, BEST_FILE, SOLID_PIXELS)
+    random.seed(seed)
+    SND.enabled, BEST_FILE, SOLID_PIXELS = False, os.devnull, False
+    try:
+        g = Game(seed=seed)
+        g.auto = True                             # never saves a best score
+        bot = AutoPilot(g, seed=seed)
+        r = Renderer(g)
+        r.true = True
+        while g.t < at and not g.over:
+            bot.step(STEP)
+            g.update(STEP)
+            r.events(STEP)
+        return ansi_canvas(r.frame(cols, rows), cols, rows)
+    finally:
+        random.setstate(saved[0])
+        SND.enabled, BEST_FILE, SOLID_PIXELS = saved[1:]
+
+
 def bench(cols=160, rows=45, frames=40):
     """Play a few seconds with an aim-bot and time the full frame (render + escape codes)."""
     global BEST_FILE

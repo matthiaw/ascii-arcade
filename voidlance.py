@@ -39,26 +39,33 @@ CHARGE_LV = (0.35, 0.85, 1.4, 2.3)       # seconds of charge for lance level 1, 
 SPEEDS = (34.0, 44.0, 54.0, 64.0)
 
 # =============================================================================================
-# Pixel art: one palette for every sprite, '.' is transparent; enemies face left
+# Pixel art. Lower-case letters are materials, shaded automatically with the light from the top left (lit
+# upper/left edges, a mid body, shadowed lower/right edges, plus a soft gradient across round sprites);
+# upper case is the same material forced into shadow; the rest are fixed colours for details (eyes, glass
+# glints, lights, engine glow, panel seams). '.' is transparent; enemies face left. Every sprite gets a
+# one-pixel dark outline at drawing size so it reads against the terrain and the beams.
 # =============================================================================================
-PAL = {"k": (18, 18, 28), "w": (244, 244, 252), "g": (176, 182, 198), "G": (96, 102, 120), "d": (52, 56, 72),
-       "r": (236, 64, 60), "R": (140, 30, 40), "o": (252, 150, 48), "O": (176, 84, 30), "y": (252, 222, 80),
-       "Y": (184, 142, 40), "l": (150, 232, 84), "L": (58, 142, 62), "c": (96, 224, 244), "C": (30, 120, 164),
-       "b": (84, 124, 250), "B": (40, 52, 142), "v": (184, 104, 252), "V": (98, 50, 160), "p": (250, 126, 192),
-       "P": (168, 58, 100), "n": (156, 106, 62), "N": (92, 62, 40), "t": (64, 204, 164), "T": (28, 112, 100),
-       "m": (240, 84, 236), "e": (255, 250, 176), "h": (255, 196, 196), "s": (200, 236, 255)}
+MAT = {"g": (146, 152, 174), "d": (86, 92, 116), "r": (222, 60, 58), "o": (240, 134, 44), "y": (238, 198, 60),
+       "l": (106, 198, 72), "c": (64, 182, 224), "b": (66, 108, 230), "v": (158, 90, 232), "p": (228, 104, 166),
+       "n": (150, 100, 62), "t": (44, 168, 146), "m": (214, 66, 214), "i": (96, 206, 255), "a": (200, 166, 112)}
+FIX = {"k": (14, 10, 24), "x": (34, 32, 50), "w": (250, 250, 255), "e": (255, 246, 176), "f": (255, 158, 48),
+       "q": (255, 66, 58), "h": (255, 196, 210), "s": (206, 240, 255), "z": (150, 255, 150)}
+OUTLINE = (9, 7, 16)
 WHITE = (255, 255, 255)
+TONES = {k: (mix(c, (255, 252, 230), 0.42), c, mix(c, (24, 14, 46), 0.5)) for k, c in MAT.items()}
+FIX.update(j=TONES["b"][0], u=TONES["g"][0])       # forced light: the ship's lit hull and steel
 
 
 class Spr:
-    """A pixel-art sprite; scaled copies are cached as horizontal runs for fast slice drawing."""
-    __slots__ = ("rows", "w", "h", "cache")
+    """A pixel-art sprite; shaded, scaled and outlined copies are cached as horizontal runs for fast drawing."""
+    __slots__ = ("rows", "w", "h", "cache", "rnd")
 
-    def __init__(self, rows):
-        self.rows = rows
+    def __init__(self, rows, rnd=0.5):
         self.w = max(len(r) for r in rows)
+        self.rows = [r.ljust(self.w, ".") for r in rows]
         self.h = len(rows)
         self.cache = {}
+        self.rnd = rnd                  # how strongly the body darkens from the top left to the bottom right
 
     def runs(self, s, flash=False, fh=False, fv=False):
         key = (int(s * 16 + 0.5), flash, fh, fv)
@@ -67,125 +74,174 @@ class Spr:
             r = self.cache[key] = self.build(key[0] / 16, flash, fh, fv)
         return r
 
+    def colours(self, fh, fv):
+        """Colour per source pixel after flipping, so the light always comes from the top left."""
+        grid = self.rows[::-1] if fv else self.rows
+        if fh:
+            grid = [r[::-1] for r in grid]
+        w, h = self.w, self.h
+
+        def op(x, y):
+            return 1 if x < 0 or y < 0 or x >= w or y >= h or grid[y][x] in ".kx" else 0
+        pts = [(x, y) for y in range(h) for x in range(w) if grid[y][x] != "."]
+        cx = sum(p[0] for p in pts) / len(pts)
+        cy = sum(p[1] for p in pts) / len(pts)
+        rx = max(1.0, max(abs(p[0] - cx) for p in pts))
+        ry = max(1.0, max(abs(p[1] - cy) for p in pts))
+        out = []
+        for y in range(h):
+            row = []
+            for x in range(w):
+                ch = grid[y][x]
+                if ch == ".":
+                    row.append(None)
+                elif ch in FIX:
+                    row.append(FIX[ch])
+                elif ch.isupper():
+                    row.append(TONES[ch.lower()][2])
+                else:
+                    k = op(x, y - 1) + op(x - 1, y) - op(x, y + 1) - op(x + 1, y) + 0.5 * (
+                        op(x - 1, y - 1) - op(x + 1, y + 1))
+                    k -= self.rnd * ((x - cx) / rx + (y - cy) / ry)
+                    t = TONES[ch]
+                    row.append(t[0] if k >= 1 else t[2] if k <= -1 else t[1])
+            out.append(row)
+        return out
+
     def build(self, s, flash, fh, fv):
         w, h = self.w, self.h
+        src = self.colours(fh, fv)
         ow, oh = max(1, int(w * s + 0.5)), max(1, int(h * s + 0.5))
-        out = []
+        img = [[None] * (ow + 2) for _ in range(oh + 2)]
         for oy in range(oh):
-            sy = min(h - 1, int((oy + 0.5) * h / oh))
-            src = self.rows[h - 1 - sy if fv else sy]
+            row = src[min(h - 1, int((oy + 0.5) * h / oh))]
+            dst = img[oy + 1]
+            for ox in range(ow):
+                c = row[min(w - 1, int((ox + 0.5) * w / ow))]
+                if c is not None:
+                    dst[ox + 1] = mix(c, WHITE, 0.55) if flash else c
+        W, H = ow + 2, oh + 2
+        for y in range(H):        # the outline: transparent pixels next to the body
+            for x in range(W):
+                if img[y][x] is None and (
+                        (x > 0 and img[y][x - 1] not in (None, OUTLINE)) or
+                        (x < W - 1 and img[y][x + 1] not in (None, OUTLINE)) or
+                        (y > 0 and img[y - 1][x] not in (None, OUTLINE)) or
+                        (y < H - 1 and img[y + 1][x] not in (None, OUTLINE))):
+                    img[y][x] = OUTLINE
+        out = []
+        for oy in range(H):
             run_c, run_x = None, 0
-            for ox in range(ow + 1):
-                c = None
-                if ox < ow:
-                    sx = min(w - 1, int((ox + 0.5) * w / ow))
-                    if fh:
-                        sx = w - 1 - sx
-                    ch = src[sx] if sx < len(src) else "."
-                    if ch != ".":
-                        c = mix(PAL[ch], WHITE, 0.55) if flash else PAL[ch]
+            src = img[oy]
+            for ox in range(W + 1):
+                c = src[ox] if ox < W else None
                 if c != run_c:
                     if run_c is not None:
                         n = ox - run_x
                         out.append((oy, run_x, n, run_c, [run_c] * n))
                     run_c, run_x = c, ox
-        return ow, oh, out
+        return W, H, out
 
 
-def S(*rows):
-    return Spr(list(rows))
+def S(*rows, rnd=0.5):
+    return Spr(list(rows), rnd)
 
 
-SHIP = S("...dG..........", "..dGgg.........", ".dBbbbgwg.......", "dBbbbbbbbccwgk..", "BbbbbbbbbbbbccwG",
-         "dBBBBbbbgggGG...", ".dBBBgg.........", "..dGG...........")
+SHIP = S("..ud............",
+         ".ujbd...........",
+         "ejjjjjjud.......",
+         "ebbbbbbbbjiiwd..",
+         "ebbbbbbbbbbbbbuw",
+         "eBbbxbbbbbbbBBd.",
+         ".dBBBrrBd.......",
+         "..dBBd..........", rnd=0.4)
 SPR = {
-    "darter": [S("...rr...", ".rrRRr..", "wcRRRRrr", ".rrRRr..", "...rr..."),
-               S("..rr....", ".rRRrr..", "wcRRRRrr", ".rRRrr..", "..rr....")],
-    "scrapper": [S("..GgG....", ".GgnNGd..", "GgnNNnGG.", "dGNnNNgGd", ".dGNnGGd.", "..dGGd...", "....d...."),
-                 S("....dG...", "..GgnGG..", ".GgNNnGd.", "GgNnNNgGd", "dGNnNGGd.", ".dGGd....", "..d......")],
-    "turret": [S("..gGGg..", ".gGrrGg.", "gGGRRGGg", "GddddddG", "dGdGdGdG")],
-    "strider": [S("..GgggG..", ".GgyyggG.", "rGGGGGGGG", ".dGddGd..", "..G..G...", ".G...G...", "GG....GG."),
-                S("..GgggG..", ".GgyyggG.", "rGGGGGGGG", ".dGddGd..", "...GG....", "...GG....", "..GGGG...")],
-    "spinner": [S("....v....", "...vVv...", "..vVwVv..", "vvVVwVVvv", "..vVwVv..", "...vVv...", "....v...."),
-                S("v.......v", ".vV...Vv.", "..vVwVv..", "...VwV...", "..vVwVv..", ".vV...Vv.", "v.......v")],
-    "polyp": [S("...pPp...", "..pPePp..", ".pPPPPPp.", "pPPpPpPPp", "PPPPPPPPP", "NPNPNPNPN"),
-              S("...pwp...", "..pPePp..", ".pPPpPPp.", "pPpPpPpPp", "PPPPPPPPP", "NPNPNPNPN")],
-    "spore": [S(".lL.", "lLlL", "LlLl", ".Ll.")],
-    "tendril": [S("..PPp..", ".PpppP.", "PpeePPp", "PpeePPp", ".PpppP.", "..PPp..")],
-    "tseg": [S(".PpP.", "PpPpP", "pPpPp", "PpPpP", ".PpP.")],
-    "blister": [S("..pppp..", ".pwphpp.", "pphppppp", "PpppppPP", "PPPPPPPP"),
-                S("..phpp..", ".pphwpp.", "pppppphp", "PpppppPP", "PPPPPPPP")],
-    "leech": [S("...LLll.", "wLLLlllL", "wLLLLllL", "...LLLL."), S("..LLll..", "wLLlllLL", "wLLLllLL", "..LLLL..")],
-    "vent": [S("GdGdGdGd", "dOdOdOdO", "GGGGGGGG", "dddddddd")],
-    "hook": [S("..gGGg...", ".gG..Gg..", "gG....Gg.", "gG....Gg.", ".gG......", "..gGG....", "...gGGG..")],
-    "rivet": [S("...oO.", ".oOyOO", "wOOOOO", "..oO..")],
-    "cannon": [S("....gGGg....", "...gGrrGg...", "rrrGGRRGGg..", "..gGGGGGGGg.", ".gGGddddGGGg", "GGdGdGdGdGdG",
+    "darter": [S("....rrd.", "..rrrrrd", "wirrrrxf", "..rrrrrd", "....rrd."),
+               S("...rrd..", ".rrrrrrd", "wirrrrxe", ".rrrrrrd", "...rrd..")],
+    "scrapper": [S("..dgggd..", ".gnnnnnd.", "gnnxnnnnd", "gnqennxnd", "gnnnxnnnd", ".dnnnnnd.", "..ddddd.."),
+                 S("..dgggd..", ".gnnnnnd.", "gnnnnxnnd", "gnqennnnd", "gnxnnnnnd", ".dnnnnnd.", "..ddddd..")],
+    "turret": [S("..gggd..", ".ggqegd.", "gggggggd", "dxdxdxdd", "dddddddd")],
+    "strider": [S("..ggggd..", ".gyeggggd", "qgggxgggd", ".dgggggd.", "..g...g..", ".g.....g.", "gd.....gd"),
+                S("..ggggd..", ".gyeggggd", "qgggxgggd", ".dgggggd.", "...g.g...", "...g.g...", "..gd.gd..")],
+    "spinner": [S("....v....", "...vvV...", "..vvwvV..", "vvvwewvVV", "..vvwvV..", "...vVV...", "....V...."),
+                S("v.......V", ".vv...vV.", "..vvwvV..", "...wew...", "..vvwvV..", ".vV...VV.", "V.......V")],
+    "polyp": [S("..p.p.p..", "..ppppp..", ".pphppppd", "ppppepppP", "pppppppPP", "nxnxnxnxn"),
+              S(".p..p..p.", "..ppppp..", ".ppphpppd", "pppepppPP", "pppppppPP", "nxnxnxnxn")],
+    "spore": [S(".ll.", "lzll", "llll", ".ll.", rnd=1.0)],
+    "tendril": [S("..ppp..", ".ppppp.", "pwkpppp", "ppppppP", ".ppppP.", "..PPP..")],
+    "tseg": [S(".ppp.", "ppppp", "ppppp", "ppppp", ".ppp.", rnd=1.0)],
+    "blister": [S("..pppp..", ".pwhppp.", "pphppppp", "pppppppp", "PPPPPPPP", rnd=0.8),
+                S("..pppp..", ".pphwpp.", "ppppphpp", "pppppppp", "PPPPPPPP", rnd=0.8)],
+    "leech": [S("...llll.", "wllllxll", "wlllllll", "..LLLLL."), S("..llll..", "wlllxlll", "wlllllll", "..LLLL..")],
+    "vent": [S("gggggggg", "xfxfxfxf", "gggggggg", "dddddddd")],
+    "hook": [S("..gggd...", ".gd..gd..", "gd....gd.", "gd....qd.", ".gd......", "..ggd....", "...gggd..")],
+    "rivet": [S("...od.", ".oooeo", "wooooo", "..od..")],
+    "cannon": [S("....gggd....", "...gqeqgd...", "..ggggggggd.", ".gggxggggxgd", "gggggggggggd", "dxdxdxdxdxdd",
                  "dddddddddddd")],
-    "eel": [S("..tTTT..", "tTtttTT.", "wetTttTT", "tTtttTT.", "..tTTT..")],
-    "eseg": [S(".tTt.", "TtTtT", "tTtTt", ".TtT.")],
-    "jelly": [S("..cCCCc..", ".cCwCCCc.", "cCCCCCCCc", "CCcCcCcCC", ".c.c.c.c.", ".c..c..c.", "c..c..c.."),
-              S("..cCCCc..", ".cCwCCCc.", "cCCCCCCCc", "CCcCcCcCC", ".c.c.c.c.", "..c..c..c", ".c..c..c.")],
-    "mine": [S("...G...", ".G.r.G.", "..GRG..", "GrRwRrG", "..GRG..", ".G.r.G.", "...G..."),
-             S("...G...", ".G.R.G.", "..GrG..", "GRrwrRG", "..GrG..", ".G.R.G.", "...G...")],
-    "angler": [S("..y.TTT.....", "..cTtttTT...", ".cCttettTT.T", "cCCtttttTTTT", "cCCtttttTTTT", ".cCttttTT..T",
-                 "..cTtttT....", "....TTT.....")],
-    "rockL": [S(".....NNNn.....", "...NNnnnnNN...", "..NnnNnnnnnN..", ".NnnnnnnNnnnN.", "NnnNnnnnnnnnnN",
-                "NnnnnnnNNnnnnN", "NnnnnnnnnnnNnN", "NNnnnNnnnnnnnN", ".NnnnnnnnnnNN.", "..NNnnnNnnnN..",
-                "...NNnnnnNN...", ".....NNNN.....")],
-    "rockM": [S("..NNnN..", ".NnnnnN.", "NnnNnnnN", "NnnnnnnN", "NnnnnNnN", ".NnnnnN.", "..NNNN..")],
-    "rockS": [S(".NnN.", "NnnnN", "NnNnN", ".NNN.")],
-    "comet": [S("..cww...", ".cwwwwc.", "cwwewwcC", ".cwwwwc.", "..cww...")],
-    "miner": [S("..YyyY...", ".YyyyyY..", "rYGGGGYy.", "rrGeeGYyy", "rYGGGGYy.", ".YyyyyY..", "..YyyY...")],
-    "crawler": [S("..lLLl..", ".lLeeLl.", "LLLLLLLL", "L.L..L.L"), S("..lLLl..", ".lLeeLl.", "LLLLLLLL", ".L.LL.L.")],
-    "drone": [S("y.Y.y", ".YoY.", "YoooY", ".Y.Y."), S(".yYy.", "yYoYy", "YoooY", ".Y.Y.")],
-    "lancer": [S("...yY......", "..YyyYk..y.", "wkYkYkYkYYy", "..YyyYk..y.", "...yY......"),
-               S("...yY...y..", "..YyyYk.y..", "wkYkYkYkYYy", "..YyyYk.y..", "...yY...y..")],
-    "larva": [S("...yYYy...", "..yYoeYy..", ".yYYooYYy.", "yYyYyYyYyY", "YNYNYNYNYN", "NNNNNNNNNN")],
-    "comb": [S(".YyyY.", "YyOOyY", "yOooOy", "yOooOy", "YyOOyY", ".YyyY.")],
-    "shard": [S("...w...", "..wcc..", ".wcCcc.", "wcCwCcc", ".cCcCc.", "..cCc..", "...c..."),
-              S("...c...", "..ccw..", ".ccCcw.", "ccCwCcw", ".cCcCc.", "..cCc..", "...c...")],
-    "phantom": [S("..vVVVv..", ".vVwVwVv.", "vVVeVeVVv", "vVVVVVVVv", "vVVVVVVVv", "vVvVvVvVv", "v.v.v.v.v"),
-                S("..vVVVv..", ".vVwVwVv.", "vVVeVeVVv", "vVVVVVVVv", "vVVVVVVVv", "vVvVvVvVv", ".v.v.v.v.")],
-    "clock": [S("..gGGGg..", ".gYyyyYg.", "gYyywyyYg", "GyyywyyyG", "GyyykyyyG", "GyyyyyyyG", "gYyyyyyYg",
-                ".gYyyyYg.", "..gGGGg.."),
-              S("..gGGGg..", ".gYyyyYg.", "gYyyyyyYg", "GyyyyyyyG", "GyyykwwwG", "GyyyyyyyG", "gYyyyyyYg",
-                ".gYyyyYg.", "..gGGGg..")],
-    "node": [S("..mVm..", ".mVwVm.", "GmVVVmG", "GGGGGGG", "ddddddd")],
-    "sentinel": [S("......RRr.....", "....RRrrrRR...", "rr.RrrgggrrRR.", "rrRrrgeegrrrRR", "..RRrrgggrrrRR",
-                   "rrRrrrrrrrRRR.", "rr.RRrrrrRR...", "....RRRRR.....")],
-    "ferry": [S("...lLLLl....", "..lLwwwLl...", "llLLLLLLLLl.", "LyLLLLLLLLLL", "..GgGgGgG...", "..GoooooG...",
-                "...GGGGG....")],
-    "seeker": [S(".vvv.", "vVwVv", "vwewv", "vVwVv", ".vvv.")],
+    "eel": [S("..tttt..", ".tkttttt", "wttttxtt", ".ttttttt", "..TTTT..")],
+    "eseg": [S(".ttt.", "ttttt", "ttttt", ".TTT.", rnd=1.0)],
+    "jelly": [S("..cccc...", ".cwcccccc", "ccccccccc", "cxcxcxcxc", ".c.c.c.c.", ".c..c..c.", "c..c..c..", rnd=0.7),
+              S("..cccc...", ".cwcccccc", "ccccccccc", "cxcxcxcxc", ".c.c.c.c.", "..c..c..c", ".c..c..c.", rnd=0.7)],
+    "mine": [S("...g...", ".gdddg.", ".ddqdd.", "gdqeqdg", ".ddqdd.", ".gdddg.", "...g...", rnd=0.8),
+             S("...g...", ".gdddg.", ".ddrdd.", "gdrqrdg", ".ddrdd.", ".gdddg.", "...g...", rnd=0.8)],
+    "angler": [S("e...tttt....", ".x.tttttt..t", "..tttkwttt.t", "wwtttttttttt", "kktttttttttt", "wwttttttt..t",
+                 "..ttttttt...", "....TTTT....")],
+    "rockL": [S(".....nnnn.....", "...nnnnnnnn...", "..nnnNNnnnnn..", ".nnnNNnnnnnnn.", "nnnnnnnnnNnnnn",
+                "nnnnnnnnNNnnnn", "nnNnnnnnnnnnnn", "nnNNnnnnnnnnnn", ".nnnnnnnNNnnn.", "..nnnnnnNnnn..",
+                "...nnnnnnnn...", ".....nnnn.....", rnd=1.1)],
+    "rockM": [S("..nnnn..", ".nnNnnn.", "nnNNnnnn", "nnnnnnnn", "nnnnnNnn", ".nnnnnn.", "..nnnn..", rnd=1.1)],
+    "rockS": [S(".nnn.", "nnNnn", "nnnnn", ".nnn.", rnd=1.1)],
+    "comet": [S("..sw.c..", ".swwscc.", "swewwscc", ".swwscc.", "..sw.c..")],
+    "miner": [S("...yyyd..", "..yyyyyd.", "g.yiiwyyd", "gdyiiiyyf", "g.yiiiyyd", "..yyyyyd.", "...YYYd..")],
+    "crawler": [S("..llll..", ".lwklll.", "llllllll", "d.d..d.d"), S("..llll..", ".lwklll.", "llllllll", ".d.dd.d.")],
+    "drone": [S("s.s..", ".ss..", "qykyk", ".yky."), S("..s..", "sss..", "qykyk", ".yky.")],
+    "lancer": [S("...ss......", "..yyyy..s..", "wgyxyxyyyyo", "..yyyy..s..", "...ss......"),
+               S("....ss.....", "..yyyy.s...", "wgyxyxyyyyo", "..yyyy.s...", "....ss.....")],
+    "larva": [S("..yyyyyyy.", ".yyyyYyyYy", "ywkyyYyyYy", "yyyyyYyyYy", ".ynynynyn.", "NNNNNNNNNN")],
+    "comb": [S(".yyyy.", "yyooyy", "yoeooy", "yooooy", "yyooyy", ".yyyy.")],
+    "shard": [S("...w...", "..sic..", ".siicC.", "sicwcCC", ".icCCC.", "..cCC..", "...C..."),
+              S("...c...", "..cis..", ".ccisw.", "cCicsiw", ".cCCic.", "..CCc..", "...C...")],
+    "phantom": [S("..vvvv...", ".vvvvvvv.", "vvkwvkwvv", "vvvvvvvvv", "vvvvvvvvv", "vvvvvvvvv", "v.v.v.v.v"),
+                S("..vvvv...", ".vvvvvvv.", "vvkwvkwvv", "vvvvvvvvv", "vvvvvvvvv", "vvvvvvvvv", ".v.v.v.v.")],
+    "clock": [S("..ggggd..", ".gyyyyyd.", "gyyywyyyd", "gyyywyyyd", "gyyykyyyd", "gyyyyyyyd", "gyyyyyyyd",
+                ".gyyyyyd.", "..ddddd..", rnd=0.8),
+              S("..ggggd..", ".gyyyyyd.", "gyyyyyyyd", "gyyyyyyyd", "gyyykwwyd", "gyyyyyyyd", "gyyyyyyyd",
+                ".gyyyyyd.", "..ddddd..", rnd=0.8)],
+    "node": [S("..mmm..", ".mmwmm.", "gmmmmmd", "ggggggd", "xdxdxdx")],
+    "sentinel": [S("......rrrd....", "....rrrrrrrd..", "gg.rrriiwgrrd.", "xxrrrriiiigrrf", "..rrrrggggrrrf",
+                   "xxrrrrrrrrrrd.", "gg.rrrrrrrd...", "....RRRRR.....")],
+    "ferry": [S("...llll.....", "..lliiwll...", "lllllllllld.", "elllxllllllf", "..gdgdgdg...", "..gooooog...",
+                "...ddddd....")],
+    "seeker": [S(".vvv.", "vswvv", "vwkwv", "vvwvv", ".vvv.", rnd=1.0)],
     # midbosses
-    "scrapclaw": [S("...gG............Gg...", "..gGG............GGg..", ".gG.G............G.Gg.",
-                    ".gG..gG........Gg..Gg.",
-                    "..gGGGgGGGGGGGGgGGGg..", "....GGgggggggggggGG...", "..GGgggGrrGGGrrGggGG..",
-                    ".GgggggGRRGGGRRGgggggG", "GgnnnggggggggggggnnngG", "GgnNnggGGGGGGGGggnNngG",
-                    ".GgnggGdddddddddGggngG", "..GGGGd.d.d.d.d.dGGGG.", "...G.G...........G.G..",
-                    "..G...G.........G...G.")],
-    "mawbloom": [S("......pPPPPPPp......", "....pPPpppppPPPp....", "..pPPppPPPPPPppPPp..", ".pPpPPP..rr..PPPpPp.",
-                   "pPpPP..rRRRRr..PPpPp", "pPpP..rRkkkkRr..PpPp", "PpPP.rRkkwwkkRr.PPpP", "PpPP.rRkkwwkkRr.PPpP",
-                   "pPpP..rRkkkkRr..PpPp", "pPpPP..rRRRRr..PPpPp", ".pPpPPP..rr..PPPpPp.", "..pPPppPPPPPPppPPp..",
-                   "....pPPpppppPPPp....", "......LLlLLlLL......", ".....LL..LL..LL.....")],
-    "smelter": [S("......GGGGGGGG......", "....GGggggggggGG....", "..GGggOOOOOOOOggGG..", ".GggOOooooooooOOggG.",
-                  "rrrgOoyyyeeyyyoOggGG", "rrrgOoyyyeeyyyoOggGG", ".GggOOooooooooOOggG.", "..GGggOOOOOOOOggGG..",
-                  "....GGggggggggGG....", "...dG.dG.dG.dG.dG...", "...O..O..O..O..O....", "...o..o..o..o..o....")],
-    "siltback": [S(".......TTTTTTT........", "....TTTtTtTtTtTTT.....", "..TTtTtTtTtTtTtTtTT...",
-                   ".TtTtTtTtTtTtTtTtTtT..", "cTTTTTTTTTTTTTTTTTTTTT", "ceccCCCCCCCCCCCCCCCCCT",
-                   "cCCccccccccccccccccCTT", ".cCC.CC.......CC.CCT..", "..cc..cc.......cc.cc..")],
-    "hauler": [S("..........GGGGGGG.....", "....YYYYYYgggggggG....", "..YYyyyyyyGGGGGGGGG...",
-                 "rrYyGGGGGGGGgggggggGG.", "rrYyGeeGGGGGgNNNNNgGGG", "rrYyGGGGGGGGgnnnnngGGG", "..YYyyyyyyGGGNNNNNGGG.",
-                 "....YYYYYYgggggggggG..", "......dd.dd.dd.dd.dd..", ".....d..d..d..d..d....")],
-    "broodwarden": [S("........yYYYYy........", "......yYoooooYy.......", "..y..yYoeoooeoYy..y...",
-                      ".yYy.YYoooooooYY.yYy..", "yYkYyYkYkYkYkYkYyYkYy.", "YkYkYkYkYkYkYkYkYkYkY.",
-                      ".YyY.YkYkYkYkYkY.YyY..", "..y...YkYkYkYkY...y...", "........YkYkY.........",
-                      ".........YkY..........", "..........Y...........")],
-    "facet": [S("..........c..........", "........ccwcc........", "......ccCCwCCcc......", "....ccCCCcwcCCCcc....",
-                "..ccCCcccCwCcccCCcc..", "ccCCccwwwmmmwwwccCCcc", "..ccCCcccCwCcccCCcc..", "....ccCCCcwcCCCcc....",
-                "......ccCCwCCcc......", "........ccwcc........", "..........c..........")],
-    "gatekeeper": [S("GGGGGGGGGGGGGGGGGG", "GrrrrGGGGGGGGrrrrG", "GrRRrGddddddGrRRrG", "GrRRrGdmmmmdGrRRrG",
-                     "GrrrrGdmwwmdGrrrrG", "GGGGGGdmwwmdGGGGGG", "GrrrrGdmmmmdGrrrrG", "GrRRrGddddddGrRRrG",
-                     "GrRRrGGGGGGGGrRRrG", "GrrrrGGGGGGGGrrrrG", "GGGGGGGGGGGGGGGGGG")],
+    "scrapclaw": [S("...gg............gg...", "..ggd............dgg..", ".gd.g............g.dg.",
+                    ".gd..gg........gg..dg.", "..gggggggggggggggggg..", "....gggggggggggggg....",
+                    "..gggggxqexxqexggggg..", ".ggggggxqqxxqqxgggggg.", "gnnnggggggggggggggnnng",
+                    "gnNnggxdxdxdxdxdggnNng", ".gnggdddddddddddddggng", "..gggd.d.d.d.d.d.dggg.",
+                    "...g.d...........d.g..", "..g...d.........d...g.")],
+    "mawbloom": [S("......pppppppp......", "....pppPppppPppp....", "..ppPppppppppppPpp..", ".pppppp..rr..pppppp.",
+                   "ppPpp..rrrrrr..ppPpp", "pppp..rrkkkkrr..pppp", "pPpp.rrkkwekkrr.ppPp", "pPpp.rrkkeekkrr.ppPp",
+                   "pppp..rrkkkkrr..pppp", "ppPpp..rrrrrr..ppPpp", ".pppppp..rr..pppppp.", "..ppPppppppppppPpp..",
+                   "....pppPppppPppp....", "......llllllll......", ".....ll..ll..ll.....", rnd=0.7)],
+    "smelter": [S("......gggggggg......", "....gggggggggggg....", "..gggOOOOOOOOOOggg..", ".gggOooooooooooOggg.",
+                  "rrrgOoyyyeeyyyoOgggg", "qqqgOoyyyeeyyyoOgggg", ".gggOooooooooooOggg.", "..gggOOOOOOOOOOggg..",
+                  "....gggggggggggg....", "...dg.dg.dg.dg.dg...", "...f..f..f..f..f....", "...e..e..e..e..e....")],
+    "siltback": [S(".......ttttttt........", "....tttttxttttxtt.....", "..ttttxtttttxttttxtt..",
+                   ".tttxttttxttttttxtttt.", "cTTTTTTTTTTTTTTTTTTTTT", "cekccccccccccccccccccT",
+                   "ccccccccccccccccccccTT", ".ccc.cc.......cc.ccT..", "..cc..cc.......cc.cc..")],
+    "hauler": [S("..........gnnnnng.....", "....yyyyyynnnnnnnn....", "..yyyyyyyygggggggggg..",
+                 "qqyyiiwyyggxggggxgggg.", "qqyyiiiyyggxnnnnxggggg", "qqyyyyyyyggxnnnnxggggg", "..yyyyyyyygggggggggg..",
+                 "....yyyyyygggggggggg..", "......dd.dd.dd.dd.dd..", ".....d..d..d..d..d....")],
+    "broodwarden": [S("........yyyyyy........", "......yyoooooyy.......", "..y..yyoeoooeoyy..y...",
+                      ".yyy.yyoooooooyy.yyy..", "yykyyykykykykykyyykyy.", "ykykykykykykykykykyky.",
+                      ".yyy.ykykykykyky.yyy..", "..y...ykykykyky...y...", "........ykyky.........",
+                      ".........yky..........", "..........y...........")],
+    "facet": [S("..........s..........", "........sswcc........", "......ssiiwccCC......", "....ssiiiiwcccCCC....",
+                "..ssiiiiiiwccccCCCC..", "ssiiiiiwwmmmwwccccCCC", "..ccccccccwCCCCCCCC..", "....ccccccwCCCCCC....",
+                "......ccccwCCCC......", "........ccwCC........", "..........C..........", rnd=0.3)],
+    "gatekeeper": [S("gggggggggggggggggg", "grrrrgxxxxxxgrrrrg", "grqrrgxkkkkxgrqrrg", "grrrrgxkmmkxgrrrrg",
+                     "gRRRRgxmwemxgRRRRg", "ggggggxmeemxgggggg", "grrrrgxkmmkxgrrrrg", "grqrrgxkkkkxgrqrrg",
+                     "grrrrgxxxxxxgrrrrg", "gRRRRggggggggRRRRg", "gggggggggggggggggg", rnd=0.3)],
 }
 # pickups: colour, short letter, long name
 CRYSTALS = ["red", "blue", "yellow", "green", "violet", "white"]
@@ -300,7 +356,7 @@ def help_lines(kitty):
             "shots. Same crystal colour: level up, new colour: new weapon.",
             "Never touch the walls."]
 
-SPR["plate"] = [S(".GggG.", "GgGGgG", "gGddGg", "gGddGg", "GgGGgG", ".GggG.")]
+SPR["plate"] = [S(".gggg.", "gxggxg", "gggggg", "gggggg", "gxggxg", ".gggg.")]
 
 # =============================================================================================
 # The eight stages
@@ -2489,7 +2545,8 @@ class View:
         self.prect(a, ya, a + n, ya + n, c)
 
     def spr(self, sp, x, y, flash=False, fh=False, fv=False):
-        ow, oh, runs = sp.runs(self.s, flash, fh, fv)
+        # just below 1:1 the art is drawn unscaled (at most a pixel larger) instead of losing a row of detail
+        ow, oh, runs = sp.runs(1.0 if 0.84 <= self.s < 1.0 else self.s, flash, fh, fv)
         px, py = self.X(x) - ow // 2, self.Y(y) - oh // 2
         x0, x1, y0, y1, P = self.x0, self.x1, self.y0, self.y1, self.P
         if px >= x0 and px + ow <= x1:
@@ -2564,6 +2621,53 @@ class View:
             a, b = max(self.x0, int(lo + 0.5)), min(self.x1, int(hi + 0.5))
             if b > a:
                 P[y][a:b] = [c] * (b - a)
+
+    def sphere(self, x, y, r, c, lit=None):
+        """A ball lit from the top left: shadowed rim, mid body, bright cap."""
+        self.circle(x, y, r, mix(c, (24, 14, 46), 0.45))
+        self.circle(x - r * 0.12, y - r * 0.12, r * 0.82, c)
+        self.circle(x - r * 0.34, y - r * 0.34, max(0.5, r * 0.36), lit or mix(c, (255, 252, 230), 0.45))
+
+    def snap(self, xa, ya, xb, yb):
+        """Remember a field rectangle (plus a pixel) before drawing a shape into it; see bevel()."""
+        a, b = max(self.x0, self.X(xa) - 1), min(self.x1, self.X(xb) + 1)
+        c, d = max(self.y0, self.Y(ya) - 1), min(self.y1, self.Y(yb) + 1)
+        return a, b, c, d, [self.P[y][a:b] for y in range(c, d)]
+
+    def bevel(self, snapped):
+        """Whatever was drawn since snap(): lit upper/left edges, shadowed lower/right ones, a dark outline."""
+        a, b, ya, yb, old = snapped
+        W, P = b - a, self.P
+        if W <= 0:
+            return
+        mask, span = [], []
+        for j in range(yb - ya):
+            row, o = P[ya + j][a:b], old[j]
+            if row == o:
+                mask.append(None)
+                span.append(None)
+                continue
+            m = [p != q for p, q in zip(row, o)]
+            lo = m.index(True)
+            mask.append(m)
+            span.append((lo, W - m[::-1].index(True)))
+        H = len(mask)
+        for j in range(H):
+            sp = [s_ for s_ in span[max(0, j - 1):j + 2] if s_ is not None]
+            if not sp:
+                continue
+            m, up, dn = mask[j], mask[j - 1] if j else None, mask[j + 1] if j < H - 1 else None
+            row = P[ya + j]
+            for i in range(max(0, min(s_[0] for s_ in sp) - 1), min(W, max(s_[1] for s_ in sp) + 1)):
+                if m is not None and m[i]:
+                    lit = (up is None or not up[i]) or (i == 0 or not m[i - 1])
+                    dark = (dn is None or not dn[i]) or (i == W - 1 or not m[i + 1])
+                    if lit != dark:
+                        c = row[a + i]
+                        row[a + i] = mix(c, WHITE, 0.32) if lit else mix(c, (24, 14, 46), 0.42)
+                elif ((up is not None and up[i]) or (dn is not None and dn[i]) or
+                      (m is not None and ((i > 0 and m[i - 1]) or (i < W - 1 and m[i + 1])))):
+                    row[a + i] = OUTLINE
 
 
 # --- cached backgrounds ----------------------------------------------------------------------
@@ -2884,29 +2988,44 @@ def draw_boss(v, e, t, py):
         cx, cy, cw, ch = b["bd"]["core"]
         v.circle(x + cx, y + cy, 1.2 + 0.6 * pulse, mix(core, WHITE, 0.4 * pulse))
         return
+    snapped = v.snap(x - 36, y - 31, x + 22, y + 31)
     if key == "scrapmonarch":
         G, gg, d, rust = C((96, 102, 120)), C((150, 156, 172)), C((44, 48, 64)), C((150, 96, 58))
+        hi, lo = C((190, 196, 212)), C((70, 74, 92))
         a = 0.5 + 0.5 * math.sin(t * 2.2)
         for sgn in (-1, 1):   # the claws
             bx, by = x - 6, y + sgn * 11
             tx, ty = x - 20, y + sgn * (13 + 5 * a)
             v.poly([(bx, by - 2), (tx, ty - 2), (tx, ty + 2), (bx, by + 2)], G)
+            v.line(bx, by - 1.5, tx, ty - 1.5, gg)
             v.poly([(tx, ty - 3), (tx - 6, ty - sgn * 3 * a - 1), (tx - 1, ty)], gg)
             v.poly([(tx, ty + 3), (tx - 6, ty + sgn * 3 * a + 1), (tx - 1, ty)], gg)
+            v.circle(bx, by, 2.2, gg)
+            v.dot(bx - 0.6, by - 0.6, hi)
         v.poly([(x - 8, y - 17), (x + 15, y - 14), (x + 15, y + 14), (x - 8, y + 17), (x - 14, y + 8),
                 (x - 14, y - 8)], G)
+        v.poly([(x - 14, y + 4), (x + 15, y + 5), (x + 15, y + 14), (x - 8, y + 17), (x - 14, y + 8)], lo)
         v.rect(x - 4, y - 13, 17, 4, gg)
+        v.rect(x - 4, y - 13, 17, 1, hi)
         v.rect(x - 4, y + 9, 17, 4, gg)
+        v.rect(x - 4, y + 9, 17, 1, hi)
         v.rect(x + 1, y - 7, 11, 14, d)
+        v.rect(x + 1, y + 6, 11, 1, gg)
         v.rect(x + 3, y - 15, 3, 3, rust)
         v.rect(x + 8, y + 12, 4, 2, rust)
         for k in range(4):
             v.rect(x + 2 + k * 3, y - 5 + (k % 2) * 6, 2, 4, rust if k % 2 else gg)
+            v.dot(x + 2 + k * 3, y - 5 + (k % 2) * 6, hi)
+        for k in range(7):   # rivets along the hull
+            v.dot(x + 13.5, y - 11 + k * 3.6, hi if k < 3 else gg)
         v.circle(x - 6, y, 4.8, d)
-        v.circle(x - 6, y, 3.4, core)
-        v.circle(x - 6.8, y - 0.8, 1.3, WHITE)
+        v.ring(x - 6, y, 4.6, gg, 20)
+        v.sphere(x - 6, y, 3.4, core)
+        v.circle(x - 7.2, y - 1.2, 1.0, WHITE)
         v.line(x + 10, y - 14, x + 13, y - 22, gg)
         v.line(x + 5, y - 15, x + 2, y - 20, gg)
+        v.dot(x + 13, y - 22, C((255, 90, 70)))
+        v.dot(x + 2, y - 20, C((255, 90, 70)))
     elif key == "mothergland":
         fl1, fl2, fl3 = C((200, 70, 110)), C((150, 40, 80)), C((240, 140, 170))
         r = 13 + 1.2 * math.sin(t * 3)
@@ -2917,67 +3036,99 @@ def draw_boss(v, e, t, py):
                 a2 = a + 0.35 * math.sin(t * 2.5 + k + j * 0.6)
                 nx, ny = px_ + math.cos(a2) * 2.2, py_ + math.sin(a2) * 2.2
                 v.circle(nx, ny, 1.6 - j * 0.12, fl2 if j % 2 else fl1)
+                if j % 2 == 0:
+                    v.dot(nx - 0.5, ny - 0.5, fl3)
                 px_, py_ = nx, ny
         v.circle(x + 2, y, r, fl2)
         v.circle(x + 1, y - 1, r - 2, fl1)
+        v.circle(x - 2, y - 5, r * 0.42, mix(fl1, fl3, 0.5))
         for k in range(5):
             a = t * 0.7 + k * 1.3
-            v.circle(x + 4 + math.cos(a) * 7, y + math.sin(a) * 7, 2.2, fl3)
-        v.circle(x - 8, y, 5.5, C((250, 230, 220)))
+            v.sphere(x + 4 + math.cos(a) * 7, y + math.sin(a) * 7, 2.2, fl3)
+        v.circle(x - 3, y - 8, 1.2, C((255, 220, 230)))
+        v.sphere(x - 8, y, 5.5, C((250, 230, 220)), C((255, 255, 255)))
         ang = math.atan2(py - y, -10)
         v.circle(x - 8 + math.cos(ang) * 2, y + math.sin(ang) * 2, 3, core)
         v.circle(x - 8 + math.cos(ang) * 2.4, y + math.sin(ang) * 2.4, 1.3, (20, 10, 16))
+        v.dot(x - 8.8 + math.cos(ang) * 2, y - 1 + math.sin(ang) * 2, WHITE)
     elif key == "dreadkiln":
         H1, H2, H3, win = C((110, 96, 90)), C((150, 130, 116)), C((70, 60, 58)), C((255, 220, 140))
+        H4 = C((186, 166, 148))
         v.rect(x - 12, y - 18, 28, 36, H1)
+        v.rect(x + 10, y - 14, 6, 32, mix(H1, H3, 0.55))       # the shadowed flank
         v.rect(x - 16, y - 10, 6, 22, H3)
+        v.rect(x - 16, y - 10, 6, 1, H2)
         v.rect(x - 8, y - 18, 20, 4, H2)
+        v.rect(x - 8, y - 18, 20, 1, H4)
         for k in range(5):
             for j in range(3):
+                v.rect(x - 4.5 + k * 3.5, y - 12.5 + j * 4, 3, 2.5, H3)
                 if (k + j + int(t * 2)) % 4:
                     v.rect(x - 4 + k * 3.5, y - 12 + j * 4, 2, 1.5, win)
+        for j in range(4):   # plate seams and rivets
+            v.rect(x - 12, y - 0.5 + j * 4, 22, 0.6, H3)
+            v.dot(x - 11, y + 1 + j * 4, H2)
+            v.dot(x + 8, y + 1 + j * 4, H2)
         v.rect(x - 28, y + 2, 16, 4, H2)    # the main gun
+        v.rect(x - 28, y + 2, 16, 1, H4)
+        v.rect(x - 28, y + 5, 16, 1, H3)
         v.rect(x - 30, y + 1, 3, 6, H3)
+        v.rect(x - 30, y + 1, 3, 1, H2)
         v.rect(x + 4, y - 26, 4, 8, H3)      # stacks
+        v.rect(x + 4, y - 26, 1, 8, H1)
         v.rect(x + 10, y - 24, 3, 6, H3)
+        v.rect(x + 10, y - 24, 1, 6, H1)
         v.rect(x - 12, y + 10, 28, 3, H3)
         v.rect(x - 12, y + 14, 28, 1, C((255, 140, 50)))
         v.rect(x - 12, y - 8, 8, 6, C((40, 34, 34)))
         v.rect(x - 11, y - 7, 6, 4, mix(core, WHITE, 0.3 * pulse))
+        v.rect(x - 11, y - 7, 2, 1, WHITE)
     elif key == "drownedbell":
         sw = 3 * math.sin(t * 1.6)
         B1, B2, B3 = C((60, 140, 130)), C((120, 200, 180)), C((30, 80, 80))
         v.poly([(x - 6, y - 15), (x + 6, y - 15), (x + 9, y - 4), (x + 14, y + 7), (x - 14, y + 7),
                 (x - 9, y - 4)], B1)
+        v.poly([(x + 2, y - 15), (x + 6, y - 15), (x + 9, y - 4), (x + 14, y + 7), (x + 6, y + 7)],
+               mix(B1, B3, 0.5))
+        v.poly([(x - 5, y - 15), (x - 3, y - 15), (x - 6, y + 5), (x - 9, y + 5)], mix(B1, B2, 0.6))
         v.rect(x - 14, y + 5, 28, 3, B2)
+        v.rect(x + 6, y + 5, 8, 3, mix(B2, B3, 0.4))
         v.rect(x - 8, y - 6, 16, 2, B2)
         v.rect(x - 2, y - 19, 4, 4, B3)
+        v.rect(x - 2, y - 19, 1, 4, B1)
         for k in range(4):
             v.line(x - 12 + k * 7, y + 8, x - 13 + k * 7 + sw * 0.3, y + 14 + k % 2 * 2, C((40, 120, 70)))
         v.line(x, y + 7, x + sw, y + 9, B3)
         v.circle(x + sw, y + 10, 3.2, B3)
-        v.circle(x + sw, y + 10, 2.2, core)
+        v.sphere(x + sw, y + 10, 2.2, core)
         v.ring(x, y - 2, 6 + 4 * pulse, C((150, 230, 220)), 18)
     elif key == "cinderheart":
         R1, R2, R3 = C((70, 46, 36)), C((110, 70, 50)), C((255, 120, 40))
         v.circle(x, y, 12.5, R1)
         v.circle(x - 1, y - 1, 10.5, R2)
+        v.circle(x - 4, y - 4, 5.5, C((140, 94, 66)))
+        v.circle(x - 5.5, y - 6, 2.2, C((170, 120, 86)))
         for k in range(7):
             a = k * 0.9 + 0.3 * math.sin(t + k)
             v.line(x, y, x + math.cos(a) * 11, y + math.sin(a) * 11, mix(R3, (255, 220, 120), pulse * 0.5))
         v.circle(x, y, 5 + 1.2 * pulse, mix(R3, core, 0.5))
-        v.circle(x, y, 3, mix(core, WHITE, 0.4))
+        v.sphere(x, y, 3, mix(core, WHITE, 0.4), WHITE)
     elif key == "ambersovereign":
         Y1, Y2, K1, wing = C((230, 170, 40)), C((255, 220, 100)), C((40, 30, 16)), C((200, 220, 230))
         fl_ = 4 * math.sin(t * 18)
         wc = mix(wing, (60, 50, 30), 0.4)
         v.poly([(x - 2, y - 6), (x + 10, y - 16 - fl_), (x + 16, y - 12 - fl_), (x + 4, y - 4)], wc)
+        v.line(x, y - 5.5, x + 12, y - 14 - fl_, mix(wing, WHITE, 0.3))
         v.poly([(x - 2, y + 4), (x + 10, y + 14 + fl_), (x + 16, y + 10 + fl_), (x + 4, y + 2)], wc)
+        v.line(x, y + 3.5, x + 12, y + 12 + fl_, mix(wc, wing, 0.5))
         for k in range(5):    # the abdomen
-            v.circle(x + 6 + k * 2.2, y + 3 + k * 1.2, 6 - k * 0.6, Y1 if k % 2 == 0 else K1)
-        v.circle(x - 2, y - 1, 5.5, Y1)
+            cx_, cy_, r_ = x + 6 + k * 2.2, y + 3 + k * 1.2, 6 - k * 0.6
+            v.circle(cx_, cy_, r_, Y1 if k % 2 == 0 else K1)
+            if k % 2 == 0:
+                v.circle(cx_ - r_ * 0.3, cy_ - r_ * 0.55, r_ * 0.3, Y2)
+        v.sphere(x - 2, y - 1, 5.5, Y1, Y2)
         v.circle(x - 2, y - 1, 3.5, K1)
-        v.circle(x - 9, y - 3, 4.5, Y2)
+        v.sphere(x - 9, y - 3, 4.5, Y2, C((255, 248, 200)))
         v.line(x - 13, y - 1, x - 17, y + 2 + fl_ * 0.3, K1)
         v.line(x - 13, y + 1, x - 16, y + 5, K1)
         v.line(x - 9, y - 7, x - 12, y - 13, K1)
@@ -2985,34 +3136,47 @@ def draw_boss(v, e, t, py):
         v.circle(x - 6, y - 4, 2.0, core)
         v.circle(x - 11, y - 4, 1.2, C((200, 30, 20)))
         v.circle(x - 11, y - 1.5, 1.2, C((200, 30, 20)))
+        v.dot(x - 11.5, y - 4.5, C((255, 160, 140)))
     elif key == "chronoprism":
         c1, c2, c3 = C((120, 200, 250)), C((200, 240, 255)), C((80, 90, 200))
         v.poly([(x, y - 15), (x + 10, y), (x, y + 15), (x - 10, y)], c3)
         v.poly([(x, y - 12), (x + 7, y), (x, y + 12), (x - 7, y)], c1)
+        v.poly([(x, y - 12), (x, y), (x - 7, y)], mix(c1, c2, 0.55))
+        v.poly([(x, y), (x + 7, y), (x, y + 12)], mix(c1, c3, 0.45))
+        v.poly([(x, y - 15), (x, y - 12), (x - 7, y), (x - 10, y)], mix(c3, c1, 0.45))
         for k in range(3):
             a = t * 1.3 + k * TAU / 3
             v.line(x, y, x + math.cos(a) * 7, y + math.sin(a) * 11, c2)
         for k in range(12):
             a = -t * 0.8 + k * TAU / 12
             v.blob(x + math.cos(a) * 14, y + math.sin(a) * 14, c2 if k % 3 else core, 1.4)
-        v.circle(x, y, 3.2, mix(core, WHITE, 0.3 * pulse))
+        v.sphere(x, y, 3.2, mix(core, WHITE, 0.3 * pulse))
     else:   # the void engine
         m1, m2, m3 = C((60, 50, 70)), C((100, 86, 110)), C((30, 24, 36))
+        m4 = C((140, 124, 152))
         ring_c = C(PHASE_CORE[min(3, b["phase"])])
         v.rect(x - 4, y - 20, 20, 40, m1)
+        v.rect(x - 4, y - 20, 20, 1, m2)
+        v.rect(x - 4, y - 20, 1, 40, m2)
         v.rect(x - 2, y - 18, 16, 36, m3)
         for k in range(4):
             yy = y - 16 + k * 10 + 2 * math.sin(t * 3 + k)
             v.rect(x + 8, yy, 10, 3, m2)
+            v.rect(x + 8, yy, 10, 0.6, m4)
             v.rect(x + 8, yy + 1, 10, 1, mix(ring_c, m2, 0.5))
+        for k in range(5):
+            v.dot(x - 3, y - 17 + k * 8.5, m4)
         for k in range(10):
             a = t * (1.5 if k % 2 else -1.0) + k * TAU / 10
             v.blob(x - 6 + math.cos(a) * 11, y + math.sin(a) * 11, ring_c, 1.5)
         v.circle(x - 6, y, 8, m2)
+        v.circle(x - 6.6, y - 0.6, 7.3, m4)
         v.circle(x - 6, y, 6.5, (8, 4, 14))
         v.ring(x - 6, y, 5 + pulse, ring_c, 24)
-        v.circle(x - 6, y, 2.4, mix(ring_c, WHITE, 0.5 * pulse))
+        v.sphere(x - 6, y, 2.4, mix(ring_c, WHITE, 0.5 * pulse))
         v.rect(x - 26, y - 1, 12, 2, m2)
+        v.rect(x - 26, y - 1, 12, 0.6, m4)
+    v.bevel(snapped)
 
 
 # --- the rest of the picture -------------------------------------------------------------------
@@ -3098,15 +3262,20 @@ def draw_actors(g, v):
                 v.line(ox - dy * off, oy + dx * off, ox + dx * 150 - dy * off, oy + dy * 150 + dx * off, c)
     # items
     for it in g.items:
-        if it.kind == "crystal":
+        if it.kind == "crystal":   # a cut gem: lit upper left facet, dark lower right, a glint
             c = CRYSTAL_C[it.color]
             r = 3 + 0.4 * math.sin(it.t * 8)
-            v.poly([(it.x, it.y - r), (it.x + r * 0.8, it.y), (it.x, it.y + r), (it.x - r * 0.8, it.y)], c)
-            v.poly([(it.x - 0.4, it.y - r * 0.6), (it.x + r * 0.35, it.y), (it.x - 0.4, it.y)], WHITE)
-        else:
+            x, y, o = it.x, it.y, 1.0 / s
+            v.poly([(x, y - r - o), (x + r * 0.8 + o, y), (x, y + r + o), (x - r * 0.8 - o, y)], OUTLINE)
+            v.poly([(x, y - r), (x + r * 0.8, y), (x, y + r), (x - r * 0.8, y)], c)
+            v.poly([(x, y), (x + r * 0.8, y), (x, y + r)], mix(c, (24, 14, 46), 0.45))
+            v.poly([(x, y - r), (x, y), (x - r * 0.8, y)], mix(c, WHITE, 0.45))
+            v.poly([(x - 0.4, y - r * 0.6), (x + r * 0.3, y - 0.2), (x - 0.4, y - 0.2)], WHITE)
+        else:   # a capsule: dark rim, lit ball, the letter on top
             c, letter, _ = ITEMS[it.kind]
-            v.circle(it.x, it.y, 3, shade(c, 0.6))
-            v.circle(it.x, it.y, 2.2, c)
+            v.circle(it.x, it.y, 3 + 1.0 / s, OUTLINE)
+            v.circle(it.x, it.y, 3, shade(c, 0.55))
+            v.sphere(it.x - 0.2, it.y - 0.2, 2.3, c)
             col, row = v.X(it.x), v.Y(it.y) // 2
             if v.x0 <= col < v.x1 and v.y0 // 2 <= row < (v.y1 - 1) // 2 + 1 and s >= 0.9:
                 v.cv.put(col, row, letter, (10, 10, 16), c)
@@ -3177,23 +3346,29 @@ def draw_actors(g, v):
             v.circle(g.px + 9, g.py, r, col)
             v.circle(g.px + 9, g.py, max(0.6, r - 1.2), WHITE)
         fl = 1.5 + math.sin(t * 40)
-        v.rect(g.px - 8 - fl, g.py - 0.5, 2 + fl, 1.6, (255, 170, 60))
-        v.rect(g.px - 7, g.py - 0.2, 1.5, 1, (255, 250, 200))
         v.spr(SHIP, g.px, g.py)
+        v.rect(g.px - 10 - fl, g.py - 0.5, 2 + fl, 1.6, (255, 170, 60))
+        v.rect(g.px - 9.5, g.py - 0.2, 1.5, 1, (255, 250, 200))
         if g.shield:
             v.ring(g.px, g.py, 7 + 0.5 * math.sin(t * 8), (120, 210, 255), 30)
         for bx, by in g.bits():
-            v.circle(bx, by, 1.7, (80, 150, 200))
-            v.circle(bx, by, 0.9, (200, 240, 255))
+            v.circle(bx, by, 1.7 + 1.0 / s, OUTLINE)
+            v.circle(bx, by, 1.7, (60, 120, 176))
+            v.circle(bx - 0.3, by - 0.3, 1.2, (120, 200, 240))
+            v.dot(bx - 0.6, by - 0.6, (230, 250, 255))
     p = g.pod
-    if p is not None:
+    if p is not None:   # a steel ball with the crystal's colour glowing in its open side, two prongs
         col = CRYSTAL_C.get(g.pod_color, (200, 200, 220))
-        v.circle(p.x, p.y, 3.3, (70, 76, 96))
-        v.circle(p.x - 0.4, p.y - 0.4, 2.6, (150, 156, 176))
         d = -1 if p.state == "back" else 1
-        v.circle(p.x + d * 0.8, p.y, 1.6 + 0.3 * math.sin(t * 10), col)
+        o = 1.0 / s
+        v.rect(p.x + d * 2.4 - 0.5 - o, p.y - 3.5 - o, 1 + 2 * o, 5.5 + 2 * o, OUTLINE)
+        v.circle(p.x, p.y, 3.3 + o, OUTLINE)
+        v.sphere(p.x, p.y, 3.3, (140, 146, 168), (214, 218, 232))
+        v.circle(p.x + d * 0.8, p.y, 2.0 + 0.3 * math.sin(t * 10), mix(col, OUTLINE, 0.5))
+        v.circle(p.x + d * 0.8, p.y, 1.5 + 0.3 * math.sin(t * 10), col)
+        v.dot(p.x + d * 0.8 - 0.4, p.y - 0.4, mix(col, WHITE, 0.6))
         v.rect(p.x + d * 2.4 - 0.5, p.y - 3.5, 1, 1.5, (210, 214, 230))
-        v.rect(p.x + d * 2.4 - 0.5, p.y + 2, 1, 1.5, (210, 214, 230))
+        v.rect(p.x + d * 2.4 - 0.5, p.y + 2, 1, 1.5, (130, 136, 156))
     # enemy bullets
     for b in g.ebul:
         if b.kind == "orb":
@@ -4284,6 +4459,24 @@ def selftest():
           "%d midbosses, %d bosses" % (sum(upd) / len(upd) * 1000, max(upd) * 1000, r120 * 1000, e120 * 1000,
                                        len(ESPEC), len(MIDBOSSES), len(BOSSES)))
     print("Self-test ok (%.1fs)" % (time.time() - t0))
+
+
+def screenshot(cols=100, rows=32):
+    """README picture: real play on stage 3 (IRONWORKS DRIFT, seed 1) flown by the auto-mode pilot, 69.5 s in: a
+    darter wave, rivets, scrappers and a sentinel in the air, cannons, turrets and vents on the hull, the pod
+    docked at the nose. Silent, no scores read or written, HUD and all."""
+    global load_scores
+    snd, SND.enabled = SND.enabled, False
+    real_scores, load_scores = load_scores, (lambda: {})      # the HI field shows this run, not a local record
+    try:
+        g = Game(2, "normal", sound=False, seed=1)
+        pilot = Pilot(seed=1)
+        for _ in range(int(round(69.5 / DT))):
+            g.step(pilot(g))
+        return render(g, cols, rows)
+    finally:
+        SND.enabled = snd
+        load_scores = real_scores
 
 
 if __name__ == "__main__":

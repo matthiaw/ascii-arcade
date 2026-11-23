@@ -12,6 +12,7 @@ No dependencies: Python 3 on macOS / Linux in a truecolor terminal (WezTerm, iTe
 import math
 import os
 import random
+import re
 import select
 import sys
 import termios
@@ -1915,6 +1916,69 @@ def read_keys(fd):
                 keys.append("tab" if ch == "\t" else "enter" if ch in "\r\n" else ch.lower())
                 i += 1
     return keys
+
+
+SHOT_SEED, SHOT_THEME, SHOT_VEH, SHOT_WEAPON, SHOT_T = 11, "meadow", 0, 1, 30.0   # the README picture
+
+
+def ansi_canvas(s, cols, rows):
+    """The terminal frame render() writes, read back into an arcadekit.Canvas (for the README screenshot)."""
+    cv = arcadekit.Canvas(cols, rows)
+    fg = bg = (0, 0, 0)
+    x = y = 0
+    for m in re.finditer(r"\x1b\[([0-9;?]*)([A-Za-z])|\r\n|([^\x1b])", s):
+        if m.group(2):
+            if m.group(2) != "m":
+                continue
+            p = [int(v) for v in m.group(1).split(";") if v.isdigit()]
+            i = 0
+            while i < len(p):
+                if p[i] in (38, 48) and i + 4 < len(p) and p[i + 1] == 2:
+                    if p[i] == 38:
+                        fg = tuple(p[i + 2:i + 5])
+                    else:
+                        bg = tuple(p[i + 2:i + 5])
+                    i += 5
+                else:
+                    i += 1
+        elif m.group(3) is None:
+            x, y = 0, y + 1
+        elif x < cols and y < rows:
+            ch = m.group(3)
+            if ch == "\u2580":
+                cv.px[2 * y][x], cv.px[2 * y + 1][x] = fg, bg
+            elif ch == " ":
+                cv.px[2 * y][x] = cv.px[2 * y + 1][x] = bg
+            else:
+                cv.px[2 * y][x] = cv.px[2 * y + 1][x] = bg
+                cv.text[(x, y)] = (ch, fg, bg)
+            x += 1
+    return cv
+
+
+def screenshot(cols=100, rows=32, seed=SHOT_SEED, theme=SHOT_THEME, vehicle=SHOT_VEH, weapon=SHOT_WEAPON, at=SHOT_T):
+    """README picture: the AutoPilot flies a sortie with a fixed seed; the frame at `at` seconds, HUD and all."""
+    global TRUECOLOR, SOLID_PIXELS
+    saved = (random.getstate(), SND.enabled, TRUECOLOR, SOLID_PIXELS, arcadekit.submit)
+    random.seed(seed)
+    SND.enabled, TRUECOLOR, SOLID_PIXELS = False, True, False
+    arcadekit.submit = lambda *a, **k: None
+    try:
+        g = Game(seed, theme, vehicle)
+        g.start_auto()
+        g.weapon = weapon
+        g.pilot = AutoPilot(random.Random(seed))
+        g.sortie_end = 1e9
+        while g.t < at:
+            g.auto_step(AUTO_STEP)
+        g.auto = None                 # a gameplay shot, not auto mode: no amber bar
+        g.msg, g.fps = "", 40.0
+        scr = Screen()
+        scr.true = True
+        return ansi_canvas(render(g, scr, cols, rows), cols, rows)
+    finally:
+        random.setstate(saved[0])
+        SND.enabled, TRUECOLOR, SOLID_PIXELS, arcadekit.submit = saved[1:]
 
 
 def arg(name):

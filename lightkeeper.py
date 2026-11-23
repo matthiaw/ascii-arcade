@@ -1154,6 +1154,16 @@ def auto_frame(ak, auto, cols, rows):
     return cv
 
 
+def screenshot(cols=100, rows=32):
+    """README picture: real play (the keeper bot) with a fixed seed, at a good moment, HUD and all.
+    Seed 7, night 2, 18 s in: the beam sweeps the reefs over a freighter aground and a sailing boat
+    while the rescue boat is out."""
+    ak = AutoKeeper(*map_size(cols, rows - 1), seed=7, quiet=True)
+    while not (ak.camp.night_no == 2 and ak.camp.n.t >= 17.97):
+        ak.step()
+    return render(ak.camp.n, ak.camp.p, cols, rows)
+
+
 def main():
     with Terminal() as term:
         cols, rows = term.size()

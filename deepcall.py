@@ -1875,6 +1875,30 @@ def selftest():
           % (frames, run.dives, wins, time.time() - t0))
 
 
+def screenshot(cols=100, rows=32, seed=200, at=126.45):
+    """README picture: the auto-mode DiveBot in trench 200, deep in the Abyss just after a ping, the leviathan
+    lit up beside a vent and the lamp on - real play, HUD and all."""
+    state = random.getstate()
+    random.seed(seed)                           # the vent bubbles
+    try:
+        d = Dive(seed)
+        d.quiet = True                          # no sound, and Dive never records a score
+        bot = DiveBot(d)
+        while d.t < at and not d.over:
+            bot.tick()
+            d.update(1 / 40)
+    finally:
+        random.setstate(state)
+    d.lamp = True
+    seen, msgs = set(), []
+    for m in d.msgs:                            # the vent says the same line twice in a row
+        if m[0] not in seen:
+            seen.add(m[0])
+            msgs.append(m)
+    d.msgs = msgs
+    return render(d, cols, rows)
+
+
 def bench():
     d = Dive(3)
     for i in range(200):

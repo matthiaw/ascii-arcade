@@ -1606,6 +1606,23 @@ def too_small(term):
 AUTO_STEP = 1 / 40          # auto mode steps the game in fixed slices (more of them when sped up)
 
 
+def screenshot(cols=100, rows=32):
+    """README picture: real play (the auto-mode pilot) with a fixed seed, at a good moment, HUD and all.
+    Level 8 (Waypoints), pilot seed 1, launch 4 at 43 s: the probe has slung round both planets through
+    beacon 1 and is about to dock, the three earlier tries still drawn faintly."""
+    was, SND.enabled = SND.enabled, False
+    try:
+        g = Game(8, {}, auto=True)                   # empty progress: nothing read, nothing saved
+        pilot = Pilot(random.Random(1))
+        for _ in range(1730):
+            pilot.think(60.0)                        # a generous budget: the search always finishes (deterministic)
+            pilot.update(g, AUTO_STEP)
+            g.update(AUTO_STEP)
+        return render(g, Painter(), cols, rows)
+    finally:
+        SND.enabled = was
+
+
 def run_auto(term, start, progress):
     """Auto mode: the pilot plays from level `start` onwards until the viewer stops it. Nothing is saved.
     Returns the level it reached (the title's level select stays within the unlocked ones)."""

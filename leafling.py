@@ -5081,6 +5081,66 @@ def demo_test():
             raise AssertionError("the title demo gets stuck in world %d at x=%.1f" % (b, s.x))
 
 
+def screenshot(cols=100, rows=32, n=1, seed=1, secs=15.0):
+    """README picture: real play (the auto-mode LeafBot) with a fixed seed, at a good moment, HUD and all.
+    1-2 Mossy Trunks, seed 1, 15 s in: Leafling in the air over a thorn pit, the lantern just lit behind her,
+    seeds and branches ahead.
+    Steps the level the way play() does in auto mode (two game steps per 1/30 s frame, back to the lantern
+    after a lost leaf), without sound, banner or score records."""
+    state, quiet = random.getstate(), SND.enabled
+    SND.enabled = False
+    try:
+        random.seed(seed)
+        lv = Level(n)
+        sim = Sim(lv)
+        bot = LeafBot(lv, random.Random(seed), threaded=False)
+        fx, cam, painter = Fx(lv), Camera(), Painter(lv)
+        T = tile_size(cols, rows * 2)
+        dead, t, frame = None, 0.0, 1 / 30
+        for _ in range(int(secs / frame)):
+            t += frame
+            if dead is not None:
+                dead += frame
+                if dead > 0.9:
+                    sim.lives -= 1
+                    sim.deaths += 1
+                    if sim.lives <= 0:
+                        sim = Sim(lv)
+                        bot.invalidate()
+                    else:
+                        sim.respawn()
+                    fx.blink, cam.x, dead = 1.2, None, None
+            else:
+                for _ in range(2):
+                    inp = bot.input(sim)
+                    if inp == "r":
+                        sim.respawn()
+                        fx.blink, cam.x = 1.0, None
+                        continue
+                    if inp is None:
+                        break
+                    fx.events(sim, sim.step(inp))
+                    if sim.dead:
+                        dead = 0.0
+                        bot.died(sim)
+                        break
+                    if sim.won:
+                        break
+            fx.update(sim, frame)
+            cam.update(sim, cols / T, rows * 2 / T, frame)
+            if sim.won:
+                break
+        extra = {}
+        for hx, text in lv.hints:
+            if hx <= sim.x < hx + 14 and dead is None:
+                extra["hint"] = text
+                extra["hint_a"] = clamp(min((sim.x - hx) * 1.5, (hx + 14 - sim.x) / 2), 0.0, 1.0)
+        return render(sim, fx, cam, cols, rows, t, painter=painter, extra=extra)
+    finally:
+        random.setstate(state)
+        SND.enabled = quiet
+
+
 def auto_test(seconds=30.0):
     """Auto mode in the real play loop, headless, at x8: level 1-1 must be cleared (nothing recorded - the
     self-test replaces submit), and pause must stop the game time."""

@@ -1979,6 +1979,18 @@ class AutoRun:
         return cv
 
 
+def screenshot(cols=100, rows=32):
+    """README picture: real play (the auto-mode driver) with a fixed seed, at a good moment, HUD and all.
+    Seed 1, NEON CITY, 37 s in: flat out at 280 through a bend, traffic ahead, a neon billboard."""
+    a = AutoRun(0, True, seed=1)
+    r = a.r
+    r.sfx = lambda *args, **kw: None              # silent: an instance override, the game itself is untouched
+    for _ in range(1120):
+        a.d.act(r, AutoRun.STEP)
+        r.update(AutoRun.STEP)
+    return render(r, cols, rows)
+
+
 def run_auto(term, start, throttle_auto):
     """Auto mode until the viewer presses Esc / Q."""
     a = AutoRun(start, throttle_auto)

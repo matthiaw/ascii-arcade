@@ -3155,6 +3155,25 @@ def selftest():
     print("Self-test ok (%.1f s)" % (time.time() - t0))
 
 
+def screenshot(cols=100, rows=32):
+    """README picture: real play on stage 1 (THE GIRDERS, seed 1) by the auto-mode pilot, 55.5 s in: the rigger
+    has climbed to the top girder right under the Wrecker while drums roll down the levels, HUD and all. Quiet (no
+    sound), no score written; the HI field shows this run instead of a local record."""
+    g = Game(0, quiet=True, seed=1)
+    g.hi = 0
+    bot = Pilot(g)
+    mark = (g.stage_i, g.deaths)
+    for _ in range(int(round(55.5 / DT))):          # the same loop as AutoRun.frame
+        i = bot()
+        if i[2]:
+            g.jbuf = 0.13
+        g.step((i[0], i[1], g.jbuf > 0))
+        if (g.stage_i, g.deaths) != mark:
+            mark = (g.stage_i, g.deaths)
+            bot.reset()
+    return render(g, cols, rows)
+
+
 if __name__ == "__main__":
     if "--selftest" in sys.argv:
         selftest()

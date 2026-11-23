@@ -904,6 +904,38 @@ def main():
 # =============================================================================================
 # Self-test:  python3 stackfall.py --selftest
 # =============================================================================================
+def screenshot(cols=100, rows=32, mode="Rising", level=5, seed=3, secs=170.0):
+    """README picture: real play (the auto-mode StackBot) with a fixed seed, at a good moment, HUD and all.
+    Rising from level 5, seed 3, 170 s in (level 8): a coloured stack on grey rubble, a Z on its way down.
+    At 32 rows the well would get 2-pixel blocks, one row short of 3: the frame is drawn one row taller
+    and the key-help footer row is left off, so the well can be the size it is in a real terminal."""
+    import os
+    import tempfile
+    import arcadekit
+    state, quiet, path = random.getstate(), SND.enabled, arcadekit.SCORES_PATH
+    tmp = tempfile.TemporaryDirectory()
+    SND.enabled = False
+    arcadekit.SCORES_PATH = os.path.join(tmp.name, "scores.json")     # no BEST from the real scores, no writes
+    try:
+        random.seed(seed)
+        g = Stack(mode, level)
+        bot = StackBot(random.Random(seed))
+        for _ in range(int(secs / STEP)):
+            if g.over:
+                break
+            bot.update(g, STEP)
+            g.update(STEP)
+        cv = render(g, cols, rows + 1)
+    finally:
+        random.setstate(state)
+        SND.enabled, arcadekit.SCORES_PATH = quiet, path
+        tmp.cleanup()
+    out = Canvas(cols, rows)
+    out.px = cv.px[:rows * 2]
+    out.text = {k: v for k, v in cv.text.items() if k[1] < rows}
+    return out
+
+
 class FakeTerm:
     """Stands in for the terminal: scripted keys by time, a fixed size, output thrown away."""
 
