@@ -902,6 +902,9 @@ def fogged(c, lvl, emissive=False, floor=0.0):
             int(c[2] * k + FOG[2] * (1 - k)) & 0xF8)
 
 
+WALL_FIELDS = {}   # the random fields behind the 32x32 textures, so the fine ones show the same bricks and stains
+
+
 def make_wall_textures():
     """32x32 RGB wall textures, indexed [y * 32 + x], plus which texels glow."""
     rnd = random.Random(5)
@@ -924,6 +927,7 @@ def make_wall_textures():
             hl = 1.18 if by == 0 or bx == 0 else 0.8 if by == 6 or bx == 14 else 1.0
             t.append(cl((152 * k * hl, 66 * k * hl, 48 * k * hl)))
     tex['B'], glow['B'] = t, [False] * 1024
+    WALL_FIELDS['tints'] = tints
     t = []  # concrete: big bevelled blocks, stains
     stain = [[rnd.random() for _ in range(8)] for _ in range(8)]
     for y in range(32):
@@ -939,6 +943,7 @@ def make_wall_textures():
                 v = 112 + rnd.uniform(-7, 7) - 18 * stain[y // 4][x // 4] ** 3
             t.append(cl((v, v * 1.0, v * 1.05)))
     tex['#'], glow['#'] = t, [False] * 1024
+    WALL_FIELDS['stain'] = stain
     t, g = [], []  # tech panel: frame, ribs, glowing strip, rivets
     for y in range(32):
         for x in range(32):
@@ -975,21 +980,130 @@ def make_wall_textures():
                     c = mix(c, (64, 128, 52), clamp((s + y / 64 - 0.86) * 6, 0, 1))
             t.append(cl(c))
     tex['M'], glow['M'] = t, [False] * 1024
+    WALL_FIELDS['noise'] = noise
     return tex, glow
+
+
+def wall_level(tex, glow, side, lvl):
+    """One wall texture shaded for a side and fogged for a distance level."""
+    k = 1.0 if side == 0 else 0.72
+    return [fogged(shade(c, k if not e else 1.0), lvl, e) for c, e in zip(tex, glow)]
 
 
 def make_wall_tables():
     tex, glow = make_wall_textures()
-    tab = {}
-    for wc in tex:
-        tab[wc] = []
-        for side in (0, 1):
-            k = 1.0 if side == 0 else 0.72
-            per = []
-            for lvl in range(LEVELS):
-                per.append([fogged(shade(c, k if not e else 1.0), lvl, e) for c, e in zip(tex[wc], glow[wc])])
-            tab[wc].append(per)
-    return tab
+    return {wc: [[wall_level(tex[wc], glow[wc], side, lvl) for lvl in range(LEVELS)] for side in (0, 1)]
+            for wc in tex}
+
+
+def _field(grid, u, v):
+    """A small random field (rows of floats, wrapping) read smoothly (bilinear) at u, v in its own cells."""
+    h, w = len(grid), len(grid[0])
+    u, v = u - 0.5, v - 0.5
+    x0, y0 = math.floor(u), math.floor(v)
+    fx, fy = u - x0, v - y0
+    a, b = grid[y0 % h][x0 % w], grid[y0 % h][(x0 + 1) % w]
+    c, d = grid[(y0 + 1) % h][x0 % w], grid[(y0 + 1) % h][(x0 + 1) % w]
+    return (a * (1 - fx) + b * fx) * (1 - fy) + (c * (1 - fx) + d * fx) * fy
+
+
+FINE = (64, 128)   # close-up wall textures: the same bricks as the 32x32 ones, with finer seams, grain and moss
+
+
+def make_wall_textures_fine(R):
+    """R x R versions of the wall textures for walls seen close up (the same layout as the 32x32 ones, which
+    they share their random tints, stains and moss with): thin bevels and seams, texel grain, smooth moss."""
+    if not WALL_FIELDS:
+        make_wall_textures()
+    tints, stain, noise = WALL_FIELDS["tints"], WALL_FIELDS["stain"], WALL_FIELDS["noise"]
+    rnd = random.Random(55 + R)
+    f = R // 32
+    tex, glow = {}, {}
+
+    def cl(c):
+        return (clamp(int(c[0]), 0, 255), clamp(int(c[1]), 0, 255), clamp(int(c[2]), 0, 255))
+
+    t = []  # brick
+    for y in range(R):
+        course, by = divmod(y, 8 * f)
+        off = 8 * f if course % 2 else 0
+        for x in range(R):
+            bx = (x + off) % (16 * f)
+            if by >= 7 * f or bx >= 15 * f:
+                v = 66 + rnd.uniform(-7, 7) - (10 if by == 7 * f or bx == 15 * f else 0)
+                t.append(cl((v,) * 3))
+                continue
+            k = tints[(course * 4 + (x + off) // (16 * f)) % 64] + rnd.uniform(-0.06, 0.05)
+            hl = (1.18 if by == 0 or bx == 0 else 1.07 if by == 1 or bx == 1 else
+                  0.8 if by == 7 * f - 1 or bx == 15 * f - 1 else 1.0)
+            if rnd.random() < 0.04:
+                hl *= 0.86            # pits in the fired clay
+            t.append(cl((152 * k * hl, 66 * k * hl, 48 * k * hl)))
+    tex['B'], glow['B'] = t, [False] * (R * R)
+    t = []  # concrete: big bevelled blocks with smooth stains
+    for y in range(R):
+        for x in range(R):
+            bx, by = x % (16 * f), y % (16 * f)
+            if bx == 16 * f - 1 or by == 16 * f - 1:
+                v = 56
+            elif bx == 16 * f - 2 or by == 16 * f - 2:
+                v = 76
+            elif bx == 0 or by == 0:
+                v = 150
+            elif bx == 1 or by == 1:
+                v = 128
+            else:
+                st = _field(stain, (x + 0.5) / (4 * f), (y + 0.5) / (4 * f))
+                v = 112 + rnd.uniform(-6, 6) - 18 * st ** 3
+            t.append(cl((v, v * 1.0, v * 1.05)))
+    tex['#'], glow['#'] = t, [False] * (R * R)
+    t, g = [], []  # tech panel: frame, ribs, glowing strip, round rivets
+    for y in range(R):
+        for x in range(R):
+            ix, iy = x // f, y // f
+            u, v = (x + 0.5) / f, (y + 0.5) / f
+            e = False
+            if ix in (0, 31) or iy in (0, 31):
+                c = (28, 34, 48)
+            elif ix in (1, 30) or iy in (1, 30):
+                c = (96, 118, 150) if (x in (f, R - 1 - f) or y in (f, R - 1 - f)) else (74, 92, 120)
+            elif 13 <= iy <= 17 and 5 <= ix <= 26:
+                d = abs(v - 15.5)          # the strip glows brightest along its middle
+                c = mix((110, 236, 255), (220, 252, 255), max(0.0, 1 - d)) if iy in (14, 15, 16) else (40, 120, 150)
+                e = iy in (14, 15, 16)
+            else:
+                c = (60, 76, 104)
+                if iy % 4 == 0 and (iy < 12 or iy > 19):
+                    c = (44, 56, 78) if y % f == 0 else (70, 88, 118)   # a rib: groove and its lit lip
+                for rx, ry in ((4.5, 4.5), (27.5, 4.5), (4.5, 27.5), (27.5, 27.5)):
+                    dd = math.hypot(u - rx, v - ry)
+                    if dd < 1.05:
+                        c = (214, 222, 236) if (u - rx) + (v - ry) < -0.4 else (180, 190, 210) if dd < 0.75 else (120, 128, 146)
+                c = (c[0] + rnd.uniform(-3, 3), c[1] + rnd.uniform(-3, 3), c[2] + rnd.uniform(-3, 3))
+            t.append(cl(c))
+            g.append(e)
+    tex['T'], glow['T'] = t, g
+    t = []  # mossy stone: irregular blocks, moss creeping up from below (smooth edges, speckled growth)
+    blurred = [[sum(noise[(y + j) % 32][(x + i) % 32] for i in (-2, 0, 2) for j in (-2, 0, 2)) / 9 for x in range(32)]
+               for y in range(32)]
+    for y in range(R):
+        row = y // (10 * f)
+        for x in range(R):
+            bx = (x + row * 7 * f) % (13 * f)
+            if y % (10 * f) >= 9 * f or bx >= 12 * f:
+                c = (40 + rnd.uniform(-4, 4), 42, 38)
+            else:
+                s_ = _field(blurred, (x + 0.5) / f, (y + 0.5) / f)
+                v = 84 + s_ * 50 + rnd.uniform(-5, 5)
+                if y % (10 * f) == 0 or bx == 0:
+                    v += 12
+                c = (v, v * 0.98, v * 0.88)
+                m = s_ + (y + 0.5) / f / 64 + rnd.uniform(-0.03, 0.03)
+                if m > 0.86:
+                    c = mix(c, (64, 128, 52), clamp((m - 0.86) * 6, 0, 1))
+            t.append(cl(c))
+    tex['M'], glow['M'] = t, [False] * (R * R)
+    return tex, glow
 
 
 def make_floor_tables():
@@ -1016,22 +1130,72 @@ def make_floor_tables():
             lamp.append((255, 238, 196) if d < 3 else (200, 180, 140) if d < 4 else c)
     FT, CT = [], []
     for lvl in range(LEVELS):
-        fl, cl_ = [], []
-        for li in range(6):
-            boost = 1.0 + li * 0.17
-            warm = li * 5
-            par = []
-            for p in (0, 1):
-                tint = 1.0 if p == 0 else 0.86
-                par.append([fogged((min(255, c[0] * boost * tint + warm), min(255, c[1] * boost * tint + warm * 0.7),
-                                    min(255, c[2] * boost * tint)), lvl) for c in floor])
-            fl.append(par)
-            cb = 1.0 + li * 0.12
-            cl_.append([[fogged(shade(c, cb), lvl) for c in ceil],
-                        [fogged(c, lvl, emissive=(c[0] > 150)) for c in lamp]])
+        fl, cl_ = floor_level(floor, ceil, lamp, lvl)
         FT.append(fl)
         CT.append(cl_)
     return FT, CT
+
+
+def floor_level(floor, ceil, lamp, lvl):
+    """Floor and ceiling texels lit for every light level and fogged for one distance level."""
+    fl, cl_ = [], []
+    for li in range(6):
+        boost = 1.0 + li * 0.17
+        warm = li * 5
+        par = []
+        for p in (0, 1):
+            tint = 1.0 if p == 0 else 0.86
+            par.append([fogged((min(255, c[0] * boost * tint + warm), min(255, c[1] * boost * tint + warm * 0.7),
+                                min(255, c[2] * boost * tint)), lvl) for c in floor])
+        fl.append(par)
+        cb = 1.0 + li * 0.12
+        cl_.append([[fogged(shade(c, cb), lvl) for c in ceil],
+                    [fogged(c, lvl, emissive=(c[0] > 150)) for c in lamp]])
+    return fl, cl_
+
+
+FLOOR_FINE = 32   # close-up floor and ceiling tiles: twice the texels, thin seams, round bolts and lamps
+
+
+def make_floor_textures_fine():
+    rnd = random.Random(19)
+    R, f = FLOOR_FINE, FLOOR_FINE // 16
+    floor, ceil, lamp = [], [], []
+    for y in range(R):
+        for x in range(R):
+            u, v = (x + 0.5) / f, (y + 0.5) / f
+            bx, by = (4.5 if u < 8.5 else 12.5), (4.5 if v < 8.5 else 12.5)
+            bolt = math.hypot(u - bx, v - by)
+            if x == 0 or y == 0:
+                c = (36, 37, 42)
+            elif x == 1 or y == 1:
+                c = (52, 54, 60)
+            elif x in (2, 3) or y in (2, 3):
+                c = (82, 84, 92) if x == 2 or y == 2 else (70, 72, 79)
+            elif bolt < 0.62:
+                c = (156, 158, 166) if (u - bx) + (v - by) < -0.2 else (120, 122, 130)
+            elif bolt < 0.9 and v > by:
+                c = (44, 45, 50)
+            elif (x + y) % (6 * f) == 0:
+                c = (66, 68, 74)
+            elif (x + y) % (6 * f) == 1:
+                c = (62, 64, 70)
+            else:
+                w = 58 + rnd.uniform(-4, 4) + (3 if rnd.random() < 0.05 else 0)
+                c = (w, w + 1, w + 6)
+            floor.append(c)
+            if x == 0 or y == 0:
+                cc = (24, 25, 32)
+            else:
+                cc = (36, 38, 48) if (x // (4 * f) + y // (4 * f)) % 2 else (32, 34, 43)
+                if x % (4 * f) == 0 or y % (4 * f) == 0:
+                    cc = (cc[0] - 3, cc[1] - 3, cc[2] - 3)      # the panels' faint seams
+            ceil.append(cc)
+            dx, dy = abs(u - 8.0), abs(v - 8.0)
+            d = (dx ** 4 + dy ** 4) ** 0.25                        # a rounded square
+            lamp.append((255, 244, 214) if d < 2.2 else (255, 238, 196) if d < 3 else
+                        (200, 180, 140) if d < 3.6 else (120, 110, 96) if d < 4 else cc)
+    return floor, ceil, lamp
 
 
 # Pixel sprites. Letters pick colours from the bot's palette; '.' is transparent. An outline is added
@@ -1176,15 +1340,60 @@ SPRITE_FOG, SPRITE_FLOOR = 0.45, 0.62   # bots and pickups take less distance fo
 EMISSIVE = set("eWfF")
 
 
-def build_sprite(rows, pal, outline=True, flash=None):
-    """Rows of palette letters -> grid of (colour, emissive) or None, with outline and shading."""
+try:   # pixel art at any size (Scale2x / EPX), shared with the collection
+    from arcadekit import scale_art
+except ImportError:   # BLOCKFIRE on its own: a small copy
+    def _scale2x(g):
+        h, w = len(g), len(g[0])
+        out = []
+        for y in range(h):
+            row, up, dn = g[y], g[max(0, y - 1)], g[min(h - 1, y + 1)]
+            r0, r1 = [], []
+            for x in range(w):
+                p, a, d = row[x], up[x], dn[x]
+                c, b = row[max(0, x - 1)], row[min(w - 1, x + 1)]
+                if c != b and a != d:
+                    r0 += [c if c == a else p, b if a == b else p]
+                    r1 += [c if d == c else p, b if b == d else p]
+                else:
+                    r0 += [p, p]
+                    r1 += [p, p]
+            out += [r0, r1]
+        return out
+
+    def scale_art(grid, ow, oh):
+        g = [list(r) for r in grid]
+        h, w = len(g), len(g[0]) if g else 0
+        while w and h and (w < ow or h < oh) and w * h < 1 << 16:
+            g = _scale2x(g)
+            h, w = len(g), len(g[0])
+        return [[g[min(h - 1, int((y + 0.5) * h / oh))][min(w - 1, int((x + 0.5) * w / ow))] for x in range(ow)]
+                for y in range(oh)]
+
+
+def build_sprite(rows, pal, outline=True, flash=None, k=1):
+    """Rows of palette letters -> grid of (colour, emissive) or None, with outline and shading.
+    k > 1 builds the same sprite k times finer for a close-up: the letters are smoothed (Scale2x), then shaded
+    and outlined at that size, so edges and diagonals stay crisp and the outline stays one pixel thin."""
     w = max(len(r) for r in rows)
     rows = [r.ljust(w, ".") for r in rows]
     h = len(rows)
     W, H = w + 2, h + 2
+    if k > 1:
+        letters = scale_art([["."] * W] + [["."] + list(r) + ["."] for r in rows] + [["."] * W], W * k, H * k)
+        W, H = W * k, H * k
+    else:
+        letters = None
     grid = [[None] * W for _ in range(H)]
-    for y, r in enumerate(rows):
-        for x, ch in enumerate(r):
+    for Y in range(H):
+        for X in range(W):
+            if letters is None:
+                if not (0 < Y <= h and 0 < X <= w):
+                    continue
+                y, x, ch = Y - 1, X - 1, rows[Y - 1][X - 1]
+            else:
+                ch = letters[Y][X]
+                y, x = (Y + 0.5) / k - 1.5, (X + 0.5) / k - 1.5     # the matching spot in the 1x art
             if ch == ".":
                 continue
             if flash and ch in flash:
@@ -1192,9 +1401,9 @@ def build_sprite(rows, pal, outline=True, flash=None):
             else:
                 c, e = pal[ch], ch in EMISSIVE
             if not e:
-                k = 1.18 - 0.42 * y / h + (0.08 if x < w * 0.4 else -0.06 if x > w * 0.7 else 0)
-                c = shade(c, k)
-            grid[y + 1][x + 1] = (c, e)
+                kk = 1.18 - 0.42 * y / h + (0.08 if x < w * 0.4 else -0.06 if x > w * 0.7 else 0)
+                c = shade(c, kk)
+            grid[Y][X] = (c, e)
     if outline:
         for y in range(H):
             for x in range(W):
@@ -1206,33 +1415,51 @@ def build_sprite(rows, pal, outline=True, flash=None):
 
 
 class SpriteBank:
-    """Sprites per bot kind and pose, fogged per distance level on demand (cached)."""
+    """Sprites per bot kind and pose, fogged per distance level on demand (cached). A sprite seen up close is
+    built finer (k times its art's resolution), so a big window shows smooth bots instead of fat blocks."""
 
     def __init__(self):
         fl = {"F": (255, 240, 150), "f": (255, 240, 150), "g": (255, 190, 80)}
-        self.base = {
-            ("drone", 0): build_sprite(DRONE, PALETTES["drone"]),
-            ("drone", 1): build_sprite(DRONE, dict(PALETTES["drone"], f=(200, 250, 255))),
-            ("drone", "fire"): build_sprite(DRONE, dict(PALETTES["drone"], e=(255, 230, 150), W=(255, 255, 255))),
-            ("drone", "dead"): build_sprite(WRECK, PALETTES["drone"]),
+        self.recipe = {   # key -> build_sprite arguments
+            ("drone", 0): (DRONE, PALETTES["drone"], None),
+            ("drone", 1): (DRONE, dict(PALETTES["drone"], f=(200, 250, 255)), None),
+            ("drone", "fire"): (DRONE, dict(PALETTES["drone"], e=(255, 230, 150), W=(255, 255, 255)), None),
+            ("drone", "dead"): (WRECK, PALETTES["drone"], None),
         }
         for kind, top, legs in (("sentinel", SENT_TOP, SENT_LEGS), ("brute", BRUTE_TOP, BRUTE_LEGS)):
             pal = PALETTES[kind]
-            self.base[(kind, 0)] = build_sprite(top + legs[0], pal)
-            self.base[(kind, 1)] = build_sprite(top + legs[1], pal)
-            self.base[(kind, "fire")] = build_sprite(top + legs[0], pal, flash={"F": fl["F"], "f": fl["f"]})
-            self.base[(kind, "dead")] = build_sprite(WRECK, pal)
-        self.base[("h", 0)] = build_sprite(HEALTH, PALETTES["h"])
-        self.base[("a", 0)] = build_sprite(AMMO, PALETTES["a"])
+            self.recipe[(kind, 0)] = (top + legs[0], pal, None)
+            self.recipe[(kind, 1)] = (top + legs[1], pal, None)
+            self.recipe[(kind, "fire")] = (top + legs[0], pal, {"F": fl["F"], "f": fl["f"]})
+            self.recipe[(kind, "dead")] = (WRECK, pal, None)
+        self.recipe[("h", 0)] = (HEALTH, PALETTES["h"], None)
+        self.recipe[("a", 0)] = (AMMO, PALETTES["a"], None)
+        self.base = {(key, 1): build_sprite(r, pal, flash=f) for key, (r, pal, f) in self.recipe.items()}
         self.gun = build_sprite(GUN, PALETTES["gun"])
+        self.guns = {1: self.gun}
         self.cache = {}
 
-    def get(self, key, lvl, hit=False):
-        ck = (key, lvl, hit)
+    def fine(self, key, h):
+        """How much finer than its art a sprite drawn h pixels high is built: never finer than the screen."""
+        gh = len(self.base[(key, 1)])
+        return 1 if h < 2 * gh else min(8, int(h / gh))
+
+    def gun_at(self, k):
+        g = self.guns.get(k)
+        if g is None:
+            g = self.guns[k] = build_sprite(GUN, PALETTES["gun"], k=k)
+        return g
+
+    def get(self, key, lvl, hit=False, k=1):
+        ck = (key, lvl, hit, k)
         s = self.cache.get(ck)
         if s is None:
+            base = self.base.get((key, k))
+            if base is None:
+                r, pal, f = self.recipe[key]
+                base = self.base[(key, k)] = build_sprite(r, pal, flash=f, k=k)
             s = []
-            for row in self.base[key]:
+            for row in base:
                 out = []
                 for px in row:
                     if px is None:
@@ -1438,6 +1665,8 @@ class Renderer:
         self.g = game
         self.walls = make_wall_tables()
         self.FT, self.CT = make_floor_tables()
+        self.fine_tex, self.fine_floor = {}, None   # close-up textures, made the first time they are needed
+        self.fine_walls, self.fine_levels = {}, {}
         self.sprites = SpriteBank()
         self.true = os.environ.get("COLORTERM", "").lower() in ("truecolor", "24bit")
         self.fgc, self.bgc = {}, {}
@@ -1520,6 +1749,24 @@ class Renderer:
         if self.pops:
             self.pops = [p for p in self.pops if self.t - p[2] < 1.0]
 
+    def fine_wall(self, R, wc, side, lvl):
+        tab = self.fine_walls.get((R, wc, side, lvl))
+        if tab is None:
+            tg = self.fine_tex.get(R)
+            if tg is None:
+                tg = self.fine_tex[R] = make_wall_textures_fine(R)
+            tex, glow = tg
+            tab = self.fine_walls[(R, wc, side, lvl)] = wall_level(tex[wc], glow[wc], side, lvl)
+        return tab
+
+    def fine_floor_level(self, lvl):
+        ftc = self.fine_levels.get(lvl)
+        if ftc is None:
+            if self.fine_floor is None:
+                self.fine_floor = make_floor_textures_fine()
+            ftc = self.fine_levels[lvl] = floor_level(*self.fine_floor, lvl)
+        return ftc
+
     # --- the 3D view -------------------------------------------------------------------------------------
     def view(self, PW, PH, cam=None, dim=1.0):
         """Raycast into a row-major pixel buffer. Returns (buf, zbuf, projection helpers)."""
@@ -1550,13 +1797,20 @@ class Renderer:
             b0 = min(PH, int(mid + lh * 0.5 + 0.5))
             ybot[c] = b0
             lvl = int(perp * LVL_PER_UNIT) - boost
-            tab = walls[wc][side][0 if lvl < 0 else LEVELS - 1 if lvl >= LEVELS else lvl]
-            tx = int(wx * 32) & 31
-            scale = 32.0 / lh
+            lvl = 0 if lvl < 0 else LEVELS - 1 if lvl >= LEVELS else lvl
+            if lh >= FINE[0]:   # close up: a fine texture, so a big window shows grain instead of fat texels
+                R = FINE[1] if lh >= FINE[1] else FINE[0]
+                tab = self.fine_wall(R, wc, side, lvl)
+            else:
+                R = 32
+                tab = walls[wc][side][lvl]
+            R1 = R - 1
+            tx = int(wx * R) & R1
+            scale = R / lh
             ty0 = (t0 + 0.5 - top) * scale
             for r in range(t0, b0):
                 ty = int(ty0)
-                buf[r][c] = tab[(31 if ty > 31 else ty) * 32 + tx]
+                buf[r][c] = tab[(R1 if ty > R1 else ty) * R + tx]
                 ty0 += scale
         # floor and ceiling, row by row, only where no wall covers them
         FT, CT, LG, LAMP = self.FT, self.CT, self.light, self.lamp
@@ -1568,7 +1822,11 @@ class Renderer:
             rd = K * 0.5 / (y + 0.5 - mid)
             lvl = int(rd * LVL_PER_UNIT) - boost
             lvl = 0 if lvl < 0 else LEVELS - 1 if lvl >= LEVELS else lvl
-            ft, ct = FT[lvl], CT[lvl]
+            if rd * FLOOR_FINE <= K:   # a texel at least a pixel wide: the fine floor and ceiling
+                R, ft, ct = FLOOR_FINE, *self.fine_floor_level(lvl)
+            else:
+                R, ft, ct = 16, FT[lvl], CT[lvl]
+            R1 = R - 1
             fx, fy = px + rd * rdx0, py + rd * rdy0
             sx, sy = rd * (rdx1 - rdx0) / PW, rd * (rdy1 - rdy0) / PW
             row = buf[y]
@@ -1578,7 +1836,7 @@ class Renderer:
                 if y >= ybot[c]:
                     lx, ly = int(fx * 4), int(fy * 4)
                     li = LG[(ly % H4) * W4 + lx % W4]
-                    idx = (int(fy * 16) & 15) * 16 + (int(fx * 16) & 15)
+                    idx = (int(fy * R) & R1) * R + (int(fx * R) & R1)
                     cx, cy = lx >> 2, ly >> 2
                     row[c] = ft[li][(cx + cy) & 1][idx]
                     if yc < PH - ybot[c]:
@@ -1650,11 +1908,12 @@ class Renderer:
                     size *= 0.62
                     lift = 0.28 + 0.05 * math.sin(self.t * 4 + o.x * 3)
                     key = (o.kind, "fire") if o.flash > 0 else (o.kind, int(self.t * 12) % 2)
-                grid = bank.get(key, lvl, o.alive and o.hit > 0)
+                grid = bank.get(key, lvl, o.alive and o.hit > 0, bank.fine(key, K * size / tY))
             else:
                 size = 0.26
                 lift = 0.08 + 0.04 * math.sin(self.t * 3 + o["x"])
-                grid = bank.get((o["kind"], 0), lvl)
+                key = (o["kind"], 0)
+                grid = bank.get(key, lvl, False, bank.fine(key, K * size / tY))
             gh, gw = len(grid), len(grid[0])
             h = K * size / tY
             w = h * gw / gh
@@ -1709,24 +1968,28 @@ class Renderer:
             energy = (90, 230, 255)
         else:  # empty: the cells blink red
             energy = (255, 80, 60) if int(self.t * 3) % 2 else (90, 30, 30)
-        for y in range(gh):
-            for x in range(gw):
-                px = grid[y][x]
+        fine = self.sprites.gun_at(S)          # drawn at the screen's resolution, not as S x S blocks
+        warm = {}
+        for y, frow in enumerate(fine):
+            r = gy0 + y
+            if not 0 <= r < PH:
+                continue
+            row = buf[r]
+            for x, px in enumerate(frow):
                 if px is None:
+                    continue
+                cc = gx0 + x
+                if not 0 <= cc < PW:
                     continue
                 c, e = px
                 if e:
                     c = energy
                 if g.muzzle > 0 and c != OUTLINE:
-                    c = mix(c, (255, 220, 160), 0.25)
-                for yy in range(S):
-                    r = gy0 + y * S + yy
-                    if 0 <= r < PH:
-                        row = buf[r]
-                        for xx in range(S):
-                            cc = gx0 + x * S + xx
-                            if 0 <= cc < PW:
-                                row[cc] = c
+                    w = warm.get(c)
+                    if w is None:
+                        w = warm[c] = mix(c, (255, 220, 160), 0.25)
+                    c = w
+                row[cc] = c
         if g.muzzle > 0:  # muzzle flash: a hot core with spikes
             mx, my = gx0 + (gw // 2) * S, gy0 + S * 2
             R = 4 * S

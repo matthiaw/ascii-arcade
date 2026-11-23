@@ -545,6 +545,53 @@ def draw_well(cv, v):
     cv.frame(int(r[0][0]) - 1, int(r[0][1]) - 1, int(r[2][0] - r[0][0]) + 3, int(r[2][1] - r[0][1]) + 3, (66, 76, 120))
 
 
+def face_detail(cv, q, col):
+    """A cube top seen from above is an upright rectangle on screen. When it is big enough (a large window),
+    give it an inner bevel, a soft falloff and a glint, so a big window shows finer cubes, not flat slabs.
+    Small faces stay exactly as they were."""
+    x0, y0 = int(round(q[0][0])), int(round(q[0][1]))
+    x1, y1 = int(round(q[2][0])), int(round(q[2][1]))
+    w, h = x1 - x0, y1 - y0
+    if q[2][0] - q[0][0] < 10 or w < 8 or h < 8:   # decided on the exact size, so a whole layer agrees
+        return
+    b = 2 if w >= 24 else 1
+    px, W, H = cv.px, cv.W, cv.H
+    lo_y, hi_y = max(0, y0 + 1), min(H, y1)
+    lo_x, hi_x = max(0, x0 + 1), min(W, x1)
+    if hi_x <= lo_x:
+        return
+    hi, hi2, dk = shade(col, 1.22), shade(col, 1.1), shade(col, 0.82)
+    span = max(1, (w + h - 4 * b - 2))
+    for y in range(lo_y, hi_y):
+        u, d = y - y0, y1 - y
+        row = px[y]
+        if u <= b:
+            row[lo_x:hi_x] = [hi if u == 1 else hi2] * (hi_x - lo_x)
+            continue
+        if d <= b:
+            row[lo_x:hi_x] = [dk] * (hi_x - lo_x)
+            continue
+        # the face: a gentle diagonal falloff away from the lit corner, in four steps (cheap, no banding noise)
+        for x in range(lo_x, hi_x):
+            l, r = x - x0, x1 - x
+            if l <= b:
+                row[x] = hi if l == 1 else hi2
+            elif r <= b:
+                row[x] = dk
+            else:
+                f = (u + l - 2 * b - 2) / span
+                row[x] = shade(col, 1.06 - 0.12 * f)
+    g = shade(col, 1.5)
+    gl = max(2, w // 5)
+    if b + 1 < h:
+        for i in range(gl):
+            xx, yy = x0 + b + 1 + i, y0 + b + 1
+            if 0 <= yy < H and 0 <= xx < W:
+                px[yy][xx] = g if i < gl - 1 else mix(g, px[yy][xx], 0.5)
+        if 0 <= y0 + b + 2 < H and 0 <= x0 + b + 1 < W:
+            px[y0 + b + 2][x0 + b + 1] = mix(g, px[y0 + b + 2][x0 + b + 1], 0.5)
+
+
 def draw_cubes(cv, v, flash=()):
     g = v.g
     W, H, D, cell = g.W, g.H, g.D, g.cell
@@ -571,6 +618,7 @@ def draw_cubes(cv, v, flash=()):
             if z == 0 or not cell[z - 1][y][x]:
                 q = [p(x, y, z), p(x + 1, y, z), p(x + 1, y + 1, z), p(x, y + 1, z)]
                 cv.poly(q, top)
+                face_detail(cv, q, top)
                 for i in range(4):
                     cv.line(*q[i], *q[(i + 1) % 4], edge)
 
@@ -624,6 +672,7 @@ def solid_piece(cv, v, cubes, g):
         if (x, y, z - 1) not in occupied:
             q = [p(x, y, z), p(x + 1, y, z), p(x + 1, y + 1, z), p(x, y + 1, z)]
             cv.poly(q, base)
+            face_detail(cv, q, base)
             for i in range(4):
                 cv.line(*q[i], *q[(i + 1) % 4], (255, 255, 255))
 

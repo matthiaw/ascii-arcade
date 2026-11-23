@@ -584,6 +584,45 @@ def overlay(cv, lines, fg=(240, 240, 246), bg=(22, 22, 42)):
 # Auto mode: the game plays itself (every game has it on its title screen); the viewer can pause, change the
 # speed or stop. High scores are never recorded in auto mode.
 # =============================================================================================
+# Pixel art at any size: a bigger window gets finer art, not just bigger blocks
+# =============================================================================================
+def scale2x(grid):
+    """One Scale2x (EPX) step on a grid of any comparable cells (letters, colours, None): edges and diagonals
+    come out smooth instead of as staircases of fat blocks."""
+    h, w = len(grid), len(grid[0]) if grid else 0
+    out = []
+    for y in range(h):
+        row, up, dn = grid[y], grid[y - 1] if y > 0 else grid[y], grid[y + 1] if y < h - 1 else grid[y]
+        r0, r1 = [], []
+        for x in range(w):
+            p = row[x]
+            a, d = up[x], dn[x]
+            c = row[x - 1] if x > 0 else p
+            b = row[x + 1] if x < w - 1 else p
+            if c != b and a != d:
+                r0 += [c if c == a else p, b if a == b else p]
+                r1 += [c if d == c else p, b if b == d else p]
+            else:
+                r0 += [p, p]
+                r1 += [p, p]
+        out.append(r0)
+        out.append(r1)
+    return out
+
+
+def scale_art(grid, ow, oh):
+    """Pixel art (rows of cells) resized to ow x oh: smoothed with Scale2x as often as it takes to reach the
+    size, then sampled down. Below the source size it is a plain nearest-neighbour sample."""
+    g = [list(r) for r in grid]
+    h, w = len(g), len(g[0]) if g else 0
+    while w and h and (w < ow or h < oh) and w * h < 1 << 16:
+        g = scale2x(g)
+        h, w = len(g), len(g[0])
+    return [[g[min(h - 1, int((y + 0.5) * h / oh))][min(w - 1, int((x + 0.5) * w / ow))] for x in range(ow)]
+            for y in range(oh)]
+
+
+# =============================================================================================
 AUTO_LABEL = "Auto mode"          # the title-menu entry, the same wording in every game
 AUTO_BG = (236, 180, 70)
 AUTO_HELP = ["AUTO MODE - the game plays itself", "", "Space            pause / continue", "+ / -            faster / slower",

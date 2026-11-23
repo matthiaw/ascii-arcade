@@ -21,12 +21,14 @@ import sys
 import time
 
 from arcadekit import (AUTO_LABEL, PAUSE_LINES, AutoMode, Canvas, HeldKeys, KeyTerminal, clamp, load_scores, mix,
-                       overlay, shade, shared_key, submit, title_screen)
+                       overlay, scale_art, shade, shared_key, submit, title_screen)
 from arcadesound import Sound
 
 GAME = "voidlance"
 DT = 1 / 60                  # fixed simulation step
 FW, FH = 112, 64             # the logical play field; the window only changes how big it is drawn
+HI_S = 1.25                  # from this field scale on, everything is drawn finer (sprites, walls, shots)
+HI_ART = 1.7                 # from this scale on, sprites are built from their double-resolution art (see HI_ART_ROWS)
 MIN_COLS, MIN_ROWS = 70, 22
 TAU = math.pi * 2
 DIFFS = ["easy", "normal", "hard"]
@@ -58,7 +60,7 @@ FIX.update(j=TONES["b"][0], u=TONES["g"][0])       # forced light: the ship's li
 
 class Spr:
     """A pixel-art sprite; shaded, scaled and outlined copies are cached as horizontal runs for fast drawing."""
-    __slots__ = ("rows", "w", "h", "cache", "rnd")
+    __slots__ = ("rows", "w", "h", "cache", "rnd", "hi")
 
     def __init__(self, rows, rnd=0.5):
         self.w = max(len(r) for r in rows)
@@ -66,6 +68,7 @@ class Spr:
         self.h = len(rows)
         self.cache = {}
         self.rnd = rnd                  # how strongly the body darkens from the top left to the bottom right
+        self.hi = None                  # the same sprite drawn at twice the resolution (a Spr), for big windows
 
     def runs(self, s, flash=False, fh=False, fv=False):
         key = (int(s * 16 + 0.5), flash, fh, fv)
@@ -74,12 +77,17 @@ class Spr:
             r = self.cache[key] = self.build(key[0] / 16, flash, fh, fv)
         return r
 
-    def colours(self, fh, fv):
-        """Colour per source pixel after flipping, so the light always comes from the top left."""
+    def colours(self, fh, fv, size=None):
+        """Colour per pixel after flipping, so the light always comes from the top left. With a size the art is
+        first smoothed up to it (a bigger window gets finer art) and lit there, so edges and highlights stay
+        one pixel thin instead of growing into blocks."""
         grid = self.rows[::-1] if fv else self.rows
         if fh:
             grid = [r[::-1] for r in grid]
         w, h = self.w, self.h
+        if size is not None:
+            w, h = size
+            grid = ["".join(r) for r in scale_art(grid, w, h)]
 
         def op(x, y):
             return 1 if x < 0 or y < 0 or x >= w or y >= h or grid[y][x] in ".kx" else 0
@@ -108,10 +116,47 @@ class Spr:
             out.append(row)
         return out
 
+    def hires(self, fh, fv, ow, oh, s):
+        """The art for a big window: the shaded pixel art (with all its details) smoothed up with Scale2x, then lit
+        per screen pixel from a softened silhouette - a rounded, lit-from-the-top-left body instead of flat blocks."""
+        up = scale_art(self.colours(fh, fv), ow, oh)
+        r = max(1, int(s * 0.9 + 0.5))
+        m = [[0.0 if c is None else 1.0 for c in row] for row in up]
+        for _ in range(2):                                   # two box blurs ~ a soft round falloff
+            m = [[sum(row[max(0, x - r):x + r + 1]) / (2 * r + 1) for x in range(ow)] for row in m]
+            m = [[sum(m[yy][x] for yy in range(max(0, y - r), min(oh, y + r + 1))) / (2 * r + 1) for x in range(ow)]
+                 for y in range(oh)]
+        hi, lo = (255, 250, 236), (14, 8, 30)
+        out = []
+        for y in range(oh):
+            row, mr = up[y], m[y]
+            mu, md = m[y - 1] if y > 0 else mr, m[y + 1] if y < oh - 1 else mr
+            line = []
+            for x in range(ow):
+                c = row[x]
+                if c is None:
+                    line.append(None)
+                    continue
+                gx = (mr[x + 1] if x < ow - 1 else 0.0) - (mr[x - 1] if x > 0 else 0.0)
+                gy = md[x] - mu[x]
+                k = (gx + gy) * 1.6 * r + 0.10 - 0.22 * y / oh     # facing the light: brighter, away: darker
+                k = max(-0.45, min(0.45, k))
+                line.append(mix(c, hi, k * 0.7) if k > 0 else mix(c, lo, -k))
+            out.append(line)
+        return out
+
     def build(self, s, flash, fh, fv):
+        if self.hi is not None and s >= HI_ART:
+            # a big window: the double-resolution art at half the scale - real detail (glass, seams, eyes) instead of
+            # smoothed-up blocks; just below 1:1 it is drawn unscaled (like View.spr) rather than losing rows
+            return self.hi.build(max(1.0, s / 2), flash, fh, fv)
         w, h = self.w, self.h
-        src = self.colours(fh, fv)
         ow, oh = max(1, int(w * s + 0.5)), max(1, int(h * s + 0.5))
+        if s >= 1.25:                    # big: smooth the shaded art up, then give it real volume at full size
+            src = self.hires(fh, fv, ow, oh, s)
+            w, h = ow, oh
+        else:
+            src = self.colours(fh, fv)
         img = [[None] * (ow + 2) for _ in range(oh + 2)]
         for oy in range(oh):
             row = src[min(h - 1, int((oy + 0.5) * h / oh))]
@@ -357,6 +402,499 @@ def help_lines(kitty):
             "Never touch the walls."]
 
 SPR["plate"] = [S(".gggg.", "gxggxg", "gggggg", "gggggg", "gxggxg", ".gggg.")]
+
+# --- hi-res art begin
+# Double-resolution art for big windows (HI_ART): the same sprites with twice the pixels each way, same letters,
+# so they read as the same objects with real detail - canopy glass and glints, panel seams, rivets, nozzles,
+# eyes with catchlights. One grid per animation frame, in the order of SPR.
+HI_ART_ROWS = {
+    "ship": [
+        [
+            "....uud.........................", "...uujdd........................", "...ujjjbd.......................",
+            "..ujjjjjbd......................", "edujjjjjjjjjjjjjjud.............", "efdjjjjjjjjjjjjjjjjdssd.........",
+            "eedbbbbbbbBbbbbbbbbdswwiiid.....", "efdbbbbbbbBbbbbbbbbdwiiiiIIddd..", "eedbbbbbbbBbbubbbbbubbbbbbbbbbuw",
+            "efdbbbbbbbBbbbbbbbbbbbbbbbbbbuww", "eedBbbbbbbBbbbbbbbbbbbbbbbBBBdd.", ".ddBBbbbbbbbbbbbbbbbbbbbBBBd....",
+            "..ddBBBBBBrrrrBBdd..............", "...dBBBBBBrrrBBd................", "....dBBBBBBdd...................",
+            ".....dBBBBd.....................",
+        ],
+    ],
+    "darter": [
+        [
+            "........rrrd....", ".......rrrrrd...", ".....rrrrrrrdd..", "...rrrrrrrrrrrdd", ".wsirrrrrrrrxxef",
+            "wwiIrrrrrrrrxxef", "...RrrrrrrrrrrdD", ".....rrrrrrrdd..", ".......rrrrrd...", "........rrrd....",
+        ],
+        [
+            "......rrrd......", ".....rrrrd......", "...rrrrrrrrrrdd.", "..rrrrrrrrrrrrdd", ".wsirrrrrrrrxxee",
+            "wwiIrrrrrrrrxxef", "..RrrrrrrrrrrrdD", "...rrrrrrrrrrdd.", ".....rrrrd......", "......rrrd......",
+        ],
+    ],
+    "scrapper": [
+        [
+            "....dgguuugggdd...", "...dggggggggggdd..", "..gnnnnnnnnnnnnd..", ".gnnnunnnnnnunnnd.",
+            "gnnnnnnnnnnnxnnndd", "gnnxkkkxnnnnxnnnnd", "gnnkwqqknnnnxnnnnd", "gnnkqeqknnnnxnnnnd",
+            "gnnxkkkxnnnnxxxxxd", "gnnnnnnnnnnnnunndd", "..dnnnnnnnnnnnnd..", "..dNnunnnnnnunNd..",
+            "....ddddddddddd...", ".....dxdxdxdxd....",
+        ],
+        [
+            "....dgguuugggdd...", "...dggggggggggdd..", "..gnnnnnnnnnnnnd..", ".gnnnunnnnnnunnnd.",
+            "gnnnnnnnnnxnnnnndd", "gnnxkkkxnnxnnnnnnd", "gnnkwqqknnxxxxxxnd", "gnnkqeqknnnnnnnnnd",
+            "gnnxkkkxnnnnnunnnd", "gnnnnnnnnnnnnnnndd", "..dnnnnnnnnnnnnd..", "..dNnunnnnnnunNd..",
+            "....ddddddddddd...", ".....dxdxdxdxd....",
+        ],
+    ],
+    "turret": [
+        [
+            "....guuuggdd....", "...gggggggggd...", "..ggggxkkkxggd..", "..gggkwqqekggdd.", "gggggxkkkkxggggd",
+            "gugggggggggggugd", "dxxdxxdxxdxxdxdd", "dxxdxxdxxdxxdxdd", "dddddddddddddddd", "DDDDDDDDDDDDDDDD",
+        ],
+    ],
+    "strider": [
+        [
+            "....guuuggggd.....", "...gggggggggggd...", "..gkkkkggggxgggggd", ".ggkwyekgggxggggdd",
+            "qqgkkkkggggxggggdd", "qqgguggggggxgguddd", "..dggggggxgggggdd.", "...dddxxxxxxddd...",
+            "....ggd.....ggd...", "...ggd......ggd...", "..ggd.........gd..", ".ggd..........ggd.",
+            "gggdd.........gggd", "ddddd.........dddd",
+        ],
+        [
+            "....guuuggggd.....", "...gggggggggggd...", "..gkkkkggggxgggggd", ".ggkwyekgggxggggdd",
+            "qqgkkkkggggxggggdd", "qqgguggggggxgguddd", "..dggggggxgggggdd.", "...dddxxxxxxddd...",
+            ".....ggd..ggd.....", "......gd..gd......", "......gd..gd......", "......gd..gd......",
+            ".....gggd.gggd....", "....ddddd.dddd....",
+        ],
+    ],
+    "spinner": [
+        [
+            "........vV........", "........vV........", ".......vvVV.......", "......vvvvVV......",
+            ".....vvvswwVV.....", "....vvvswwwwVV....", "vvvvvvvwweewwVVVVV", "vvvvvvvwweewwVVVVV",
+            "....vvvwwwwVVV....", ".....vvvwwVVV.....", "......vvVVVV......", ".......vVVV.......",
+            "........vV........", "........VV........",
+        ],
+        [
+            "vv..............VV", "vvv............vVV", ".vvv..........vVV.", "..vvvv......vvVV..",
+            "...vvvvswwvvVVV...", ".....vvswwwwVV....", "......wweeww......", "......wweeww......",
+            ".....vvwwwwVV.....", "...vvvvwwvVVVV....", "..vvvV......VVVV..", ".vvV..........VVV.",
+            "vVV............VVV", "VV..............VV",
+        ],
+    ],
+    "polyp": [
+        [
+            "....hp..hp..hp....", "....pp..pp..pp....", "....pppppppppp....", "...pppppppppppp...",
+            "..pphhppppppppppdd", ".ppphpppppppppppdd", "pppppppkwekppppppP", "pppppppkeekpppppPP",
+            "pppppppppppppppPPP", "pppppppppppppPPPPP", "nnxxnnxxnnxxnnxxnn", "NxxNNxxNNxxNNxxNNN",
+        ],
+        [
+            "..hp....hp....hp..", "..ppp...pp...ppp..", "....pppppppppp....", "...pppppppppppp...",
+            "..pppppphhppppppdd", ".pppppphppppppppdd", "ppppkwekppppppPPPP", "ppppkeekpppppPPPPP",
+            "ppppppppppppppPPPP", "pppppppppppppPPPPP", "nnxxnnxxnnxxnnxxnn", "NxxNNxxNNxxNNxxNNN",
+        ],
+    ],
+    "spore": [
+        [
+            "..llll..", ".llllll.", "llwzllll", "lzzllLll", "lllllllL", "llLlllll", ".llllLl.", "..llll..",
+        ],
+    ],
+    "tendril": [
+        [
+            "....pppppp....", "...pphppppp...", "..pphppppppp..", "..pppppppppp..", "pwskkppppppppp", "psskkppppppppp",
+            "ppppppppppppPP", "pppppppppppPPP", "..ppppppppPP..", "..pppppppPPP..", "....PPPPPP....", "....PPPPPP....",
+        ],
+    ],
+    "tseg": [
+        [
+            "..pppppp..", ".phhppppp.", "phpppppppp", "pppppppppp", "pppphppppp", "pppppppppP", "pphppppphP",
+            "pppppppPPP", ".ppppppPP.", "..pppppp..",
+        ],
+    ],
+    "blister": [
+        [
+            "....pppppppp....", "...pppppppppp...", "..ppwhhppppppp..", ".ppwhhhpppppppp.", "pphhhppppppppppp",
+            "pphpppppppppPppp", "ppPppppppPpppppp", "pppppppppppppppp", "PPPPPPPPPPPPPPPP", "PPPPPPPPPPPPPPPP",
+        ],
+        [
+            "....pppppppp....", "...pppppppppp...", "..pppphwwppppp..", ".pppphhwwpppppp.", "pppppppppphhpppp",
+            "pppppppppphppppp", "ppPppppppPpppppp", "pppppppppppppppp", "PPPPPPPPPPPPPPPP", "PPPPPPPPPPPPPPPP",
+        ],
+    ],
+    "leech": [
+        [
+            "......llllllll..", ".....llllllllll.", "wllllllllwkllll.", "kwlllLlllkkLllll", "wllllLllllllLlll",
+            "kwlllLllllllLlll", "....LLLLLLLLLL..", "....LLLLLLLLLL..",
+        ],
+        [
+            "....llllllll....", "...llllllllll...", "wlllllllwkllllll", "kwlllLllkkLlllll", "wllllLllllLlllll",
+            "kwlllLllllLlllll", "....LLLLLLLL....", "....LLLLLLLL....",
+        ],
+    ],
+    "vent": [
+        [
+            "guggggggggggggug", "gggggggggggggggg", "xfexxfexxfexxfex", "xffxxffxxffxxffx", "gggggggggggggggg",
+            "gggggggggggggggg", "dddddddddddddddd", "DDDDDDDDDDDDDDDD",
+        ],
+    ],
+    "hook": [
+        [
+            "....ggguuggd......", "...gggggggggdd....", "..ggdd....ggdd....", ".ggdd......ggdd...",
+            "ggdd........ggdd..", "ggdd........ggdd..", "ggdd........eqdd..", "ggdd........qqd...",
+            ".ggdd.............", "..ggdd............", "...ggggdd.........", "....ggggdd........",
+            "......ggugggd.....", "......ggggggdd....",
+        ],
+    ],
+    "rivet": [
+        [
+            "......ood...", ".....ooodd..", "..oooxoooeeo", "..oooxooooeo", "wsoooxoooooo", "wwoooxoooooO",
+            "....ood.....", "....odd.....",
+        ],
+    ],
+    "cannon": [
+        [
+            "........gguuuggd........", ".......gggggggggd.......", "......gxkkkkkkkkxgd.....",
+            "......gkqwkeekqwkgd.....", "....ggggggggggggggggd...", "...ggggggggggggggggggdd.",
+            "...ggggxkkxggggggxkkxddd", ".ggggggxkkxggggggxkkxgdd", "guggggguggggguggggguggdd",
+            "gggggggggggggggggggggggd", "ddxxddxxddxxddxxddxxdddd", "ddxxddxxddxxddxxddxxdddd",
+            "dddddddddddddddddddddddd", "DDDDDDDDDDDDDDDDDDDDDDDD",
+        ],
+    ],
+    "eel": [
+        [
+            "....tttttttt....", "...tttttttttt...", "..ttkktttttttttt", "..tkwkttttxtxttt", "wkttttttxtxttttt",
+            "kwtttttttxtxtttt", "..tttttttttttttt", "..tttttttttttTTT", "....TTTTTTTT....", ".....TTTTTT.....",
+        ],
+    ],
+    "eseg": [
+        [
+            "..tttttt..", ".tttttttt.", "tttttttttt", "ttTtttTttt", "tttttttttt", "tTtttTtttT", "..TTTTTT..",
+            "..TTTTTT..",
+        ],
+    ],
+    "jelly": [
+        [
+            "....cccccccc......", "...cccccccccccc...", "..ccwsccccccccccc.", ".ccwsscccccccccccc",
+            "cccscccccccccccccC", "ccccccccccccccccCC", "ccxxccxxccxxccxxcC", "CCxxCCxxCCxxCCxxCC",
+            "..cc..cc..cc..cc..", "..c...c...c...c...", "..c....c...c...c..", ".c....c...c...c...",
+            ".c...c...c...c....", "c....c...c...c....",
+        ],
+        [
+            "....cccccccc......", "...cccccccccccc...", "..ccwsccccccccccc.", ".ccwsscccccccccccc",
+            "cccscccccccccccccC", "ccccccccccccccccCC", "ccxxccxxccxxccxxcC", "CCxxCCxxCCxxCCxxCC",
+            "..cc..cc..cc..cc..", "..c...c...c...c...", "...c...c...c...c..", "...c....c...c...c.",
+            "..c....c...c....c.", "..c...c....c...c..",
+        ],
+    ],
+    "mine": [
+        [
+            "......gu......", "......gd......", "..gu.dddd.gd..", "..gddddddddgd.", "...ddkkkkdd...", "..ddkqqqqkdd..",
+            "guddkqweqkddgd", "gdddkqeeqkDDgd", "..ddkqqqqkDD..", "...dDkkkkDD...", "..gddDDDDDDgd.", "..gd.DDDD.gd..",
+            "......gd......", "......dd......",
+        ],
+        [
+            "......gu......", "......gd......", "..gu.dddd.gd..", "..gddddddddgd.", "...ddkkkkdd...", "..ddkrrrrkdd..",
+            "guddkrqqrkddgd", "gdddkrqqrkDDgd", "..ddkrrrrkDD..", "...dDkkkkDD...", "..gddDDDDDDgd.", "..gd.DDDD.gd..",
+            "......gd......", "......dd......",
+        ],
+    ],
+    "angler": [
+        [
+            "ee......tttttttt........", "ef.....tttttttttt.......", "..x...tttttttttttt....tt",
+            "...x.ttttttttttttt...ttt", "....ttttkkkkttttttt.tttt", "...tttttkwkktttttttttttt",
+            "wtwtttttkkkktttttttttttt", "kwkwtttttttttttttttttttt", "kkkktttttttttttttttttttt",
+            "kkkktttttttttttttttttttt", "kwkwtttttttttttttt....tt", "wwwwttttttttttttt.....TT",
+            "....tttttttttttttt......", "....ttttttttttttt.......", "........TTTTTTTT........",
+            "........TTTTTTTT........",
+        ],
+    ],
+    "rockL": [
+        [
+            "..........nnnnnnnn..........", "........nnnnnnnnnnnn........", ".......nnnnnnnnnnnnnn.......",
+            ".....nnnnnnnnnnnnnnnnnn.....", ".....nnnnnNNNNnnnnnnnnn.....", "...nnnnnnNNNNNNnnnnnnnnnn...",
+            "...nnnnnNNNNNNannnnnnNnnn...", ".nnnnnnnNNNNaannnnnnnnnnnnn.", "nnnnnnnnnaaannnnnnNNNnnnnnnn",
+            "nnnnnnnnnnnnnnnnnNNNNNnnnnnn", "nnnNnnnnnnnnnnnnNNNNNannnnnn", "nnnnnnnnnnnnnnnnnNNNaannnnnn",
+            "nnnnNNNnnnnnnnnnnnaaannnnnnn", "nnnNNNNNnnnnnnnnnnnnnnnnnNnn", "nnnNNNNNannnnnnnnnnnnnnnnnnn",
+            "nnnnNNNaannnnnNnnnnnnnnnnnnn", ".nnnnaaannnnnnnnnNNNnnnnnnn.", "...nnnnnnnnnnnnnNNNNNnnnn...",
+            "...nnnnnnnnnnnnnNNNNannnn...", ".....nnnnnnNnnnnnNaannn.....", ".....nnnnnnnnnnnnnaannn.....",
+            ".......nnnnnnnnnnnnnn.......", ".........nnnnnnnnnn.........", "..........nnnnnnnn..........",
+        ],
+    ],
+    "rockM": [
+        [
+            "....nnnnnnnn....", "...nnnnnnnnnn...", "..nnnnNNNnnnnn..", ".nnnnNNNNNnnnnn.", "nnnnNNNNNannnnnn",
+            "nnnnnNNNaannnnnn", "nnnnnnaaannnnNnn", "nnnnnnnnnnnnnnnn", "nnnnnnnnnNNNnnnn", "nnNnnnnnNNNNannn",
+            ".nnnnnnnnNNaann.", "..nnnnnnnnaannn.", "...nnnnnnnnnn...", "....nnnnnnnn....",
+        ],
+    ],
+    "rockS": [
+        [
+            "..nnnnnn..", ".nnnnnnnn.", "nnnNNNnnnn", "nnnNNannnn", "nnnnaannnn", "nnnnnnnNnn", ".nnnnnnnn.",
+            "..nnnnnn..",
+        ],
+    ],
+    "comet": [
+        [
+            "....sww...cc....", "...swwws..ccc...", "..swwwwwsscc.cc.", ".swwwewwwscccccc", "sweeewwwsscccccc",
+            "swweeewwsscc.ccc", ".swwwwwwssccccc.", "..swwwwsscc.cc..", "...swwws..ccc...", "....sww...cc....",
+        ],
+    ],
+    "miner": [
+        [
+            "......yyyyyyd.....", ".....yyyyyyyyd....", "....yyyyyyyyyyd...", "....yyyyyyyyyyydd.",
+            "ug..yyyxxxxyyyyydd", "gd..yyxswiixyyyydd", "ugddyyxwiiiIxyyyff", "gdxxyyxiiiIIxyyyef",
+            "ug..yyxiiIIIxyyydd", "gd..yyyxxxxyyyyddd", "....yyyyyyyyyyydd.", ".....yyyyyyyyydd..",
+            "......YYYYYYddd...", "......YYYYYdd.....",
+        ],
+    ],
+    "crawler": [
+        [
+            "....llllllll....", "..llllllllllll..", "..llswkkllLlll..", ".lllsskkllLllll.", "llllllllllLlllll",
+            "llllllllllllllll", "dd..dd....dd..dd", "d...d.....d...d.",
+        ],
+        [
+            "....llllllll....", "..llllllllllll..", "..llswkkllLlll..", ".lllsskkllLllll.", "llllllllllLlllll",
+            "llllllllllllllll", "..dd..dddd..dd..", "...d..d..d...d..",
+        ],
+    ],
+    "drone": [
+        [
+            "sw..ws....", "sss.ss....", ".swsss....", "..ssss....", "qwyykyykyk", "qqyykyykyk", "..yykyyky.",
+            "...YkYYk..",
+        ],
+        [
+            "....ss....", "...sws....", "sswsss....", "ssssss....", "qwyykyykyk", "qqyykyykyk", "..yykyyky.",
+            "...YkYYk..",
+        ],
+    ],
+    "lancer": [
+        [
+            "......sw..............", "......ssss............", "....yyyyyyyy....ss....", "....yyyyyyyyy...sw....",
+            ".wguyyxyyxyyyyyyyyyyxf", "wwggyyxyyxyyyyyyyyyyxe", "....yyyyyyyyy...ss....", "....yyyyyyyy....ss....",
+            "......ssss............", "......ss..............",
+        ],
+        [
+            "........sw............", "........ssss..........", "....yyyyyyyy..ss......", "....yyyyyyyyy.sw......",
+            ".wguyyxyyxyyyyyyyyyyxf", "wwggyyxyyxyyyyyyyyyyxe", "....yyyyyyyyy.ss......", "....yyyyyyyy..ss......",
+            "........ssss..........", "........ss............",
+        ],
+    ],
+    "larva": [
+        [
+            "....yyyyyyYyyyyyYy..", "..yyyyyyyyYyyyyyYyyy", ".yyyyyyyyyYyyyyyYyyy", "yyyyyyyyyyYyyyyyYyyy",
+            "ywwkkyyyyyYyyyyyYyyy", "ysskkyyyyyYyyyyyYyyy", "yyyyyyyyyyYyyyyyYyyy", "yyyyyyyyyyYyyyyyYyyY",
+            "..ynnyynnyynnyynny..", "...nn..nn..nn..nn...", "NNNNNNNNNNNNNNNNNNNN", "NxNNNNxNNNNNxNNNNxNN",
+        ],
+    ],
+    "comb": [
+        [
+            "..yyyyyyyy..", ".yyyyyyyyyy.", "yyyyxxxxyyyy", "yyyxooooxyyy", "yyxoweeooxyy", "yyxoeeoooxyy",
+            "yyxoooooOxyy", "yyxooooOOxyy", "yyyxoOOOxyyy", "yyyyxxxxyyyy", ".yyyyyyyyyy.", "..yyyyyyyy..",
+        ],
+    ],
+    "shard": [
+        [
+            "......wc......", "......sc......", ".....sicc.....", "....ssiccC....", "...ssiiccCC...", "..ssiiicccCC..",
+            ".ssiiiwcccCCC.", "siiiiiwwccCCCC", ".icccccCCCCCC.", "..iccccCCCCC..", "...icccCCCC...", "....iccCCC....",
+            ".....ccCC.....", "......cC......",
+        ],
+        [
+            "......cw......", "......cs......", ".....ccis.....", "....Ccciss....", "...CCcciiss...", "..CCccciiiss..",
+            ".CCCcccwiiiss.", "CCCCccwwiiiiis", ".CCCCCCccccci.", "..CCCCCcccci..", "...CCCCccci...", "....CCCcci....",
+            ".....CCcc.....", "......Cc......",
+        ],
+    ],
+    "phantom": [
+        [
+            "....vvvvvvvv......", "...vvvvvvvvvvvv...", "..vvvvvvvvvvvvvv..", ".vvvvvvvvvvvvvvvv.",
+            "vvvvkkwsvvkkwsvvvv", "vvvvkkssvvkkssvvvv", "vvvvvvvvvvvvvvvvvv", "vvvvvvvvvvvvvvvvvv",
+            "vvvvvvvvvvvvvvvvvv", "vvvvvvvvvvvvvvvvvv", "vvvvvvvvvvvvvvvvvv", "vvvvvvvvvvvvvvvvvv",
+            "vvvvvvvvvvvvvvvvvv", "vv..vv..vv..vv..vv",
+        ],
+        [
+            "....vvvvvvvv......", "...vvvvvvvvvvvv...", "..vvvvvvvvvvvvvv..", ".vvvvvvvvvvvvvvvv.",
+            "vvvvkkwsvvkkwsvvvv", "vvvvkkssvvkkssvvvv", "vvvvvvvvvvvvvvvvvv", "vvvvvvvvvvvvvvvvvv",
+            "vvvvvvvvvvvvvvvvvv", "vvvvvvvvvvvvvvvvvv", "vvvvvvvvvvvvvvvvvv", "vvvvvvvvvvvvvvvvvv",
+            ".vvv..vv..vv..vvv.", "..vv..vv..vv..vv..",
+        ],
+    ],
+    "clock": [
+        [
+            "....ggguugggdd....", "...gggggggggggd...", "..gyyyyyyyyyyyyd..", ".gyyyyyyxxyyyyyyd.",
+            "gyyyyyyywsyyyyyydd", "gyyyyyyywsyyyyyydd", "gyyyyyyywsyyyyyydd", "gyyyyyyywsyyyyyydd",
+            "gxyyyyyykkyyyyyxdd", "gxyyyyyykkyyyyyxdd", "gyyyyyyyyyyyyyyydd", "gyyyyyyyyyyyyyyydd",
+            "gyyyyyyyyyyyyyyydd", "gyyyyyyyyyyyyyyddd", ".gyyyyyyxxyyyyydd.", "..gyyyyyyyyyyydd..",
+            "....dddddddddd....", "....dDDDDDDDDd....",
+        ],
+        [
+            "....ggguugggdd....", "...gggggggggggd...", "..gyyyyyyyyyyyyd..", ".gyyyyyyxxyyyyyyd.",
+            "gyyyyyyyyyyyyyyydd", "gyyyyyyyyyyyyyyydd", "gyyyyyyyyyyyyyyydd", "gyyyyyyyyyyyyyyydd",
+            "gxyyyyyykkwwwwyxdd", "gxyyyyyykkssssyxdd", "gyyyyyyyyyyyyyyydd", "gyyyyyyyyyyyyyyydd",
+            "gyyyyyyyyyyyyyyydd", "gyyyyyyyyyyyyyyddd", ".gyyyyyyxxyyyyydd.", "..gyyyyyyyyyyydd..",
+            "....dddddddddd....", "....dDDDDDDDDd....",
+        ],
+    ],
+    "node": [
+        [
+            "....mmmmmm....", "...mmmmmmmm...", "..mmmmswmmmm..", "..mmmmwmmmmm..", "gummmmmmmmmmdd", "ggMmmmmmmmmMdd",
+            "gguggggggguddd", "gggggggggggddd", "xxddxxddxxddxx", "kkddkkddkkddkk",
+        ],
+    ],
+    "sentinel": [
+        [
+            "............rrrrrrdd........", "..........rrrrrrrrrrd.......", "........rrrrrrrxrrrrrrrd....",
+            ".......rrrrrrrrxrrrrrrrrdd..", "uggg...rrrrrxxxxxxxgrrrrdd..", "gddd.rrrrrrxsswiiiixgggrrrd.",
+            "xxxxrrrrrrrxswiiiiIxggrrrrfe", "kkkxrrrrrrrxiiiiIIIxggrrrrfe", "....rrrrrrrrxxxxxxxxgrrrrrff",
+            "....rrrrrrrrrgguuggrrrrrrrff", "xxxxrrrrrrrrrrrrrrrrrrrrrd..", "kkkxrrrrrrrrrxrrrrrrrrrrd...",
+            "gddd.rrrrrrrrxrrrrrrrd......", "uggg...rrrrrrrrrrrrrd.......", "........RRRRRRRRRR..........",
+            ".........RRRRRRRR...........",
+        ],
+    ],
+    "ferry": [
+        [
+            "......llllllll..........", ".....llllllllll.........", ".....llxsswiiixll.......",
+            "...llllxswiiiiIxllll....", "lllllllllllllllllllldd..", "lullllllllllllllullld...",
+            "wellllllxxllllllllllllff", "eellllllxxllllllllllllef", "....ggddggddggddgg......",
+            "....gxddgxddgxddgx......", "....ggoeoooooooogg......", ".....gooooooOOOOg.......",
+            "......dddddddddd........", ".......dddddddd.........",
+        ],
+    ],
+    "seeker": [
+        [
+            "..vvvvvv..", ".vvvvvvvv.", "vvvsssssvv", "vvswwsssvv", "vvswkkssvv", "vvsskkssVv", "vvsssssvVV",
+            "vvvsssvVVV", ".vvvvVVVV.", "..vvVVVV..",
+        ],
+    ],
+    "plate": [
+        [
+            "..gggggggg..", ".gggggggggg.", "ggudggggudgg", "ggdxggggdxgg", "gggggggggggg", "gggggggggggg",
+            "gggggggggggg", "gggggggggggg", "ggudggggudgg", "ggdxggggdxgg", ".gggggggggg.", "..gggggggg..",
+        ],
+    ],
+    "scrapclaw": [
+        [
+            "......guug........................guug......", "....gguuuggd....................dgguuugg....",
+            "...gguggggdd....................ddggggugg...", "..ggudd..gdd....................ddg..ddugg..",
+            "..gud.....gd....................dg.....dug..", ".ggdd.....ggg..................ggg.....ddgg.",
+            ".gud.......ggg................ggg.......dug.", ".ggdd.....ggggg..............ggggg.....ddgg.",
+            "...gggguggggggggggggggggggggggggggggugggg...", ".....gggggggggxggggggggggggggxggggggggg.....",
+            "........ggggggxggggggggggggggxgggggg........", "........gggggggggggggggggggggggggggg........",
+            ".....gggggggggxxkqqkxxxxkqqkxxggggggggg.....", "...gggggggggggxxqweqxxxxqweqxxggggggggggg...",
+            "...gggggggggggxxqeeqxxxxqeeqxxggggggggggg...", ".gggggggggggggxxkqqkxxxxkqqkxxggggggggggggg.",
+            "ggnnnnnnggggggggggggggggggggggggggggnnnnnngg", "ggnunnunggggggggggggggggggggggggggggnunnungg",
+            "ggnnNNnnggggxdxdxdxdxddxdxdxdxdxggggnnNNnngg", "ggnnNNnnggggxdxdxdxdxddxdxdxdxdxggggnnNNnngg",
+            ".ggnunnggggddddddddddddddddddddddggggnnungg.", "...gnnnggggddddddddddddddddddddddggggnnng...",
+            "....ggggggdd..dd..dd....dd..dd..ddgggggg....", ".....ggggd.d...d...d....d...d...d.dgggg.....",
+            "......gg..dd....................dd..gg......", "......gd...d....................d...dg......",
+            "....ggd.....dd................dd.....dgg....", "....gd.......d................d.......dg....",
+        ],
+    ],
+    "mawbloom": [
+        [
+            "............pppppppppppppppp............", "...........pppphhppppppppppppp..........",
+            ".........pphhpPPppppppppPPppppp.........", ".......pphppppPPppppppppPPppppppp.......",
+            ".....pphPPppppppppppppppppppppPPppp.....", "...pphppPPppppppppppppppppppppPPppppp...",
+            "...pppppppppppp...rrrr...pppppppppppp...", ".pppppppppppp....rrrrrr....pppppppppppp.",
+            "pphpPPppppp....rrrrrrrrrr....pppppPPpppp", "pphpPPppp....rrrrrrrrrrrrrr....pppPPpppp",
+            "ppppppppp....rrrrkkkkkkrrrr....ppppppppp", "pppppppp...rrqrwkkkkkkkkwrqrr...pppppppp",
+            "ppPPpppp...rrqwkkkkffkkkkwqrr...ppppPPpp", "ppPPpppp..rrqwkkkfweefkkkkwqrr..ppppPPpp",
+            "ppPPpppp..rrrwkkkfeeeefkkkwrrr..ppppPPpp", "ppPPpppp...rrqwkkkffffkkkwqrr...ppppPPpp",
+            "pppppppp...rrqrwkkkkkkkkwrqrr...pppppppp", "ppppppppp....rrrrkkkkkkrrrr....ppppppppp",
+            "ppppPPppp....rrrrrrrrrrrrrr....pppPPpppp", "ppppPPppppp....rrrrrrrrrr....pppppPPpppp",
+            ".pppppppppppp....rrrrrr....pppppppppppp.", "...pppppppppppp...rrrr...pppppppppppp...",
+            "...pppppPPppppppppppppppppppppPPppppp...", ".....pppPPppppppppppppppppppppPPppp.....",
+            ".......pppppppPPppppppppPPppppppp.......", ".........pppppPPppppppppPPppppp.........",
+            "............llllllllllllllll............", "...........lllLllllllllllLlll...........",
+            "...........llll..llllll..llll...........", "..........llLl....llll....lLll..........",
+        ],
+    ],
+    "smelter": [
+        [
+            "............gggguuggggguuggg............", "...........gggggggggggggggggg...........",
+            ".........gggggggggggggggggggggg.........", ".......gggggggggggggggggggggggggg.......",
+            ".....ggggggOOOOOOOOOOOOOOOOOOgggggg.....", "...ggggggOOOOOOOOOOOOOOOOOOOOOOgggggg...",
+            "...guuuggOOoooxooooooooxoooooOOgguuug...", "..ggggggOOoooxoooooooooxooooooOOggggggg.",
+            "xrrrrgggOOoooxyyyyeeeexyyyyoooOOgggggggg", "xrrrrrggOOooyxyyywweeexyyyyyooOOgggggggg",
+            "xqqqqqggOOooyxyyyeeeeexyyyyyooOOgggggggg", "xqqqqgggOOoooxyyyyeeeexyyyyoooOOgggggggg",
+            "..ggggggOOoooxoooooooooxooooooOOggggggg.", "...ggggggOOooxooooooooxooooooOOgggggg...",
+            "...ggggggOOOOOOOOOOOOOOOOOOOOOOgggggg...", ".....ggggggOOOOOOOOOOOOOOOOOOgggggg.....",
+            ".......gugggggggggggggggggggggugg.......", "........gggggggggggggggggggggggg........",
+            ".......dggg.dgggg.dgggg.dgggg.dggg......", "......ddg...ddg...ddg...ddg...ddgg......",
+            "......ff....ff....ff....ff....ff........", "......fe....fe....fe....fe....fe........",
+            "......ee....ee....ee....ee....ee........", ".......e.....e.....e.....e.....e........",
+        ],
+    ],
+    "siltback": [
+        [
+            "..............tttttttttttttt................", "............ttttttttTttttttttt..............",
+            ".........tttttttttxtTttttttxtttt............", ".......tttttttttttTtttttttTtttttt...........",
+            ".....tttttttxttttTtttttxtttTtttttxtt........", "...tttttttttTtttTtttttttttTttttttTttttt.....",
+            "...tttttxttTtttttttxtttttTtttttttTxtttttt...", "..ttttttttTttttttttTttttTttttttttTtttttttt..",
+            "ccTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT", "ccxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxTT",
+            "ckwekccccccccccccccccccccccccccccccccccccTTT", "ckeekcccccccccccccccccccccccccccccccccccccTT",
+            "cckkccccccccccccccccccccccccccccccccccccTTTT", "ccccccccccccccccccccccccccccccccccccccTTTTTT",
+            ".ccccccc..cccc.............ccccc..ccccTTT...", "...ccccc...ccc...............ccc...cccTT....",
+            "...cccc....ccc...............ccc....ccc.....", "....ccc....cccc..............cccc...ccc.....",
+        ],
+    ],
+    "hauler": [
+        [
+            "....................ggnnnnnnnnnngg..........", "....................gnnnNnnnnNnnng..........",
+            ".........yyyyyyyyyyynnnnNnnnnNnnnn..........", ".......yyyyyyyyyyyyynnnnnnnnnnnnnnn.........",
+            ".....yyyyyyyyyyyyyyguggggggguggggggugg......", "....yyyyyyxxxxxyyyygggggggggggggggggggg.....",
+            "qqqqyyyyyxsswiixyyyggxxggggggggxxgggggg.....", "qwqqyyyyxswiiiiixyyggxxggggggggxxggggggg....",
+            "qqqqyyyyxiiiiiIIxyygggxxnnnnnnnnxxggggggggg.", "qqqqyyyyyxiiiIIxyyggggxxnnnNnnnnxxgggggggggg",
+            "qwqqyyyyyyxxxxxyyyggggxxnnnnnnnnxxgggggggggg", "qqqqyyyyyyyyyyyyyyyggggxnnnnnnnnxggggggggggg",
+            "....yyyyyyyyyyyyyyygggggggggggggggggggggg...", ".....yyyyyyyyyyyyyyyguggggggguggggggugggg...",
+            ".......yyyyyyyyyyyyygggggggggggggggggggg....", ".........YYYYYYYYYYYgggggggggggggggggggg....",
+            "............dddd..dddd..dddd..dddd..dddd....", "...........dxxd..dxxd..dxxd..dxxd..dxxd.....",
+            "..........ddud..ddud..ddud..ddud..ddud......", "..........dd....dd....dd....dd....dd........",
+        ],
+    ],
+    "broodwarden": [
+        [
+            "................yyyyyyyyyyyy................", "...............yyyyyyyyyyyyyy...............",
+            ".............yyyyooooooooyyyy...............", "...........yyyyooooooooooooyyyy.............",
+            "....yy.....yyyyokwooooooowkoyyyy....yy......", "...yyyy...yyyyookeoooooookeoyyyy...yyyy.....",
+            "...yyyy...yyyyooooooooooooooyyyy...yyyy.....", ".yyyyyyy..yyyyyooooooooooooyyyyy..yyyyyyy...",
+            "yyyykkyyyyyykkyykkyykkyykkyykkyyyyyykkyyy...", "yyykkkkyyyykkkyykkyykkyykkyykkkyyyykkkkyyy..",
+            "yykkyykkyykkyykkyykkyykkyykkyykkyykkyykkyy..", "yykkyykkyykkyykkyykkyykkyykkyykkyykkyykky...",
+            ".yyyyyyy..ykkkyykkyykkyykkyykkky..yyyyyyy...", "...yyyy....ykkyykkyykkyykkyykky....yyyy.....",
+            "...yyyy....yykkkyykkyykkyykkkyy....yyyy.....", "....yy.......ykkyykkyykkyykky.......yy......",
+            "................yykkyykkyy..................", ".................ykkyykky...................",
+            ".................yykkkkyy...................", "...................ykky.....................",
+            "...................yyyy.....................", "....................yy......................",
+        ],
+    ],
+    "facet": [
+        [
+            "....................ss....................", "...................sss....................",
+            ".................sssswccc.................", "...............ssssswwcccc................",
+            ".............ssssiiiwwccccCCC.............", "...........ssssiiiiiwwcccccCCCC...........",
+            ".........ssssiiiiiiiwwcccccCCCCCC.........", ".......ssssiiiiiiiiiwwcccccccCCCCCC.......",
+            ".....ssssiiiiiiiiiiiwwcccccccCCCCCCCC.....", "...ssssiiiiiiiiiiiiiwwcccccccccCCCCCCCC...",
+            "sssssiiiiiiiiiiwwwmmmwmmwwwcccccccccCCCCCC", "ssssiiiiiiiiiiwwwwmwmmmmwwwwccccccccCCCCCC",
+            "....ccccccccccccccccwwCCCCCCCCCCCCCCCCC...", ".....cccccccccccccccwwCCCCCCCCCCCCCCC.....",
+            ".......cccccccccccccwwCCCCCCCCCCCCC.......", ".........cccccccccccwwCCCCCCCCCCC.........",
+            "...........cccccccccwwCCCCCCCCC...........", ".............cccccccwwCCCCCCC.............",
+            "...............cccccwwCCCCC...............", ".................cccwCCCC.................",
+            "....................CCC...................", "....................CC....................",
+        ],
+    ],
+    "gatekeeper": [
+        [
+            "gguggggggggggggggggggggggggggggggugg", "gggggggggggggggggggggggggggggggggggg",
+            "gggrrrrrrggggxxxxxxxxxxggggrrrrrrggg", "ggrrrrrrrrggxxxxxxxxxxxxggrrrrrrrrgg",
+            "ggrrqwrrrrggxxxkkkkkkxxxggrrqwrrrrgg", "ggrrqqrrrrggxxkkkkkkkkxxggrrqqrrrrgg",
+            "ggrrrrrrrrggxxkkkmmkkkxxggrrrrrrrrgg", "ggrxrrrrxrggxxkmmmmmmkxxggrxrrrrxrgg",
+            "ggRRRRRRRRggxxmmmwemmmxxggRRRRRRRRgg", "gggRRRRRRgggxxmmweeemmxxgggRRRRRRggg",
+            "guggggggguggxxmmeeeemmxxgguggggggugg", "ggggggggggggxxmmmeemmmxxgggggggggggg",
+            "gggrrrrrrgggxxkmmmmmmkxxgggrrrrrrggg", "ggrrrrrrrrggxxkkkmmkkkxxggrrrrrrrrgg",
+            "ggrrqwrrrrggxxkkkkkkkkxxggrrqwrrrrgg", "ggrrqqrrrrggxxxkkkkkkxxxggrrqqrrrrgg",
+            "ggrxrrrrxrggxxxxxxxxxxxxggrxrrrrxrgg", "ggrrrrrrrrgggxxxxxxxxxxgggrrrrrrrrgg",
+            "ggRRRRRRRRggggggggggggggggRRRRRRRRgg", "gggRRRRRRggggggggggggggggggRRRRRRggg",
+            "gggggggggggggggggggggggggggggggggggg", "gguggggggggggggggggggggggggggggggugg",
+        ],
+    ],
+}
+for _k, _frames in HI_ART_ROWS.items():
+    for _sp, _rows in zip([SHIP] if _k == "ship" else SPR[_k], _frames):
+        _sp.hi = Spr(_rows, _sp.rnd)
+# --- hi-res art end
 
 # =============================================================================================
 # The eight stages
@@ -2510,6 +3048,7 @@ class View:
 
     def __init__(self, cv, s, ox, oy, fw, fh):
         self.cv, self.P, self.s, self.ox, self.oy, self.fw, self.fh = cv, cv.px, s, ox, oy, fw, fh
+        self.hi = s >= HI_S             # a big window: shapes get anti-aliased rims, glows and finer detail
         self.x0, self.y0 = max(0, ox), max(0, oy)
         self.x1, self.y1 = min(cv.W, ox + fw), min(cv.H, oy + fh)
 
@@ -2540,6 +3079,9 @@ class View:
             self.P[ya][a] = c
 
     def blob(self, x, y, c, size=1.0):
+        if self.hi:                     # a round drop instead of a fat square
+            self.disc(x, y, size * 0.55, c)
+            return
         n = max(1, int(size * self.s + 0.5))
         a, ya = self.X(x) - n // 2, self.Y(y) - n // 2
         self.prect(a, ya, a + n, ya + n, c)
@@ -2568,7 +3110,10 @@ class View:
                 if b > a:
                     P[yy][a:b] = [c] * (b - a)
 
-    def circle(self, x, y, r, c):
+    def circle(self, x, y, r, c, aa=False):
+        if aa and self.hi:
+            self.disc(x, y, r, c)
+            return
         rp = int(r * self.s + 0.5)
         cx, cy = self.X(x), self.Y(y)
         x0, x1, y0, y1, P = self.x0, self.x1, self.y0, self.y1, self.P
@@ -2582,6 +3127,8 @@ class View:
     def ring(self, x, y, r, c, n=None):
         rp = r * self.s
         n = n or max(12, int(rp * 6))
+        if self.hi:                     # a closed ring however big it gets, not a dotted one
+            n = max(n, int(TAU * rp * 1.3))
         cx, cy = self.X(x), self.Y(y)
         x0, x1, y0, y1, P = self.x0, self.x1, self.y0, self.y1, self.P
         for k in range(n):
@@ -2624,9 +3171,151 @@ class View:
 
     def sphere(self, x, y, r, c, lit=None):
         """A ball lit from the top left: shadowed rim, mid body, bright cap."""
+        if self.hi:
+            self.ball(x, y, r, c, lit)
+            return
         self.circle(x, y, r, mix(c, (24, 14, 46), 0.45))
         self.circle(x - r * 0.12, y - r * 0.12, r * 0.82, c)
         self.circle(x - r * 0.34, y - r * 0.34, max(0.5, r * 0.36), lit or mix(c, (255, 252, 230), 0.45))
+
+    # --- finer shapes for big windows (only used when self.hi; small windows keep the plain ones) -----
+    def disc(self, x, y, r, c, alpha=1.0):
+        """A filled circle with an anti-aliased rim, optionally see-through, in true screen pixels."""
+        s = self.s
+        R = r * s
+        cx, cy = self.ox + x * s, self.oy + y * s
+        x0, x1, P = self.x0, self.x1, self.P
+        ro2, ri2 = (R + 0.5) ** 2, (R - 0.5) ** 2 if R > 0.5 else -1.0
+        for yy in range(max(self.y0, int(cy - R - 1)), min(self.y1, int(cy + R + 2))):
+            dy = yy + 0.5 - cy
+            q = ro2 - dy * dy
+            if q <= 0:
+                continue
+            ho = math.sqrt(q)
+            a, b = max(x0, int(math.floor(cx - ho))), min(x1, int(math.ceil(cx + ho)))
+            if a >= b:
+                continue
+            row = P[yy]
+            ia = ib = a
+            qi = ri2 - dy * dy
+            if qi > 0 and alpha >= 1:
+                hin = math.sqrt(qi)
+                ia, ib = max(a, int(math.ceil(cx - hin - 0.5))), min(b, int(math.floor(cx + hin - 0.5)) + 1)
+                if ib > ia:
+                    row[ia:ib] = [c] * (ib - ia)
+                else:
+                    ia = ib = a
+            for xx in (range(a, ia), range(ib, b)) if ib > ia else (range(a, b),):
+                for px_ in xx:
+                    dx = px_ + 0.5 - cx
+                    k = (R + 0.5 - math.sqrt(dx * dx + dy * dy)) * alpha
+                    if k >= 0.97:
+                        row[px_] = c
+                    elif k > 0.04:
+                        row[px_] = mix(row[px_], c, k)
+
+    def glow(self, x, y, r, c, k=0.5):
+        """A soft halo blended into whatever is already there."""
+        s = self.s
+        R = max(1.0, r * s)
+        cx, cy = self.ox + x * s, self.oy + y * s
+        x0, x1, P = self.x0, self.x1, self.P
+        for yy in range(max(self.y0, int(cy - R)), min(self.y1, int(cy + R + 1))):
+            dy = yy + 0.5 - cy
+            row = P[yy]
+            for xx in range(max(x0, int(cx - R)), min(x1, int(cx + R + 1))):
+                dx = xx + 0.5 - cx
+                d = 1 - math.sqrt(dx * dx + dy * dy) / R
+                if d > 0:
+                    row[xx] = mix(row[xx], c, k * d * d)
+
+    def ball(self, x, y, r, c, lit=None):
+        """sphere() for big windows: shaded per pixel in seven tones, a specular glint, a smooth rim."""
+        s = self.s
+        R = max(1.0, r * s)
+        cx, cy = self.ox + x * s, self.oy + y * s
+        dark = mix(c, (24, 14, 46), 0.5)
+        lit = lit or mix(c, (255, 252, 230), 0.45)
+        pal = [mix(dark, c, i / 3) for i in range(3)] + [c] + [mix(c, lit, i / 3) for i in (1, 2, 3)]
+        x0, x1, P = self.x0, self.x1, self.P
+        for yy in range(max(self.y0, int(cy - R - 1)), min(self.y1, int(cy + R + 2))):
+            ny = (yy + 0.5 - cy) / R
+            row = P[yy]
+            for xx in range(max(x0, int(cx - R - 1)), min(x1, int(cx + R + 2))):
+                nx = (xx + 0.5 - cx) / R
+                q = nx * nx + ny * ny
+                k = (1 - math.sqrt(q)) * R + 0.5
+                if k <= 0.04:
+                    continue
+                nz = math.sqrt(max(0.0, 1 - q))
+                d = -0.48 * nx - 0.52 * ny + 0.71 * nz      # light from the upper left, towards the viewer
+                col = pal[max(0, min(6, int((d + 0.35) * 5.2)))]
+                if d > 0.975 and R >= 2.5:
+                    col = mix(lit, WHITE, 0.6)
+                row[xx] = col if k >= 0.97 else mix(row[xx], col, k)
+
+    def stroke(self, xa, ya, xb, yb, c, w=1.0, core=None):
+        """A line w field units thick with an optional bright centre; small windows get the plain one-pixel
+        line (in the centre's colour when there is one)."""
+        if not self.hi:
+            self.line(xa, ya, xb, yb, c if core is None else core)
+            return
+        dx, dy = xb - xa, yb - ya
+        L = math.hypot(dx, dy) or 1.0
+        nx, ny = -dy / L, dx / L
+        half = w * self.s / 2
+        n = max(1, int(half / 0.35))
+        for i in range(n):
+            o = (-half + 0.35 + i * 0.7) / self.s if n > 1 else 0.0
+            self.line(xa + nx * o, ya + ny * o, xb + nx * o, yb + ny * o, c)
+        if core is not None:
+            self.line(xa, ya, xb, yb, core)
+
+    def streak(self, xa, xb, y, h, tail, head, core=None):
+        """A shot flying right: rounded, fading from a dim tail into a bright head, an optional hot centre."""
+        s = self.s
+        a, b = self.ox + xa * s, self.ox + xb * s
+        ta, tb = self.oy + (y - h / 2) * s, self.oy + (y + h / 2) * s
+        ya, yb = int(ta + 0.5), max(int(ta + 0.5) + 1, int(tb + 0.5))
+        ln = max(1.0, b - a)
+        x0, x1, P = self.x0, self.x1, self.P
+        mid = (ya + yb - 1) / 2
+        for yy in range(max(self.y0, ya), min(self.y1, yb)):
+            edge = yb - ya > 2 and (yy == ya or yy == yb - 1)
+            ctr = core is not None and abs(yy - mid) < 0.6
+            row = P[yy]
+            for xx in range(max(x0, int(a)), min(x1, int(math.ceil(b)) - (1 if edge else 0))):
+                f = (xx + 0.5 - a) / ln
+                if f < 0:
+                    continue
+                col = mix(tail, head, min(1.0, f))
+                if ctr and f > 0.3:
+                    col = core
+                al = min(1.0, f * 2.2) * (0.6 if edge else 1.0)
+                row[xx] = col if al >= 0.97 else mix(row[xx], col, al)
+
+    def hglow(self, xa, ya, w, h, c, n=3, k=0.5):
+        """Soft light above and below a horizontal band (beams, lasers)."""
+        a, b = max(self.x0, self.X(xa)), min(self.x1, self.X(xa + w))
+        if b <= a:
+            return
+        top, bot = self.Y(ya), self.Y(ya + h)
+        P = self.P
+        for i in range(1, n + 1):
+            al = k * (1 - (i - 0.5) / n)
+            for yy in (top - i, bot + i - 1):
+                if self.y0 <= yy < self.y1:
+                    row = P[yy]
+                    row[a:b] = [mix(q, c, al) for q in row[a:b]]
+
+    def spark(self, x, y, c):
+        """A particle: one bright pixel with a faint cross of light around it."""
+        a, ya = self.X(x), self.Y(y)
+        if self.x0 < a < self.x1 - 1 and self.y0 < ya < self.y1 - 1:
+            P = self.P
+            P[ya][a] = c
+            for xx, yy in ((a - 1, ya), (a + 1, ya), (a, ya - 1), (a, ya + 1)):
+                P[yy][xx] = mix(P[yy][xx], c, 0.4)
 
     def snap(self, xa, ya, xb, yb):
         """Remember a field rectangle (plus a pixel) before drawing a shape into it; see bevel()."""
@@ -2668,6 +3357,43 @@ class View:
                 elif ((up is not None and up[i]) or (dn is not None and dn[i]) or
                       (m is not None and ((i > 0 and m[i - 1]) or (i < W - 1 and m[i + 1])))):
                     row[a + i] = OUTLINE
+        if self.hi:
+            self.volume(a, ya, W, mask)
+
+    def volume(self, a, ya, W, mask):
+        """Big windows: light falls across a shape-built body from the top left, with a fine grain, so large
+        flat plates read as metal and flesh instead of flat fills (tones are cached per colour)."""
+        H = len(mask)
+        P, cache, grain = self.P, _VOL, _GRAIN
+        if len(cache) > 30000:
+            cache.clear()
+        js = [j for j in range(H) if mask[j] is not None]
+        if not js:
+            return
+        j0, j1 = js[0], js[-1] + 1
+        cols = [i for i in range(W) if any(mask[j] is not None and mask[j][i] for j in js)]
+        i0, i1 = cols[0], cols[-1] + 1
+        kx, ky = 5.0 / max(1, i1 - i0), 4.0 / max(1, j1 - j0)
+        for j in js:
+            m, row = mask[j], P[ya + j]
+            gj = grain[j % 61]
+            bj = 4.5 + (j - j0) * ky
+            for i in range(W):
+                if m[i]:
+                    c = row[a + i]
+                    if c == OUTLINE:
+                        continue
+                    band = int(bj + (i - i0) * kx + gj[i % 61])
+                    band = 0 if band < 0 else 13 if band > 13 else band
+                    t_ = cache.get((c, band))
+                    if t_ is None:
+                        k = (7 - band) * 0.03
+                        t_ = cache[(c, band)] = mix(c, WHITE, k) if k > 0 else mix(c, (24, 14, 46), -k * 1.3)
+                    row[a + i] = t_
+
+
+_VOL = {}
+_GRAIN = [[random.Random(j * 131 + i).uniform(-0.9, 0.9) for i in range(61)] for j in range(61)]
 
 
 # --- cached backgrounds ----------------------------------------------------------------------
@@ -2894,6 +3620,170 @@ def terrain_var(si, N):
     return v
 
 
+_TEX = {}
+METAL = ("girders", "hull", "citadel")
+
+
+def terrain_tex(si, s):
+    """terrain_grad() for big windows, per screen pixel: a bright one-pixel rim on the face, a faint seam where
+    the edge band ends, grain and style detail (rivets, glints, facets, pits), all fixed to the world so it
+    scrolls with the rock. Per column variant three looks: plain, lit left edge, shadowed right edge, each as
+    TX texture columns of colours by depth."""
+    key = (si, int(s * 16))
+    if key in _TEX:
+        return _TEX[key]
+    if len(_TEX) > 6:
+        _TEX.clear()
+    base = terrain_grad(si, s)
+    style = STAGES[si]["terrain"]
+    edge = STAGES[si]["tcol"][0]
+    n, TX = len(base[0]), 64
+    rnd = random.Random(si * 977 + 3)
+    CW, CH = 4, 3                             # the coarse grain grid, wraps around in x
+    coarse = [[rnd.uniform(-1, 1) for _ in range(n // CH + 2)] for _ in range(TX // CW)]
+    band = max(2, int(s + 0.5))                # the edge band, as thick as in the small picture
+    dk = (24, 14, 46)
+
+    def grain(tx, d):
+        gx, fx = divmod(tx / CW, 1)
+        gy, fy = divmod(d / CH, 1)
+        gx, gy = int(gx), int(gy)
+        a, b = coarse[gx % len(coarse)], coarse[(gx + 1) % len(coarse)]
+        top = a[gy] + (b[gy] - a[gy]) * fx
+        bot = a[gy + 1] + (b[gy + 1] - a[gy + 1]) * fx
+        return top + (bot - top) * fy
+
+    spots = set()
+    if style in ("asteroid", "flesh", "flooded"):         # pits / wet blisters / moss: small round marks
+        for _ in range(TX * n // 90):
+            spots.add((rnd.randrange(TX), rnd.randrange(band + 1, n)))
+    out = []
+    for col in base:
+        tex = []
+        for tx in range(TX):
+            cl = []
+            for d in range(n):
+                c = col[d]
+                k = 0.07 * grain(tx, d) + rnd.uniform(-0.035, 0.035)
+                if d == 0:
+                    c = mix(edge, WHITE, 0.4)
+                elif d == band:
+                    k -= 0.12
+                if style in METAL and d > band and tx % 16 == 5 and (d - band) % max(4, int(3 * s)) == 2:
+                    k += 0.35                                  # rivets
+                elif style in METAL and d > band and tx % 16 == 5 and (d - band) % max(4, int(3 * s)) == 3:
+                    k -= 0.3
+                elif style == "crystal" and d > 1 and (tx + d) % 21 == 0:
+                    k += 0.3                                   # facet edges
+                elif style == "hive" and d > band and (tx % 12 == 0 or (d - band) % 10 == 0):
+                    k -= 0.18                                  # comb cells
+                elif (tx, d) in spots:
+                    k += 0.3 if style == "flesh" else -0.25
+                elif (tx, d - 1) in spots and style != "flesh":
+                    k += 0.12
+                c = mix(c, WHITE, k) if k > 0 else mix(c, dk, -k)
+                cl.append(c)
+            tex.append(cl)
+        lit = [[mix(c, WHITE, 0.22) for c in cl] for cl in tex]
+        drk = [[mix(c, dk, 0.32) for c in cl] for cl in tex]
+        out.append((tex, lit, drk))
+    _TEX[key] = out
+    return out
+
+
+def draw_walls_hi(g, v):
+    """The cave walls for big windows: heights interpolated per screen column with an anti-aliased face,
+    textured at screen resolution. Collision still uses the same per-unit heights."""
+    s, P = v.s, v.P
+    x0, x1, y0, y1 = v.x0, v.x1, v.y0, v.y1
+    tex = terrain_tex(g.si, s)
+    var = terrain_var(g.si, g.N)
+    N, cam, C, F, t, wob = g.N, g.cam, g.ceil, g.floor, g.t, g.wob
+    TX = len(tex[0][0])
+    n = len(tex[0][0][0]) - 1
+    top, bot = max(y0, v.oy), min(y1, v.oy + v.fh)
+    e1 = 1.0 / s
+    bevel = STAGES[g.si]["terrain"] in METAL + ("hive",)     # built walls: lit and shadowed plate edges
+    for sx in range(x0, x1):
+        u = cam + (sx - v.ox + 0.5) / s
+        i = int(u)
+        i = 0 if i < 0 else N - 1 if i >= N else i
+        k = var[i]
+        fu = u - math.floor(u)
+        m = 0
+        if bevel:
+            m = 1 if fu < e1 and i > 0 and var[i - 1] != k else 2 if fu > 1 - e1 and i < N - 1 and var[i + 1] != k else 0
+        gr = tex[k][m][int(u * s) % TX]
+        w = u - 0.5
+        j = int(math.floor(w))
+        f_ = w - j
+        j = 0 if j < 0 else N - 2 if j > N - 2 else j
+        c = C[j] + (C[j + 1] - C[j]) * f_
+        if wob and c > 0.5:
+            c += 1.5 + 1.5 * math.sin(t * 1.8 + u * 0.05)
+        if c > 0.2:
+            cp = v.oy + c * s
+            yf = int(cp)
+            for y in range(top, min(bot, yf)):
+                d = yf - 1 - y
+                P[y][sx] = gr[d if d < n else n]
+            if top <= yf < bot and cp - yf > 0.05:
+                P[yf][sx] = mix(P[yf][sx], gr[0], cp - yf)
+        fl = F[j] + (F[j + 1] - F[j]) * f_
+        if wob and fl < FH - 0.5:
+            fl -= 1.5 + 1.5 * math.sin(t * 1.7 + u * 0.05 + 2)
+        if fl < FH - 0.2:
+            fp = v.oy + fl * s
+            yf = int(fp)
+            for y in range(max(top, yf + 1), bot):
+                d = y - yf - 1
+                P[y][sx] = gr[d if d < n else n]
+            if top <= yf < bot:
+                P[yf][sx] = mix(P[yf][sx], gr[0], 1 - (fp - yf))
+
+
+def draw_mid_hi(g, v):
+    """The middle parallax layer for big windows: interpolated outlines with a soft top edge."""
+    s, P = v.s, v.P
+    x0, x1, y0, y1 = v.x0, v.x1, v.y0, v.y1
+    bot, top, lit = mid_heights(g.si)
+    mb, me = g.st["midc"]
+    cam2 = g.cam * 0.45 + g.t * 1.5
+    yb = v.oy + v.fh
+    for sx in range(x0, x1):
+        u = cam2 + (sx - v.ox + 0.5) / s - 0.5
+        j = int(math.floor(u))
+        f_ = u - j
+        i, i2 = j % 256, (j + 1) % 256
+        h = (bot[i] + (bot[i2] - bot[i]) * f_) * s
+        if h > 0.3:
+            yt = yb - h
+            yi = int(yt)
+            for y in range(max(y0, yi + 2), min(y1, yb)):
+                P[y][sx] = mb
+            if y0 <= yi + 1 < y1:
+                P[yi + 1][sx] = me
+            if y0 <= yi < y1:
+                P[yi][sx] = mix(P[yi][sx], me, 1 - (yt - yi))
+            ii = int(u + 0.5) % 256
+            if lit[ii] and h > 4 * s:
+                yy = int(yt) + int(2 * s)
+                if y0 <= yy < y1 and int(g.t * 2 + ii) % 5:
+                    P[yy][sx] = (230, 200, 120)
+                    if yy + 1 < y1:
+                        P[yy + 1][sx] = mix(mb, (230, 200, 120), 0.4)
+        h = (top[i] + (top[i2] - top[i]) * f_) * s
+        if h > 0.3:
+            yt = v.oy + h
+            yi = int(yt)
+            for y in range(y0, min(y1, yi)):
+                P[y][sx] = mb
+            if y0 <= yi - 1 < y1 and yi - 1 >= v.oy:
+                P[yi - 1][sx] = me
+            if y0 <= yi < y1:
+                P[yi][sx] = mix(P[yi][sx], me, yt - yi)
+
+
 def draw_world(g, v):
     """Sky, the middle layer and the cave walls."""
     s, P = v.s, v.P
@@ -2913,12 +3803,15 @@ def draw_world(g, v):
             if len(seg) < b - a:
                 seg = seg + src[:b - a - len(seg)]
             P[y][x0:x1] = seg
-    # middle layer
+    # middle layer (built from blocks in some stages: those stay crisp; the curved ones get smooth outlines)
+    smooth = v.hi and g.st["mid"] in ("veins", "dust", "kelp", "facets")
+    if smooth:
+        draw_mid_hi(g, v)
     bot, top, lit = mid_heights(g.si)
     mb, me = g.st["midc"]
     cam2 = g.cam * 0.45 + g.t * 1.5
     yb = v.oy + fh
-    for sx in range(x0, x1):
+    for sx in range(x0, x0 if smooth else x1):
         i = int(cam2 + (sx - v.ox) / s) % 256
         h = int(bot[i] * s)
         if h > 0:
@@ -2949,6 +3842,9 @@ def draw_world(g, v):
                 if yy + 1 < y1:
                     P[yy + 1][sx] = mix(P[yy + 1][sx], (90, 170, 200), 0.5)
     # the walls
+    if v.hi:
+        draw_walls_hi(g, v)
+        return
     grad = terrain_grad(g.si, s)
     var = terrain_var(g.si, g.N)
     N = g.N
@@ -3018,6 +3914,18 @@ def draw_boss(v, e, t, py):
             v.dot(x + 2 + k * 3, y - 5 + (k % 2) * 6, hi)
         for k in range(7):   # rivets along the hull
             v.dot(x + 13.5, y - 11 + k * 3.6, hi if k < 3 else gg)
+        if v.s >= HI_ART:    # a big window: hull seams, plate rivets and a lit lip, like the sprites' finer art
+            for sx in (-9.5, 0.0):
+                v.line(x + sx, y - 15.5 + (sx + 9.5) * 0.06, x + sx, y + 15.5 - (sx + 9.5) * 0.06, d)
+                v.line(x + sx + 0.45, y - 15 + (sx + 9.5) * 0.06, x + sx + 0.45, y + 3, mix(G, hi, 0.5))
+            v.line(x - 13.5, y + 4.2, x + 14.5, y + 5.2, d)
+            for k in range(6):
+                for py_ in (y - 11.3, y + 10.7):
+                    v.dot(x - 3 + k * 3.1, py_, d)
+                    v.dot(x - 3.35 + k * 3.1, py_ - 0.35, hi)
+            for k in range(4):   # vents under the eye
+                v.rect(x - 12.5 + k * 1.6, y + 7, 0.7, 3.5, d)
+            v.rect(x + 1, y - 7, 11, 0.5, mix(d, gg, 0.4))
         v.circle(x - 6, y, 4.8, d)
         v.ring(x - 6, y, 4.6, gg, 20)
         v.sphere(x - 6, y, 3.4, core)
@@ -3224,7 +4132,7 @@ def draw_actors(g, v):
             a = math.atan2(g.py - e.y, g.px - e.x)
             by = e.y + (1.5 if e.ceil else -1.5)
             ln = 4 if k == "turret" else 6
-            v.line(e.x, by, e.x + math.cos(a) * ln, by + math.sin(a) * ln, (200, 206, 220))
+            v.stroke(e.x, by, e.x + math.cos(a) * ln, by + math.sin(a) * ln, (150, 156, 172), 1.1, (200, 206, 220))
         elif k == "vent" and e.data.get("on"):
             y0 = e.y + 2 if e.ceil else e.y - 24
             for j in range(0, 22, 2):
@@ -3246,6 +4154,8 @@ def draw_actors(g, v):
                 v.rect(0, L["y"] - 0.2, x, 0.5, (255, 90, 90))
         else:
             h = L["h"]
+            if v.hi:
+                v.hglow(0, L["y"] - h / 2, x, h, (255, 70, 60), max(2, int(s * 1.5)))
             v.rect(0, L["y"] - h / 2, x, h, (255, 70, 60))
             v.rect(0, L["y"] - h / 4, x, h / 2, (255, 230, 210))
     for sw in g.sweeps:
@@ -3257,9 +4167,13 @@ def draw_actors(g, v):
                 for k in range(0, 140, 4):
                     v.dot(ox + dx * k, oy + dy * k, (255, 120, 120))
         else:
-            for off in (-1.2, 0, 1.2):
-                c = (255, 240, 220) if off == 0 else (255, 80, 70)
-                v.line(ox - dy * off, oy + dx * off, ox + dx * 150 - dy * off, oy + dy * 150 + dx * off, c)
+            if v.hi:      # one solid beam with a hot core instead of three thin lines with gaps
+                v.stroke(ox, oy, ox + dx * 150, oy + dy * 150, (255, 80, 70), 3.0)
+                v.stroke(ox, oy, ox + dx * 150, oy + dy * 150, (255, 170, 150), 1.0, (255, 240, 220))
+            else:
+                for off in (-1.2, 0, 1.2):
+                    c = (255, 240, 220) if off == 0 else (255, 80, 70)
+                    v.line(ox - dy * off, oy + dx * off, ox + dx * 150 - dy * off, oy + dy * 150 + dx * off, c)
     # items
     for it in g.items:
         if it.kind == "crystal":   # a cut gem: lit upper left facet, dark lower right, a glint
@@ -3273,16 +4187,19 @@ def draw_actors(g, v):
             v.poly([(x - 0.4, y - r * 0.6), (x + r * 0.3, y - 0.2), (x - 0.4, y - 0.2)], WHITE)
         else:   # a capsule: dark rim, lit ball, the letter on top
             c, letter, _ = ITEMS[it.kind]
-            v.circle(it.x, it.y, 3 + 1.0 / s, OUTLINE)
-            v.circle(it.x, it.y, 3, shade(c, 0.55))
+            v.circle(it.x, it.y, 3 + 1.0 / s, OUTLINE, True)
+            v.circle(it.x, it.y, 3, shade(c, 0.55), True)
             v.sphere(it.x - 0.2, it.y - 0.2, 2.3, c)
             col, row = v.X(it.x), v.Y(it.y) // 2
             if v.x0 <= col < v.x1 and v.y0 // 2 <= row < (v.y1 - 1) // 2 + 1 and s >= 0.9:
                 v.cv.put(col, row, letter, (10, 10, 16), c)
     # player shots
+    hi = v.hi
     for sh in g.shots:
         k = sh.kind
         x, y = sh.x, sh.y
+        if hi and draw_shot_hi(v, sh, k, x, y):
+            continue
         if k == "bolt":
             v.rect(x - 2, y - 0.4, 4, 1, BOLT_C[0])
             v.rect(x, y - 0.4, 2, 1, WHITE)
@@ -3327,12 +4244,14 @@ def draw_actors(g, v):
         for i in range(len(pts) - 1):
             (xa, ya), (xb, yb) = pts[i], pts[i + 1]
             mx, my = (xa + xb) / 2 + g.rnd.uniform(-2, 2), (ya + yb) / 2 + g.rnd.uniform(-2, 2)
-            v.line(xa, ya, mx, my, (220, 240, 255))
-            v.line(mx, my, xb, yb, (160, 200, 255))
+            v.stroke(xa, ya, mx, my, (150, 190, 255), 0.8, (220, 240, 255))
+            v.stroke(mx, my, xb, yb, (110, 150, 240), 0.8, (160, 200, 255))
     for x0, y, h, bt, dur, nova in g.beams:
         k = 1 - bt / dur
         hh = h * (0.4 + 0.6 * k)
         outer = (200, 120, 255) if nova else (90, 150, 255)
+        if v.hi:
+            v.hglow(x0, y - hh / 2, FW - x0 + 2, hh, outer, max(2, int(s * 2)), 0.6)
         v.rect(x0, y - hh / 2, FW - x0 + 2, hh, outer)
         v.rect(x0, y - hh / 3, FW - x0 + 2, hh * 2 / 3, mix(outer, WHITE, 0.6))
         v.rect(x0, y - hh / 6, FW - x0 + 2, max(0.6, hh / 3), WHITE)
@@ -3343,16 +4262,25 @@ def draw_actors(g, v):
             over = g.charge >= CHARGE_LV[3]
             r = 1.2 + lv * 0.9 + 0.5 * math.sin(t * 30)
             col = (255, 120, 255) if over else (140, 200, 255)
-            v.circle(g.px + 9, g.py, r, col)
-            v.circle(g.px + 9, g.py, max(0.6, r - 1.2), WHITE)
+            if v.hi:
+                v.glow(g.px + 9, g.py, r * 1.8, col, 0.5)
+            v.circle(g.px + 9, g.py, r, col, True)
+            v.circle(g.px + 9, g.py, max(0.6, r - 1.2), WHITE, True)
         fl = 1.5 + math.sin(t * 40)
         v.spr(SHIP, g.px, g.py)
-        v.rect(g.px - 10 - fl, g.py - 0.5, 2 + fl, 1.6, (255, 170, 60))
-        v.rect(g.px - 9.5, g.py - 0.2, 1.5, 1, (255, 250, 200))
+        if v.hi:      # a flame that tapers into the dark instead of a block
+            v.streak(g.px - 10.5 - fl * 1.3, g.px - 7.6, g.py + 0.3, 1.8, (255, 80, 30), (255, 200, 90),
+                     (255, 250, 210))
+        else:
+            v.rect(g.px - 10 - fl, g.py - 0.5, 2 + fl, 1.6, (255, 170, 60))
+            v.rect(g.px - 9.5, g.py - 0.2, 1.5, 1, (255, 250, 200))
         if g.shield:
             v.ring(g.px, g.py, 7 + 0.5 * math.sin(t * 8), (120, 210, 255), 30)
         for bx, by in g.bits():
-            v.circle(bx, by, 1.7 + 1.0 / s, OUTLINE)
+            v.circle(bx, by, 1.7 + 1.0 / s, OUTLINE, True)
+            if v.hi:
+                v.ball(bx, by, 1.7, (80, 150, 210), (220, 245, 255))
+                continue
             v.circle(bx, by, 1.7, (60, 120, 176))
             v.circle(bx - 0.3, by - 0.3, 1.2, (120, 200, 240))
             v.dot(bx - 0.6, by - 0.6, (230, 250, 255))
@@ -3362,15 +4290,29 @@ def draw_actors(g, v):
         d = -1 if p.state == "back" else 1
         o = 1.0 / s
         v.rect(p.x + d * 2.4 - 0.5 - o, p.y - 3.5 - o, 1 + 2 * o, 5.5 + 2 * o, OUTLINE)
-        v.circle(p.x, p.y, 3.3 + o, OUTLINE)
+        v.circle(p.x, p.y, 3.3 + o, OUTLINE, True)
         v.sphere(p.x, p.y, 3.3, (140, 146, 168), (214, 218, 232))
-        v.circle(p.x + d * 0.8, p.y, 2.0 + 0.3 * math.sin(t * 10), mix(col, OUTLINE, 0.5))
-        v.circle(p.x + d * 0.8, p.y, 1.5 + 0.3 * math.sin(t * 10), col)
+        v.circle(p.x + d * 0.8, p.y, 2.0 + 0.3 * math.sin(t * 10), mix(col, OUTLINE, 0.5), True)
+        v.circle(p.x + d * 0.8, p.y, 1.5 + 0.3 * math.sin(t * 10), col, True)
         v.dot(p.x + d * 0.8 - 0.4, p.y - 0.4, mix(col, WHITE, 0.6))
         v.rect(p.x + d * 2.4 - 0.5, p.y - 3.5, 1, 1.5, (210, 214, 230))
         v.rect(p.x + d * 2.4 - 0.5, p.y + 2, 1, 1.5, (130, 136, 156))
     # enemy bullets
     for b in g.ebul:
+        if hi:     # round, glowing shots with a hot centre
+            if b.kind == "orb":
+                v.glow(b.x, b.y, 3.4, (255, 90, 60), 0.45)
+                v.disc(b.x, b.y, 1.8, (230, 70, 50))
+                v.disc(b.x - 0.15, b.y - 0.15, 1.3, (255, 130, 80))
+                v.disc(b.x - 0.25, b.y - 0.25, 0.7, (255, 236, 190))
+            elif b.kind == "lob":
+                v.ball(b.x, b.y, 1.2, (170, 130, 100))
+            else:
+                c = (255, 120, 170) if int(b.t * 12) % 2 else (255, 80, 130)
+                v.glow(b.x, b.y, 2.4, c, 0.45)
+                v.disc(b.x, b.y, 0.95, c)
+                v.disc(b.x - 0.1, b.y - 0.1, 0.45, (255, 235, 245))
+            continue
         if b.kind == "orb":
             v.circle(b.x, b.y, 1.8, (255, 90, 60))
             v.circle(b.x, b.y, 0.9, (255, 230, 170))
@@ -3383,13 +4325,65 @@ def draw_actors(g, v):
     for x, y, size, bt, dur, cols in g.blasts:
         k = bt / dur
         r = size * (0.5 + k)
+        if hi:     # a soft halo, a smooth rim and a graded fireball instead of two flat discs
+            c = cols[min(3, int(k * 4))]
+            if k < 0.7:
+                v.glow(x, y, r * 1.45, cols[min(3, int(k * 4) + 1)], 0.35 * (1 - k))
+            v.disc(x, y, r, c)
+            if k < 0.6:
+                v.disc(x, y, r * 0.75, mix(c, cols[0], 0.5))
+                v.disc(x - r * 0.08, y - r * 0.08, r * 0.55, cols[0])
+                v.disc(x - r * 0.12, y - r * 0.12, r * 0.28, mix(cols[0], WHITE, 0.5))
+            continue
         v.circle(x, y, r, cols[min(3, int(k * 4))])
         if k < 0.6:
             v.circle(x, y, r * 0.55, cols[0])
-    for pp in g.parts:
-        v.dot(pp[0], pp[1], pp[6] if pp[4] > pp[5] * 0.4 else shade(pp[6], 0.6))
+    if hi:
+        for pp in g.parts:
+            v.spark(pp[0], pp[1], pp[6] if pp[4] > pp[5] * 0.4 else shade(pp[6], 0.6))
+    else:
+        for pp in g.parts:
+            v.dot(pp[0], pp[1], pp[6] if pp[4] > pp[5] * 0.4 else shade(pp[6], 0.6))
     for x, y, wt, dur in g.waves:
         v.ring(x, y, 4 + wt / dur * 90, (255, 240, 220), 80)
+
+
+def draw_shot_hi(v, sh, k, x, y):
+    """The player's shots in a big window; False leaves the shot to the plain drawing."""
+    if k == "bolt":
+        v.streak(x - 2.6, x + 2, y + 0.1, 1.0, (60, 150, 220), BOLT_C[0], WHITE)
+    elif k == "bitbolt":
+        v.streak(x - 1.6, x + 1.5, y + 0.1, 1.0, (70, 130, 200), (200, 240, 255))
+    elif k == "lance1":
+        v.glow(x, y, 3.5, (120, 200, 255), 0.35)
+        v.streak(x - 5, x + 3, y, 2.4, (60, 120, 230), (150, 215, 255), WHITE)
+    elif k == "lance2":
+        v.glow(x, y, 5.5, (110, 180, 255), 0.4)
+        v.streak(x - 11, x - 1, y, 2.2, (40, 80, 200), (110, 170, 255), (200, 230, 255))
+        v.disc(x, y, 3.2, (110, 180, 255))
+        v.disc(x + 0.3, y - 0.1, 2.2, (180, 220, 255))
+        v.disc(x + 0.5, y - 0.2, 1.2, WHITE)
+    elif k == "ray":
+        pts = sh.data["tr"] + [(x, y)]
+        for i in range(len(pts) - 1):
+            c = (90, 150, 255) if i < 3 else (200, 230, 255)
+            v.stroke(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], mix(c, (30, 50, 120), 0.3), 0.9, c)
+    elif k == "needle":
+        v.stroke(x - sh.vx * 0.025, y - sh.vy * 0.025, x, y, (60, 170, 80), 0.8, (110, 240, 120))
+        v.disc(x, y, 0.6, (230, 255, 220))
+    elif k == "scatter":
+        v.glow(x, y, 3.0, (200, 120, 255), 0.4)
+        v.disc(x, y, 1.6, (180, 100, 240))
+        v.disc(x - 0.3, y - 0.3, 0.8, (240, 220, 255))
+    elif k == "missile":
+        v.stroke(x - sh.vx * 0.02, y - sh.vy * 0.02, x, y, (200, 110, 50), 0.9, (250, 180, 90))
+        v.glow(x, y, 1.6, (255, 200, 120), 0.6)
+        v.dot(x, y, WHITE)
+    elif k == "bomb":
+        v.ball(x, y, 1.3, (220, 150, 80), (255, 230, 160))
+    else:
+        return False
+    return True
 
 
 def field_geom(cols, rows, hud):

@@ -1204,6 +1204,11 @@ def layers(m, cols, rows, T, ox, oy):
             x0, y0 = ox + tx * T, oy + ty * T
             up, down = is_wall(tx, ty - 1), is_wall(tx, ty + 1)
             left, right = is_wall(tx - 1, ty), is_wall(tx + 1, ty)
+            # big tiles: the hedges get rounded outer corners (a topiary, not a stack of boxes)
+            rc = T * 0.6 if c == "#" and T >= 5 else 0
+            corners = [] if not rc else [(cx_, cy_, sx_, sy_) for cx_, cy_, sx_, sy_, open_ in (
+                (rc, rc, -1, -1, not up and not left), (T - rc, rc, 1, -1, not up and not right),
+                (rc, T - rc, -1, 1, not down and not left), (T - rc, T - rc, 1, 1, not down and not right)) if open_]
             for yy in range(T):
                 y = y0 + yy
                 if not 0 <= y < H:
@@ -1215,6 +1220,12 @@ def layers(m, cols, rows, T, ox, oy):
                         continue
                     n = hsh(x, y)
                     if c == "#":
+                        if T >= 5:      # big tiles: clumps of leaves, each lit from the top left
+                            lr = y // 3
+                            lx = (x + (lr % 2) * 1.5 + 0.5) % 3 - 1.5
+                            ly = y % 3 - 1.0
+                            leaf = 0.3 if lx + ly < -1.2 else -0.26 if lx + ly > 1.4 else 0.0
+                            n = 0.55 * hsh(int(x + (lr % 2) * 1.5) // 3, lr, 5) + 0.45 * n + leaf
                         col = shade(hedge, 0.74 + 0.5 * n)
                         if speck and hsh(x, y, 3) < 0.05:
                             col = mix(col, speck, 0.8)
@@ -1226,6 +1237,17 @@ def layers(m, cols, rows, T, ox, oy):
                             col = shade(col, 1.18)
                         elif T >= 3 and xx == T - 1 and not right:
                             col = shade(col, 0.78)
+                        if corners:
+                            for ccx, ccy, csx, csy in corners:
+                                ux, uy = xx + 0.5 - ccx, yy + 0.5 - ccy
+                                if ux * csx > 0 and uy * csy > 0:
+                                    d = math.hypot(ux, uy)
+                                    if d > rc - 1.1:      # the rim follows the curve, lit on top, shaded below
+                                        col = shade(shade(hedge, 0.74 + 0.5 * n), 1.45 if csy < 0 else 0.55)
+                                    cover = clamp(rc - d + 0.5, 0.0, 1.0)
+                                    if cover < 1:
+                                        col = mix(shade(ground, 0.86 + 0.28 * n), col, cover)
+                                    break
                         fl = mix(col, (214, 232, 255), 0.7)
                     elif c == "B":
                         col = fl = shade((30, 18, 36), 0.85 + 0.3 * n)
@@ -1504,7 +1526,11 @@ def render(g, cols, rows, hud=True):
     for (x, y) in g.motes:
         v = vis(x, y)
         if v > 0:
-            cv.rect(ox + x * T + mo, oy + y * T + mo, ms, ms, mote if v >= 1 else mix(dground, mote, v))
+            c = mote if v >= 1 else mix(dground, mote, v)
+            if T >= 6:      # big tiles: a round, softly edged mote instead of a square
+                disc(cv, ox + (x + 0.5) * T, oy + (y + 0.5) * T, T * 0.13, c, edge=0.9, clip=clip)
+            else:
+                cv.rect(ox + x * T + mo, oy + y * T + mo, ms, ms, c)
     pulse = 0.5 + 0.5 * math.sin(g.t * 6)
     for (x, y) in g.power:
         v = vis(x, y)

@@ -672,11 +672,338 @@ class Painter:
                     self.surf[i] = True
 
 
+# --- big windows: the same coast, drawn finer --------------------------------------------------
+REF_W, REF_H = 150, 80           # the coast of the balance runs (a 150x41 window); bigger windows zoom in to it
+
+
+def map_size(cols, rows):
+    """The coast for a window: as big as the window up to a medium size; beyond that the window zooms in
+    (see render), so a big window shows about the same stretch of coast - only finer."""
+    z = max(1.0, min(cols / REF_W, (rows - 1) * 2 / REF_H))
+    return max(60, min(int(cols / z), 200)), max(36, min(int((rows - 1) * 2 / z), 110))
+
+
+def _disc(px, PW, PH, cx, cy, r, col, k, soft=0.0):
+    """An anti-aliased disc at screen position (cx, cy) with radius r (screen pixels); soft > 0 fades it out
+    towards the rim like a glow."""
+    x0, x1 = max(0, int(cx - r - 1)), min(PW, int(cx + r + 2))
+    y0, y1 = max(0, int(cy - r - 1)), min(PH, int(cy + r + 2))
+    for Y in range(y0, y1):
+        row = px[Y]
+        dy = Y + 0.5 - cy
+        for X in range(x0, x1):
+            dd = math.hypot(X + 0.5 - cx, dy)
+            a = r + 0.5 - dd
+            if a <= 0:
+                continue
+            if a > 1:
+                a = 1.0
+            if soft:
+                a *= max(0.0, 1 - dd / (r + 0.5)) ** soft
+            row[X] = mix(row[X], col, k * a)
+
+
+def _seg(px, PW, PH, x0, y0, x1, y1, wd, col, k):
+    """An anti-aliased line from (x0, y0) to (x1, y1), wd screen pixels wide."""
+    h = wd / 2 + 0.5
+    lo_x, hi_x = max(0, int(min(x0, x1) - h)), min(PW, int(max(x0, x1) + h) + 1)
+    lo_y, hi_y = max(0, int(min(y0, y1) - h)), min(PH, int(max(y0, y1) + h) + 1)
+    ux, uy = x1 - x0, y1 - y0
+    L2 = ux * ux + uy * uy or 1e-9
+    for Y in range(lo_y, hi_y):
+        row = px[Y]
+        py = Y + 0.5 - y0
+        for X in range(lo_x, hi_x):
+            pxx = X + 0.5 - x0
+            q = (pxx * ux + py * uy) / L2
+            q = 0.0 if q < 0 else 1.0 if q > 1 else q
+            a = h - math.hypot(pxx - q * ux, py - q * uy)
+            if a > 0:
+                row[X] = mix(row[X], col, k * (1.0 if a > 1 else a))
+
+
+def _hull(px, PW, PH, cx, cy, ca, sa, L, hw, col, k=1.0, bow=0.4):
+    """A ship's hull seen from above at screen resolution: length L along (ca, sa), half-width hw, a pointed bow,
+    a rounded stern, the deck lighter along the keel line."""
+    r = L / 2 + hw + 1
+    x0, x1 = max(0, int(cx - r)), min(PW, int(cx + r) + 1)
+    y0, y1 = max(0, int(cy - r)), min(PH, int(cy + r) + 1)
+    bl = max(1.0, L * bow)
+    for Y in range(y0, y1):
+        row = px[Y]
+        dy = Y + 0.5 - cy
+        for X in range(x0, x1):
+            dx = X + 0.5 - cx
+            u = dx * ca + dy * sa
+            v = abs(-dx * sa + dy * ca)
+            if u > L / 2 or u < -L / 2 - 0.5:
+                continue
+            w = hw * (((L / 2 - u) / bl) ** 0.6 if u > L / 2 - bl else 1.0)
+            if u < -L / 2 + hw:                  # rounded stern
+                w = min(w, math.sqrt(max(0.0, hw * hw - (u + L / 2 - hw) ** 2)))
+            a = w - v + 0.5
+            if a > 0:
+                c = shade(col, 1.18 - 0.5 * min(1.0, v / max(0.5, hw)))
+                row[X] = mix(row[X], c, k * (1.0 if a > 1 else a))
+
+
+class FineView:
+    """Per-screen-pixel data of a coast drawn at z screen pixels per world pixel: the land, reefs and harbour
+    sampled bilinearly (smooth anti-aliased shores, rocks lit on the side facing the lamp, a fine grain), plus
+    angle and distance to the lamp, so a frame costs one pass over the screen."""
+
+    def __init__(self, night, painter, PW, PH, z):
+        c = night.c
+        W, H, g = c.W, c.H, c.g
+        self.key = (PW, PH, z, id(painter))
+        self.z = z
+        self.ox, self.oy = ox, oy = int((PW - W * z) / 2), int((PH - H * z) / 2)
+        lx, ly = c.lamp[0] + 0.5, c.lamp[1] + 0.5
+        surf = painter.surf
+        rnd = random.Random(night.seed * 3 + 1)
+        X0, X1 = max(0, ox), min(PW, ox + int(math.ceil(W * z)))
+        cols_ = []
+        for X in range(X0, X1):
+            fx = (X + 0.5 - ox) / z - 0.5
+            i = math.floor(fx)
+            cols_.append((X, fx + 0.5, min(W - 1, max(0, i)), min(W - 1, max(0, i + 1)), fx - i))
+        solid = (ROCK, LAND)
+        self.rows = []
+        for Y in range(max(0, oy), min(PH, oy + int(math.ceil(H * z)))):
+            fy = (Y + 0.5 - oy) / z - 0.5
+            j = math.floor(fy)
+            ty = fy - j
+            v = fy + 0.5
+            j0, j1 = min(H - 1, max(0, j)) * W, min(H - 1, max(0, j + 1)) * W
+            ang, dist, phase, dark, lit, wa, sw = [], [], [], [], [], [], []
+            for X, u, i0, i1, tx in cols_:
+                q = (j0 + i0, j0 + i1, j1 + i0, j1 + i1)
+                ws = ((1 - tx) * (1 - ty), tx * (1 - ty), (1 - tx) * ty, tx * ty)
+                ks = [g[p] for p in q]
+                ss = [1.0 if k in solid else 0.0 for k in ks]
+                sol = ss[0] * ws[0] + ss[1] * ws[1] + ss[2] * ws[2] + ss[3] * ws[3]
+                rk = sum(w for k, w in zip(ks, ws) if k == ROCK)
+                hb = sum(w for k, w in zip(ks, ws) if k == HARBOUR)
+                sf = sum(w for p, w in zip(q, ws) if surf[p])
+                al = min(1.0, max(0.0, (sol - 0.5) * z + 0.5))
+                hbn = hb / (1 - sol) if sol < 0.999 else 0.0
+                wd, wl = mix(SEA_DARK, HARB_DARK, hbn), mix(SEA_LIT, HARB_LIT, hbn)
+                if al > 0:
+                    rf = rk / sol if sol > 0 else 0.0
+                    jj = rnd.uniform(-0.1, 0.1)
+                    sd = mix(LAND_DARK, ROCK_DARK, rf)
+                    sl = mix(shade(LAND_LIT, 1 + jj * 2), shade(ROCK_LIT, 1 + jj), rf)
+                    gx = (1 - ty) * (ss[1] - ss[0]) + ty * (ss[3] - ss[2])     # the slope of the shore
+                    gy = (1 - tx) * (ss[2] - ss[0]) + tx * (ss[3] - ss[1])
+                    dl = math.hypot(lx - u, ly - v) or 1.0
+                    facing = -(gx * (lx - u) + gy * (ly - v)) / dl
+                    sl = shade(sl, 1 + 0.45 * max(-1.0, min(1.0, facing)))
+                    dark.append(mix(wd, sd, al))
+                    lit.append(mix(wl, sl, al))
+                else:
+                    rnd.random()
+                    dark.append(wd)
+                    lit.append(wl)
+                wa.append(1 - al)
+                sw.append(sf * (1 - al))
+                ang.append(math.atan2(v - ly, u - lx))
+                dist.append(math.hypot(u - lx, v - ly))
+                xx, yy = u - 0.5, v - 0.5
+                phase.append(xx * 0.33 + yy * 0.52 + 1.6 * math.sin(yy * 0.17 + xx * 0.06) + rnd.uniform(0, 0.6))
+            self.rows.append((Y, X0, ang, dist, phase, dark, lit, wa, sw))
+
+
+def draw_fine(n, painter, cv, PW, PH, z, title_mode):
+    """The coast at z screen pixels per world pixel: the same night as a medium window, the shores smooth and the
+    beam, ships, boat and lighthouse drawn at screen resolution."""
+    c = n.c
+    W, H = c.W, c.H
+    fv = getattr(painter, "fine", None)
+    if fv is None or fv.key != (PW, PH, z, id(painter)):
+        fv = painter.fine = FineView(n, painter, PW, PH, z)
+    ox, oy = fv.ox, fv.oy
+    px = cv.px
+    t = n.t
+    on = n.refill <= 0 and n.oil > 0
+    R = n.beam_range()
+    half = n.half
+    beam = n.beam
+    flash = n.flash
+    fogc = n.fog > 0
+    fg = []
+    if fogc:                                     # fog on a grid of 4x4 screen pixels (finer than 3x3 world pixels)
+        for gy in range(0, PH, 4):
+            v = (gy + 2 - oy) / z
+            fg.append([n.fog_at((gx + 2 - ox) / z, v) for gx in range(0, PW, 4)])
+    moon = 0.06 if n.night <= 2 else 0.03
+    sin = math.sin
+    for Y, X0, ang, dist, phase, dark, lit, wa, sw in fv.rows:
+        row = px[Y]
+        frow = fg[Y >> 2] if fogc else None
+        for k in range(len(ang)):
+            L = moon
+            d = dist[k]
+            if on and d < R:
+                da = ang[k] - beam
+                if da > math.pi:
+                    da -= TAU
+                elif da < -math.pi:
+                    da += TAU
+                if -half < da < half:
+                    q = da / half
+                    L += (1 - d / R) ** 0.6 * (1 - q * q)
+            if d < 6:
+                L += (1 - d / 6) * (0.7 if on else 0.15)
+            f = frow[(X0 + k) >> 2] if fogc else 0.0
+            if f:
+                L *= 1 - f * 0.8
+            L = L + flash * 0.9
+            if L > 1:
+                L = 1.0
+            w_ = wa[k]
+            if w_:
+                L *= 1 - w_ * 0.2 * (1 - sin(t * 1.5 + phase[k]))
+            a, b = dark[k], lit[k]
+            s_ = sw[k]
+            if s_ or f:
+                col = mix(a, b, L)
+                if s_:
+                    col = mix(col, SURF, s_ * (0.1 + 0.07 * sin(t * 2.2 + phase[k] * 2) + 0.3 * L))
+                if f:
+                    col = mix(col, (40, 46, 56) if L < 0.3 else (150, 160, 170), f * 0.45)
+                row[X0 + k] = col
+            else:
+                row[X0 + k] = (int(a[0] + (b[0] - a[0]) * L), int(a[1] + (b[1] - a[1]) * L), int(a[2] + (b[2] - a[2]) * L))
+
+    def S(x, y):                                 # world -> screen
+        return x * z + ox, y * z + oy
+
+    # rain: short thin streaks, visible where there is light
+    for dx_, dy_ in n.drops:
+        L = n.light_at(dx_, dy_) + flash
+        if L > 0.1:
+            X, Y = S(dx_, dy_)
+            X, Y = int(X), int(Y)
+            for yy in range(Y, Y + max(1, int(z))):
+                if 0 <= X < PW and 0 <= yy < PH:
+                    px[yy][X] = mix(px[yy][X], (170, 190, 210), min(0.6, L) * (1 - 0.3 * (yy - Y)))
+    # harbour lanterns, red and green
+    hx, hy = c.harbour
+    for sx_, col in ((hx - 7, (255, 60, 60)), (hx + 7, (60, 255, 110))):
+        blink = 1.0 if int(t * 1.5) % 2 else 0.6
+        X, Y = S(sx_ + 0.5, int(c.coast[int(clamp(sx_, 0, W - 1))] - 1) + 0.5)
+        _disc(px, PW, PH, X, Y, 1.6 * z, col, 0.25 * blink, soft=1.0)
+        _disc(px, PW, PH, X, Y, 0.5 * z, col, blink)
+    # the horn's ring: a thin circle
+    if n.horn_ring is not None and t - n.horn_ring < 1.0:
+        r = (t - n.horn_ring) * n.horn_radius()
+        cx, cy = S(c.lamp[0] + 0.5, c.lamp[1] + 0.5)
+        k = 0.5 * (1 - (t - n.horn_ring))
+        steps = max(60, int(TAU * r * z / 1.5))
+        for m in range(steps):
+            a = TAU * m / steps
+            X, Y = int(cx + math.cos(a) * r * z), int(cy + math.sin(a) * r * z)
+            if 0 <= X < PW and 0 <= Y < PH:
+                px[Y][X] = mix(px[Y][X], (200, 210, 230), k)
+    # ships
+    for s in n.ships:
+        if s.state in ("saved", "rescued"):
+            continue
+        L = max(n.light_at(s.x, s.y), flash)
+        ca, sa = math.cos(s.h), math.sin(s.h)
+        if s.state == "sailing":                 # the wake: a thin fading line
+            wk = list(s.wake)
+            for k in range(1, len(wk)):
+                a, b = S(*wk[k - 1]), S(*wk[k])
+                _seg(px, PW, PH, a[0], a[1], b[0], b[1], 0.8, (120, 150, 170), 0.12 * k / 10 + L * 0.2)
+        hcol = mix((20, 18, 18), s.col, max(0.15, L)) if s.state != "lost" else (30, 30, 34)
+        h = s.h + (0.35 if s.state in ("wrecked", "lost") else 0.0)
+        hca, hsa = math.cos(h), math.sin(h)
+        fr = s.kind == "freighter"
+        cx, cy = s.x - 0.5 * ca, s.y - 0.5 * sa
+        if fr:
+            cx, cy = cx - sa * 0.5, cy + ca * 0.5
+        X, Y = S(cx + 0.5, cy + 0.5)
+        hw = (1.05 if fr else 0.6) * z
+        _hull(px, PW, PH, X, Y, hca, hsa, (s.length + 0.4) * z, hw, hcol)
+        if s.state != "lost":                    # a cabin, or the freighter's bridge at the stern
+            cab = mix(hcol, (230, 226, 210), 0.35 * max(0.3, L))
+            back = -0.32 if fr else -0.12
+            bx, by = X + hca * s.length * z * back, Y + hsa * s.length * z * back
+            _hull(px, PW, PH, bx, by, hca, hsa, (1.0 if fr else 1.2) * z, hw * 0.55, cab, bow=0.1)
+        if s.kind == "sail" and s.state == "sailing":    # the sail, a pale triangle off the mast
+            sc = mix((40, 40, 44), (235, 235, 230), max(0.2, L))
+            tip = (X - sa * 1.8 * z, Y + ca * 1.8 * z)
+            for m in range(5):
+                f = m / 4
+                _seg(px, PW, PH, X + ca * (0.9 - 1.6 * f) * z, Y + sa * (0.9 - 1.6 * f) * z, tip[0], tip[1],
+                     1.0, sc, 0.7)
+        if s.state == "sailing":       # the lantern: always visible, with a small glow so ships never read as rock
+            lx_, ly_ = S(s.x + ca * s.length * 0.3 + 0.5, s.y + sa * s.length * 0.3 + 0.5)
+            _disc(px, PW, PH, lx_, ly_, 1.5 * z, LANTERN, 0.3, soft=1.0)
+            _disc(px, PW, PH, lx_, ly_, 0.45 * z, LANTERN, 1.0)
+            if not title_mode and s.aware <= 0 and danger(n, s) > 0.45 and int(t * 4) % 2:
+                ex, ey = S(s.x + 0.5, s.y)
+                _seg(px, PW, PH, ex, ey - 4.2 * z, ex, ey - 2.4 * z, max(1.0, 0.6 * z), (255, 70, 60), 1.0)
+                _disc(px, PW, PH, ex, ey - 1.3 * z, 0.35 * z, (255, 70, 60), 1.0)
+        elif s.state == "wrecked":     # distress flares, and the time the crew can still hold on
+            urgent = s.timer < 10
+            if int(t * (6 if urgent else 3)) % 2:
+                fx_, fy_ = S(s.x + 0.5, s.y)
+                _seg(px, PW, PH, fx_, fy_ - 0.2 * z, fx_, fy_ - 2.0 * z, max(1.0, 0.5 * z), DISTRESS, 0.9)
+                for sdx in (-1.2, 1.2):
+                    _seg(px, PW, PH, fx_, fy_ - 2.0 * z, fx_ + sdx * z, fy_ - 1.4 * z, 1.0, DISTRESS, 0.9)
+                _disc(px, PW, PH, fx_, fy_ - 2.6 * z, 1.6 * z, DISTRESS, 0.3, soft=1.0)
+                _disc(px, PW, PH, fx_, fy_ - 2.6 * z, 0.5 * z, (255, 200, 160), 1.0)
+            if not (title_mode or n.over or n.dawn):
+                tag = " %d " % max(0, math.ceil(s.timer))
+                tx_, ty_ = S(s.x, s.y - 4)
+                col_, row_ = int(tx_) - len(tag) // 2, int(ty_) // 2
+                if 0 <= row_ < cv.rows - 1:
+                    cv.put(max(0, min(cv.cols - len(tag), col_)), row_, tag, (255, 255, 255) if urgent else (255, 210, 190),
+                           (170, 30, 30) if urgent and int(t * 4) % 2 else (90, 20, 24))
+    # the rescue boat
+    b = n.boat
+    bl = max(n.light_at(b.x, b.y), flash)
+    X, Y = S(b.x + 0.5, b.y + 0.5)
+    if b.state != "docked":
+        _disc(px, PW, PH, X, Y, 2.6 * z, (255, 150, 60), 0.3 + 0.12 * math.sin(t * 5), soft=1.2)
+    _hull(px, PW, PH, X + 0.5 * z, Y, 1.0, 0.0, 2.2 * z, 0.55 * z, mix((80, 40, 20), (255, 140, 40), max(0.4, bl)))
+    _disc(px, PW, PH, X - 0.9 * z, Y, 0.45 * z, (255, 240, 200) if b.state != "docked" else (160, 120, 80), 1.0)
+    # the lighthouse: a striped, round tower and its lamp
+    lx, ly = c.island
+    cx = (lx + 0.5) * z + ox
+    top, bot = (ly - 4) * z + oy, (ly + 1) * z + oy
+    for Y in range(max(0, int(top)), min(PH, int(bot) + 1)):
+        f = (Y + 0.5 - top) / (bot - top)
+        if not 0 <= f <= 1:
+            continue
+        hw = (0.45 + 0.25 * f) * z
+        k = int((bot - Y - 0.5) / z)
+        base = (230, 230, 230) if k % 2 == 0 else (200, 40, 40)
+        row = px[Y]
+        for X in range(max(0, int(cx - hw - 1)), min(PW, int(cx + hw + 2))):
+            e = (X + 0.5 - cx) / hw
+            a = (1 - abs(e)) * hw + 0.5
+            if a > 0:
+                row[X] = mix(row[X], shade(base, 1.12 - 0.35 * (e + 1) / 2), min(1.0, a))
+    lc = (255, 250, 210) if on else (90, 80, 60)
+    _seg(px, PW, PH, cx - 0.75 * z, top, cx + 0.75 * z, top, max(1.0, 0.3 * z), (40, 40, 46), 1.0)   # the gallery
+    _disc(px, PW, PH, cx, (ly - 4.5) * z + oy, 0.55 * z, lc, 1.0)
+    _seg(px, PW, PH, cx - 0.4 * z, (ly - 5.1) * z + oy, cx + 0.4 * z, (ly - 5.1) * z + oy, 1.0, (60, 50, 50), 0.9)
+
+
 def render(n, painter, cols, rows, title_mode=False):
     cv = Canvas(cols, rows)
     c = n.c
     W, H = c.W, c.H
     PW, PH = cols, (rows - (0 if title_mode else 1)) * 2
+    z = max(1.0, min(PW / W, PH / H))
+    if z > 1:                                  # a big window: the same coast, zoomed in and drawn finer
+        draw_fine(n, painter, cv, PW, PH, z, title_mode)
+        if not title_mode:
+            hud(cv, n, cols, rows)
+        return cv
     ox, oy = (PW - W) // 2, (PH - H) // 2
     px = cv.px
     t = n.t
@@ -1010,10 +1337,6 @@ def render_over(cv, camp, record, auto=False):
     w = max(len(l) for l in lines) + 4
     cv.box(max(0, (cv.cols - w) // 2), max(0, cv.rows // 2 - len(lines) // 2 - 1), [l.center(w - 4) for l in lines],
            (240, 240, 246), (30, 16, 24))
-
-
-def map_size(cols, rows):
-    return max(60, min(cols, 200)), max(36, min((rows - 1) * 2, 110))
 
 
 class TitleDemo:

@@ -18,7 +18,8 @@ import random
 import sys
 import time
 
-from arcadekit import AUTO_LABEL, FONT, AutoMode, Canvas, Terminal, clamp, load_scores, mix, overlay, shade, shared_key, submit, title_screen
+from arcadekit import (AUTO_LABEL, FONT, AutoMode, Canvas, Terminal, clamp, load_scores, mix, overlay, scale2x, shade,
+                       shared_key, submit, title_screen)
 
 try:
     from arcadesound import Sound
@@ -802,25 +803,58 @@ def car_colours(body, k, f, haze, brake=False, lights=1.0):
             "X": (24, 24, 28), "E": L((90, 90, 96))}
 
 
-def draw_art(px, W, art, cols, x0, y0, w, h, clip, flip=False, lean=0.0):
+_HIRES = {}
+
+
+def hires(art, w, h):
+    """The art itself when it is drawn at or below its own size (small windows: unchanged), otherwise an EPX-smoothed
+    master (2x, 4x or 8x) big enough for the target, so a car drawn large gets rounded corners and clean slopes
+    instead of fat blocks. The masters are made once per art; any size is then a plain sample of one."""
     th, tw = len(art), len(art[0])
+    if w <= tw and h <= th:
+        return art
+    lv = 1
+    while lv < 3 and (tw << lv < w or th << lv < h):
+        lv += 1
+    key = (id(art), lv)
+    g = _HIRES.get(key)
+    if g is None:
+        g = [list(r) for r in art]
+        for _ in range(lv):
+            g = scale2x(g)
+        g = ["".join(r) for r in g]
+        _HIRES[key] = g
+    return g
+
+
+def draw_art(px, W, art, cols, x0, y0, w, h, clip, flip=False, lean=0.0):
     w, h = int(w), int(h)
     if w < 1 or h < 1:
         return
+    src_art = hires(art, w, h)
+    fine = src_art is not art
+    th, tw = len(src_art), len(src_art[0])
+    if fine:                                       # with room for it, the body gets a soft top-to-bottom shading
+        body = cols["B"]
+        top, bot = shade(body, 1.1), shade(body, 0.8)
     x0, y0 = int(x0), int(y0)
     for ty in range(h):
         y = y0 + ty
         if y < 0 or y >= clip:
             continue
-        src = art[ty * th // h]
+        src = src_art[ty * th // h]
         out = px[y]
         sh = int(lean * (1 - ty / h) * 2.5)
+        cl = cols
+        if fine:
+            cl = dict(cols)
+            cl["B"] = mix(top, bot, ty / h)
         for tx in range(w):
             x = x0 + tx + sh
             if 0 <= x < W:
                 ch = src[(w - 1 - tx) * tw // w if flip else tx * tw // w]
                 if ch != ".":
-                    out[x] = cols[ch]
+                    out[x] = cl[ch]
 
 
 # ---- backgrounds: a slow sky layer and a skyline layer, cached per stage and screen size ----

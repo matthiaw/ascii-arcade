@@ -285,6 +285,21 @@ class World:
         d = H[((iy + 1) & M) * N + ((ix + 1) & M)]
         return a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy
 
+    def patches(self):
+        """Per cell the bilinear patch of its height (h, dh/dx, dh/dy, twist), for ground seen close up
+        (made the first time a big window needs it)."""
+        hq = getattr(self, "_hq", None)
+        if hq is None:
+            H = self.H
+            hq = self._hq = []
+            for y in range(N):
+                r0, r1 = y * N, ((y + 1) & M) * N
+                for x in range(N):
+                    x1 = (x + 1) & M
+                    a, b, c, d = H[r0 + x], H[r0 + x1], H[r1 + x], H[r1 + x1]
+                    hq.append((a, b - a, c - a, a - b - c + d))
+        return hq
+
     def over_liquid(self, x, y):
         return self.water[(int(y) & M) * N + (int(x) & M)]
 
@@ -1320,12 +1335,70 @@ def shadow_pts(colsbuf, pts, PW, PH):
             colsbuf[x][y] = (c[0] // 4, c[1] // 4, c[2] // 4)
 
 
+FINE_CELL = 2.0   # ground cells this many pixels wide or more are drawn with sub-cell detail
+_rg = random.Random(17)
+GRAIN = [1.0 + _rg.uniform(-0.05, 0.05) for _ in range(64 * 64)]   # brightness grain at a quarter of a cell
+
+
+FINE_SPRITE = 1.25   # sprite scale (window size relative to 120 x 40) from which the craft and markers are redrawn
+_CRAFT = {}
+
+
+def sprite_scale(PW, PH):
+    """How much bigger than at a medium window (120 x 40) the craft and markers are drawn."""
+    return min(PW / 120.0, PH / 70.0)
+
+
+def craft_fine(V, k):
+    """The vehicle's sprite for a big window: the letter art smoothed up (Scale2x) to k times its size, the
+    outline thinned back to about a pixel, plating lit on top and shaded underneath at that size. Per row a list
+    of (x, letter, source column, light factor); the colours are filled in per frame (lights blink, guns flash)."""
+    sp = V["sprite"]
+    sw, sh = max(len(r) for r in sp), len(sp)
+    w, h = max(1, round(sw * k)), max(1, round(sh * k))
+    key = (V["id"], w, h)
+    got = _CRAFT.get(key)
+    if got:
+        return got
+    g = arcadekit.scale_art([list(r.ljust(sw)) for r in sp], w, h)
+    th = max(1, round(k / 2))
+    reach = max(th + 1, round(k))
+    filled = lambda x, y: 0 <= x < w and 0 <= y < h and g[y][x] != " "
+    near = lambda x, y, r: any(not filled(x + dx, y + dy) for dx in range(-r, r + 1) for dy in range(-r, r + 1))
+    edge = lambda x, y: not filled(x, y) or g[y][x] == "#"
+    rows = []
+    for y in range(h):
+        row = []
+        for x in range(w):
+            ch = g[y][x]
+            if ch == " ":
+                continue
+            if ch == "#" and not near(x, y, th) and near(x, y, reach):
+                ch = next((g[y + dy][x + dx] for dx, dy in ((0, 1), (0, -1), (1, 0), (-1, 0))
+                           if filled(x + dx, y + dy) and g[y + dy][x + dx] != "#"), "#")
+            lt = 1.0
+            if ch not in "#EegLM":
+                up, down = edge(x, y - th), edge(x, y + th)
+                if up and not down:
+                    lt = 1.2
+                elif down and not up:
+                    lt = 0.78
+                elif edge(x - th, y) and not edge(x + th, y):
+                    lt = 1.1
+            row.append((x, ch, min(sw - 1, int(x * sw / w)), lt))
+        rows.append(row)
+    got = _CRAFT[key] = (w, h, sw, rows)
+    return got
+
+
 def render(g, scr, cols, rows):
     W = g.world
     PW = cols
     prow = rows - status_lines(g)
     PH = prow * 2
     S = PW / 2.0                      # focal length in pixels (90 degree view)
+    ks = sprite_scale(PW, PH)         # big windows: the craft and markers grow with the view and get finer
+    fine = ks >= FINE_SPRITE
     P = g.P
     g.sky.prepare(P, (W.theme, g.tod), PH)
     hor = int(PH * 0.36 + g.pitch)
@@ -1348,6 +1421,9 @@ def render(g, scr, cols, rows):
     t2 = g.t * 2.0
     ramp = W.liq["ripple"]
     z, dz = 1.0, 0.35
+    HQ = W.patches() if S >= FINE_CELL else None   # S / z is the width of a cell in pixels
+    off = N * 64    # keeps the sample points positive, so int() is floor (the world wraps every N)
+    lastz, lastliq, zprev = [0.0] * PW, [False] * PW, -1.0   # per column: the step that drew its top ground pixel
     while z < FAR:
         plx = -cs * z - sn * z + cx
         ply = sn * z - cs * z + cy
@@ -1357,6 +1433,69 @@ def render(g, scr, cols, rows):
         f = (z / FAR) ** 1.4
         nf = 1 - f
         fogr, fogg, fogb = fr * f, fgc * f, fb * f
+        if inv >= FINE_CELL:
+            # close ground, where a cell spans several pixels (a big window): height and colour are interpolated
+            # between cells (smooth slopes, ridges and coasts instead of steps and squares), with a grain finer
+            # than a cell on land, soft waves on liquid, and tall faces shaded down to the step in front
+            X, Y = plx + off, ply + off
+            for i in range(PW):
+                yb = ybuf[i]
+                if yb > 0:
+                    ix, iy = int(X), int(Y)
+                    fx, fy = X - ix, Y - iy
+                    q = HQ[(iy & M) * N + (ix & M)]
+                    hs = int((camh - (q[0] + q[1] * fx + q[2] * fy + q[3] * fx * fy)) * inv + hor)
+                    if hs < yb:
+                        if hs < 0:
+                            hs = 0
+                        r0_, r1_ = (iy & M) * N, ((iy + 1) & M) * N
+                        x0_, x1_ = ix & M, (ix + 1) & M
+                        i00, i01, i10, i11 = r0_ + x0_, r0_ + x1_, r1_ + x0_, r1_ + x1_
+                        w11 = fx * fy
+                        w01, w10 = fx - w11, fy - w11
+                        w00 = 1 - fx - w10
+                        wet = Wt[i00] + Wt[i01] + Wt[i10] + Wt[i11]
+                        if 0 < wet < 4:   # the coast: a smooth curve between land and liquid, not a blur
+                            ww = Wt[i00] * w00 + Wt[i01] * w01 + Wt[i10] * w10 + Wt[i11] * w11
+                            liquid = ww > 0.5
+                            if liquid:
+                                w00, w01, w10, w11 = w00 * Wt[i00], w01 * Wt[i01], w10 * Wt[i10], w11 * Wt[i11]
+                            else:
+                                w00, w01, w10, w11 = (w00 * (1 - Wt[i00]), w01 * (1 - Wt[i01]), w10 * (1 - Wt[i10]),
+                                                      w11 * (1 - Wt[i11]))
+                            sw = w00 + w01 + w10 + w11
+                            w00, w01, w10, w11 = w00 / sw, w01 / sw, w10 / sw, w11 / sw
+                        else:
+                            liquid = wet == 4
+                        a_, b_, c_, d_ = Cm[i00], Cm[i01], Cm[i10], Cm[i11]
+                        r = a_[0] * w00 + b_[0] * w01 + c_[0] * w10 + d_[0] * w11
+                        gg = a_[1] * w00 + b_[1] * w01 + c_[1] * w10 + d_[1] * w11
+                        b = a_[2] * w00 + b_[2] * w01 + c_[2] * w10 + d_[2] * w11
+                        if liquid:   # ripples as soft crossing waves at this scale
+                            k = 1.0 + ramp * 0.8 * (math.sin(t2 + X * 1.9 + Y * 0.7) * math.sin(t2 * 0.7 - Y * 2.3 + X * 0.4))
+                        else:        # grain finer than a cell
+                            k = GRAIN[(int(X * 4) & 63) * 64 + (int(Y * 4) & 63)]
+                        r, gg, b = min(255, r * k), min(255, gg * k), min(255, b * k)
+                        c = (int(r * nf + fogr) & 0xFC, int(gg * nf + fogg) & 0xFC, int(b * nf + fogb) & 0xFC)
+                        n = yb - hs
+                        col = colsbuf[i]
+                        if n > 2 and lastz[i] == zprev and lastliq[i] == liquid:   # one surface: shade across
+                            r1, g1, b1 = col[yb]
+                            r0, g0, b0 = c
+                            r1, g1, b1 = r1 - r0, g1 - g0, b1 - b0
+                            col[hs:yb] = [((r0 + r1 * k // n) & 0xFC, (g0 + g1 * k // n) & 0xFC,
+                                           (b0 + b1 * k // n) & 0xFC) for k in range(n)]
+                        else:
+                            col[hs:yb] = [c] * n
+                        depth[i][hs:yb] = [z] * n
+                        ybuf[i] = hs
+                        lastz[i], lastliq[i] = z, liquid
+                X += dx
+                Y += dy
+            zprev = z
+            z += dz
+            dz *= 1.022
+            continue
         for i in range(PW):
             yb = ybuf[i]
             if yb > 0:
@@ -1437,6 +1576,8 @@ def render(g, scr, cols, rows):
             fw, fh = int(rad * 0.9), int(rad * 0.45)
             for xx in range(-int(rad * 1.5), int(rad * 1.5) + 1):  # rotor blur
                 plot(sx + xx, sy - rad * 0.7, d, mix((190, 190, 200) if spin else (110, 110, 120), fog, f))
+                if fine and rad > 4 and abs(xx) < rad * 1.3:
+                    plot(sx + xx, sy - rad * 0.7 - 1, d, mix((150, 150, 160) if spin else (90, 90, 100), fog, f))
             for yy in range(-fh - 1, fh + 2):
                 for xx in range(-fw - 1, fw + 2):
                     if yy < -fh or yy > fh or xx < -fw or xx > fw:
@@ -1444,7 +1585,11 @@ def render(g, scr, cols, rows):
                     else:
                         plot(sx + xx, sy + yy, d, mix((150, 156, 172) if yy == -fh else (84, 88, 104) if yy < 0
                                                       else (52, 54, 66), fog, f))
-            plot(sx, sy, d * 0.999, (255, 60, 50) if int(g.t * 4 + tg["ph"]) % 2 else (120, 30, 30))
+            lc = (255, 60, 50) if int(g.t * 4 + tg["ph"]) % 2 else (120, 30, 30)
+            if fine and rad > 4:
+                disc(sx, sy, d * 0.999, rad * 0.16, (255, 220, 210) if lc[0] > 200 else lc, lc)
+            else:
+                plot(sx, sy, d * 0.999, lc)
             continue
         balloon = kind == "balloon"
         R = int(rad) + 2
@@ -1473,6 +1618,8 @@ def render(g, scr, cols, rows):
         if balloon:
             for k in range(int(rad * 1.1) + 2, int(rad * 2.4) + 2):
                 plot(sx + math.sin(k * 0.6 + g.t * 2) * 0.6, sy + k, d, (60, 60, 64))
+                if fine and rad > 6:
+                    plot(sx + math.sin(k * 0.6 + g.t * 2) * 0.6 + 1, sy + k, d, (90, 90, 96))
     # shots and particles
     for s in g.shots:
         pr = project(s["x"], s["y"], s["z"])
@@ -1493,6 +1640,8 @@ def render(g, scr, cols, rows):
                 plot(tx, ty, pr[2], s["col"])
                 if pr[2] < 40:
                     plot(tx, ty + 1, pr[2], s["col"])
+                    if fine and pr[2] < 25:
+                        plot(tx + 1, ty, pr[2], s["col"])
     for p in g.parts:
         pr = project(p[0], p[1], p[2])
         if pr:
@@ -1501,6 +1650,9 @@ def render(g, scr, cols, rows):
             plot(pr[0], pr[1], pr[2], c)
             if pr[2] < 25:
                 plot(pr[0] + 1, pr[1], pr[2], c)
+                if fine and pr[2] < 18:          # close sparks and debris get a body at this size
+                    plot(pr[0], pr[1] + 1, pr[2], c)
+                    plot(pr[0] + 1, pr[1] + 1, pr[2], mix(c, (0, 0, 0), 0.3))
     if g.title:
         for i in range(PW):
             colsbuf[i] = [mix(c, TITLE_DIM, 0.62) for c in colsbuf[i]]
@@ -1510,7 +1662,17 @@ def render(g, scr, cols, rows):
     if pc:
         ccx, ccy = pc[0], pc[1]
         ps = project(g.x, g.y, W.height(g.x, g.y))
-        if ps and ps[1] > ccy + 3:
+        if fine and ps and ps[1] > ccy + 3 * ks:      # a soft oval shadow, as big as the craft
+            rx, ry = 7.5 * ks, 1.2 * ks
+            for yy in range(-int(ry) - 1, int(ry) + 1):
+                for xx in range(-int(rx) - 1, int(rx) + 2):
+                    e = (xx / rx) ** 2 + ((yy + 0.5) / ry) ** 2
+                    x, y = int(ps[0]) + xx, int(ps[1]) + yy
+                    if e <= 1 and 0 <= x < PW and 0 <= y < PH and depth[x][y] < 1e8:
+                        c = colsbuf[x][y]
+                        a = 0.55 if e < 0.6 else 0.75
+                        colsbuf[x][y] = (int(c[0] * a), int(c[1] * a), int(c[2] * (a + 0.05)))
+        elif ps and ps[1] > ccy + 3:
             for xx in range(-7, 8):
                 for yy in range(-1, 1):
                     x, y = int(ps[0]) + xx, int(ps[1]) + yy
@@ -1528,6 +1690,39 @@ def render(g, scr, cols, rows):
         wcol = WEAPONS[g.weapon]["col"]
         muzzle = (255, 255, 255) if flash else mix(wcol, (30, 30, 36), 0.35) if g.armed else (40, 42, 50)
         vpal = V["pal"]
+        if fine:
+            fw, fh, sw0, crows = craft_fine(V, ks)
+            fmid = (fh - 1) / 2
+            ftop = int(ccy) - fh + round(3 * ks)
+            roll = bank * 0.05                    # the side inside the turn dips (a shear per column, no gaps)
+            fl = max(1, round(ks))
+            for j, row in enumerate(crows):
+                shift = int(round(bank * ks * (j - fmid) / fmid))
+                for x0, ch, k, lt in row:
+                    if ch == "E":
+                        c = glow
+                    elif ch == "e":
+                        c = hot
+                    elif ch == "g":
+                        c = mix(V["glow"][0], (30, 60, 40), 0.5 + 0.5 * math.sin(g.t * 6 + k * 0.8))
+                    elif ch == "L":
+                        c = LIGHTS[(k // 2 + int(g.t * 6)) % len(LIGHTS)]
+                    elif ch == "M":
+                        c = muzzle
+                    else:
+                        c = vpal.get(ch) or CRAFT_PAL[ch]
+                        if lt != 1.0:
+                            c = (min(255, int(c[0] * lt)), min(255, int(c[1] * lt)), min(255, int(c[2] * lt)))
+                    x = int(ccx) - fw // 2 + x0 + shift
+                    y = ftop + j + int(round((fw / 2 - x0 - shift) * roll))   # rolled into the turn
+                    if 0 <= x < PW and 0 <= y < PH:
+                        colsbuf[x][y] = c
+                        if ch == "M" and flash:  # muzzle flash, as big as the craft
+                            for q in range(1, 2 * fl + 1):
+                                for xq in range(-fl + q // 2, fl - q // 2 + 1):
+                                    if 0 <= x + xq < PW and 0 <= y - q < PH:
+                                        colsbuf[x + xq][y - q] = wcol if q <= fl else (255, 255, 230)
+            sprite = ()
         for j, row in enumerate(sprite):
             shift = int(round(bank * (j - mid) / mid))
             for k, ch in enumerate(row):
@@ -1560,8 +1755,14 @@ def render(g, scr, cols, rows):
                 pa = project(ix, iy, W.height(ix, iy))
                 if pa:
                     ax, ay = int(pa[0]), int(pa[1])
-                    for x, y in ((ax - 3, ay), (ax + 3, ay), (ax - 2, ay - 1), (ax + 2, ay - 1),
-                                 (ax - 2, ay + 1), (ax + 2, ay + 1), (ax, ay)):
+                    pts = ((ax - 3, ay), (ax + 3, ay), (ax - 2, ay - 1), (ax + 2, ay - 1),
+                           (ax - 2, ay + 1), (ax + 2, ay + 1), (ax, ay))
+                    if fine:                       # a ring, as big as the craft's
+                        rr = 3 * ks
+                        pts = [(ax + int(round(math.cos(a / 24 * TAU) * rr)), ay + int(round(math.sin(a / 24 * TAU) * rr * 0.45)))
+                               for a in range(24)] + [(ax + dx, ay + dy) for dx in (-1, 0, 1) for dy in (-1, 0, 1)
+                                                      if abs(dx) + abs(dy) < 2]
+                    for x, y in pts:
                         if 0 <= x < PW and 0 <= y < PH:
                             colsbuf[x][y] = (255, 140, 60)
             else:  # crosshair where shots land at 70 units
@@ -1570,8 +1771,9 @@ def render(g, scr, cols, rows):
                     ax, ay = int(pa[0]), int(pa[1])
                     tgt = g.aim_target(0.22)
                     cc = (255, 80, 80) if tgt else (255, 255, 255)
-                    pts = [(ax - k, ay) for k in (2, 3, 4)] + [(ax + k, ay) for k in (2, 3, 4)] + \
-                          [(ax, ay - k) for k in (2, 3, 4)] + [(ax, ay + k) for k in (2, 3, 4)]
+                    arm = (2, 3, 4) if not fine else range(round(2 * ks), round(4 * ks) + 1)
+                    pts = [(ax - k, ay) for k in arm] + [(ax + k, ay) for k in arm] + \
+                          [(ax, ay - k) for k in arm] + [(ax, ay + k) for k in arm]
                     shadow_pts(colsbuf, pts, PW, PH)
                     for x, y in pts:
                         if 0 <= x < PW and 0 <= y < PH:
@@ -1581,14 +1783,16 @@ def render(g, scr, cols, rows):
                         tgt = g.aim_target(0.6)
                     pt = tgt and project(tgt["x"], tgt["y"], tgt["z"])
                     if pt:
-                        hx = max(4, int(tgt["r"] / pt[2] * S * 1.2) + 3)
-                        hy = max(4, int(tgt["rz"] / pt[2] * S * 1.15) + 3)
+                        m = max(1, round(ks)) if fine else 1
+                        hx = max(4 * m, int(tgt["r"] / pt[2] * S * 1.2) + 3 * m)
+                        hy = max(4 * m, int(tgt["rz"] / pt[2] * S * 1.15) + 3 * m)
                         bx, by = int(pt[0]), int(pt[1])
                         pts = []
                         for xs in (-1, 1):
                             for ys in (-1, 1):
                                 X, Y = bx + xs * hx, by + ys * hy
-                                pts += [(X, Y), (X - xs, Y), (X, Y - ys)]
+                                pts += [(X, Y)] + [(X - xs * q, Y) for q in range(1, m + 1)] + \
+                                       [(X, Y - ys * q) for q in range(1, m + 1)]
                         shadow_pts(colsbuf, pts, PW, PH)
                         for x, y in pts:
                             if 0 <= x < PW and 0 <= y < PH:

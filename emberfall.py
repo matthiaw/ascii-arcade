@@ -30,6 +30,8 @@ import textwrap
 import time
 from collections import Counter, deque
 
+from arcadekit import scale_art
+
 SAVE_PATH = os.path.expanduser("~/.emberfall_save.json")
 MIN_W, MIN_H = 70, 22
 SIDE_W = 34      # side panel width on a roomy terminal (narrower on small ones, see UI.layout)
@@ -6462,28 +6464,6 @@ ITEM8 = {
     "%": ("........", "........", "..#.....", ".###.#..", "..#.###.", "....#...", "........", "........"),
 }
 _SPR_CACHE = {}
-_X2_CACHE = {}
-
-
-def scale2x(rows):
-    """Scale2x/EPX pixel-art doubling on a character sprite (smooth diagonals, no new colours)."""
-    c = _X2_CACHE.get(rows)
-    if c is not None:
-        return c
-    h, w = len(rows), len(rows[0])
-    px = lambda x, y: rows[min(h - 1, max(0, y))][min(w - 1, max(0, x))]
-    out = [[None] * (2 * w) for _ in range(2 * h)]
-    for y in range(h):
-        for x in range(w):
-            P, A, B, C, D = px(x, y), px(x, y - 1), px(x + 1, y), px(x - 1, y), px(x, y + 1)
-            e0 = A if C == A and C != D and A != B else P
-            e1 = B if A == B and A != C and B != D else P
-            e2 = C if D == C and D != B and C != A else P
-            e3 = D if B == D and B != A and D != C else P
-            out[2 * y][2 * x], out[2 * y][2 * x + 1] = e0, e1
-            out[2 * y + 1][2 * x], out[2 * y + 1][2 * x + 1] = e2, e3
-    c = _X2_CACHE[rows] = tuple("".join(r) for r in out)
-    return c
 
 
 def spr_rgb(rows):
@@ -6498,7 +6478,7 @@ def _shade(c, k):
     return (min(255, int(c[0] * k)), min(255, int(c[1] * k)), min(255, int(c[2] * k)))
 
 
-TEX16 = [1.0, 0.94, 1.0, 1.05, 0.97, 1.0, 1.03, 0.95, 1.0, 1.02, 0.96]
+AUTO_TILES = 240        # map tiles automatic pixel tiles aim for (about 20x12; 120x40 shows 21x15 4x4 tiles)
 
 
 def blit(pix, rows, col, tint=None, plate=None):
@@ -6542,6 +6522,344 @@ def corner_marks(pix, n, mk):
             if n == 4 and col is top:
                 break
             pix[y + i * step][0] = pix[y + i * step][e] = col
+
+
+# --- fine pixel tiles: any size from 6 px up, drawn at the window's own resolution -------------
+# The 8x8 art is smoothed to the tile size (Scale2x/EPX via arcadekit.scale_art); the ground under it
+# (grass, road, planks, flagstones, cave floor, water, lava) is textured pixel by pixel at that size,
+# objects get a lit top edge, a shaded bottom edge and a short cast shadow. Tiles are cached per size.
+FINE_MAT_CHARS = {"grass": "gGd", "road": "rRp", "planks": "wWv", "flag": "sSx", "cave": "cCz",
+                  "water": "bBu", "lava": "hHj"}
+FINE_TILE_MAT = {}
+for _t in (T_GRASS, T_TREE, T_BUSH, T_FLOWER, T_MUSH, T_GRAVE, T_FENCE, T_WELL, T_ROCK, T_TENT):
+    FINE_TILE_MAT[_t] = ("grass",)
+for _t in (T_ROAD, T_EXIT):
+    FINE_TILE_MAT[_t] = ("road",)
+for _t in (T_FLOOR, T_CHAIR, T_BARREL, T_ANVIL, T_ODOOR, T_BRIDGE):
+    FINE_TILE_MAT[_t] = ("planks",)
+for _t in (T_CFLOOR, T_BONES, T_WEB, T_HOARD, T_CHEST, T_OCHEST, T_CAGE, T_CAGEDOOR, T_RAIL, T_FIRE):
+    FINE_TILE_MAT[_t] = ("cave",)
+FINE_TILE_MAT[T_STONEFL] = ("flag",)
+FINE_TILE_MAT[T_WATER] = ("water",)
+FINE_TILE_MAT[T_LAVA] = ("lava",)
+FINE_ANIM = (T_WATER, T_LAVA)            # ground that moves on its own (4 frames)
+_FINE = {"n": None, "tiles": {}, "tex": {}, "chars": {}}
+
+
+def _fine_cache(n):
+    """The tile caches for size n (dropped when the size changes or they grow too big)."""
+    if _FINE["n"] != n or len(_FINE["tiles"]) > 6000:
+        _FINE.update(n=n, tiles={}, tex={}, chars={}, lit={})
+    return _FINE
+
+
+def _mixc(a, b, k):
+    return (int(a[0] + (b[0] - a[0]) * k), int(a[1] + (b[1] - a[1]) * k), int(a[2] + (b[2] - a[2]) * k))
+
+
+def _noise_k(rnd, amp):
+    """A brightness factor for one pixel: mostly 1, sometimes a step up or down (few distinct colours keep
+    the texture calm and the terminal output small)."""
+    return 1.0 + amp * rnd.choice((-1, 0, 0, 0, 1))
+
+
+def _tex_grass(n, rnd):
+    g, d, G = SPAL["g"], SPAL["d"], SPAL["G"]
+    k = min(1.0, (n - 4) / 10.0)                              # small tiles: calmer, so the grass does not fizz
+    deep, tip = _mixc(g, (60, 106, 42), 0.4 + 0.6 * k), _mixc(G, (136, 184, 86), k)
+    pix = [[_shade(g, _noise_k(rnd, 0.025)) for _ in range(n)] for _ in range(n)]
+    for _ in range(max(3, n * n // 11)):                     # blades: dark root, lighter tip, some lean
+        x, y = rnd.randrange(n), rnd.randrange(n)
+        ln = 1 + rnd.randrange(max(1, n // 5))
+        lean = rnd.choice((-1, 0, 0, 1))
+        for s in range(ln + 1):
+            yy, xx = y - s, x + (lean if s * 2 > ln else 0)
+            if 0 <= yy < n and 0 <= xx < n:
+                pix[yy][xx] = deep if s == 0 else tip if s == ln else _mixc(d, G, s / ln)
+    return pix
+
+
+def _tex_road(n, rnd):
+    r, R, p = SPAL["r"], SPAL["R"], SPAL["p"]
+    pix = [[_shade(r, _noise_k(rnd, 0.05)) for _ in range(n)] for _ in range(n)]
+    for _ in range(max(2, n * n // 18)):                     # pebbles: lit top, shadow below
+        x, y = rnd.randrange(n - 1), rnd.randrange(n - 1)
+        pix[y][x] = _shade(p, _noise_k(rnd, 0.06))
+        if n >= 12 and rnd.random() < 0.5:
+            pix[y][x + 1] = _shade(p, 0.92)
+        pix[y + 1][x] = _shade(R, 0.85)
+    for _ in range(max(1, n * n // 24)):
+        x, y = rnd.randrange(n), rnd.randrange(n)
+        pix[y][x] = _shade(R, _noise_k(rnd, 0.05))
+    return pix
+
+
+def _tex_planks(n, rnd):
+    w, W, v = SPAL["w"], SPAL["W"], SPAL["v"]
+    k = max(2, int(round(n / 5.0)))
+    bounds = [int(round(i * n / k)) for i in range(k + 1)]
+    pix = [[w] * n for _ in range(n)]
+    for p in range(k):
+        y0, y1 = bounds[p], bounds[p + 1]
+        tone = _mixc(w, W, rnd.random() * 0.7)
+        ph = rnd.random() * 6.3
+        grain = set()
+        for _ in range(1 + (y1 - y0 > 4)):
+            gy = rnd.randrange(y0, max(y0 + 1, y1 - 1))
+            for i in range(n):
+                if rnd.random() > 0.22:
+                    grain.add((gy if i % 7 or rnd.random() < 0.5 else min(y1 - 2, gy + 1), i))
+        bx = rnd.randrange(n) if rnd.random() < 0.7 else -1
+        for j in range(y0, y1):
+            for i in range(n):
+                if j == y1 - 1 or i == bx:
+                    c = _shade(v, _noise_k(rnd, 0.04))
+                else:
+                    kk = (1.0 + 0.03 * round(1.5 * math.sin(i * 0.8 + ph))) * _noise_k(rnd, 0.025)
+                    if j == y0:
+                        kk *= 1.08
+                    if (j, i) in grain:
+                        kk *= 0.86
+                    c = _shade(tone, kk)
+                pix[j][i] = c
+        if n >= 12 and rnd.random() < 0.35:                  # a knot
+            kx, ky = rnd.randrange(1, n - 2), rnd.randrange(y0, max(y0 + 1, y1 - 2))
+            pix[ky][kx] = pix[ky][kx + 1] = _shade(tone, 0.68)
+    return pix
+
+
+def _tex_flag(n, rnd):
+    s, S, mortar = SPAL["s"], SPAL["S"], (64, 64, 72)
+    pix = [[mortar] * n for _ in range(n)]
+    h1 = n // 2
+    xa = n // 2 + rnd.randrange(-(n // 6), n // 6 + 1)
+    bands = ((0, h1 - 1, sorted({xa, n - 1})), (h1, n - 1, sorted({(xa + n // 2) % (n - 1), n - 1})))
+    for y0, y1, seams in bands:                                # rows y0..y1-1 are stone, y1 is mortar
+        a = 0
+        for b in seams:
+            if b - a < 1:
+                a = b + 1
+                continue
+            tone = _shade(_mixc(s, S, rnd.random() * 0.6), _noise_k(rnd, 0.05))
+            for j in range(y0, y1):
+                for i in range(a, b):
+                    kk = _noise_k(rnd, 0.045)
+                    if j == y0 or i == a:
+                        kk *= 1.13 if j == y0 else 1.06
+                    if j == y1 - 1 or i == b - 1:
+                        kk *= 0.86 if j == y1 - 1 else 0.92
+                    pix[j][i] = _shade(tone, kk)
+            if n >= 10 and rnd.random() < 0.3:                  # a hairline crack
+                cx_, cy_ = rnd.randrange(a, b), rnd.randrange(y0, max(y0 + 1, y1))
+                for _ in range(rnd.randrange(2, 5)):
+                    if a <= cx_ < b and y0 <= cy_ < y1:
+                        pix[cy_][cx_] = _shade(pix[cy_][cx_], 0.72)
+                    cx_ += rnd.choice((-1, 0, 1))
+                    cy_ += 1
+            a = b + 1
+    return pix
+
+
+def _tex_cave(n, rnd):
+    c, C, z = SPAL["c"], SPAL["C"], SPAL["z"]
+    pix = [[_shade(c, _noise_k(rnd, 0.06)) for _ in range(n)] for _ in range(n)]
+    for _ in range(max(1, n * n // 30)):                     # grit clumps
+        x, y = rnd.randrange(n - 1), rnd.randrange(n - 1)
+        col = _shade(C if rnd.random() < 0.6 else z, _noise_k(rnd, 0.05))
+        pix[y][x] = col
+        if n >= 10:
+            pix[y][x + 1] = col
+    for _ in range(max(1, n * n // 22)):                     # pebbles
+        x, y = rnd.randrange(n), rnd.randrange(n - 1)
+        pix[y][x] = _shade(C, 1.25)
+        pix[y + 1][x] = _shade(z, 0.8)
+    for _ in range(n // 7):                                  # cracks
+        x, y = rnd.randrange(n), rnd.randrange(n)
+        for _ in range(rnd.randrange(2, 2 + n // 4)):
+            if 0 <= x < n and 0 <= y < n:
+                pix[y][x] = _shade(z, 0.75)
+            x += rnd.choice((-1, 1, 1))
+            y += rnd.choice((0, 1))
+    return pix
+
+
+def _tex_water(n, rnd, fr):
+    b, B, u = SPAL["b"], SPAL["B"], SPAL["u"]
+    ph = rnd.random() * 6.3
+    pix = [[_shade(b, 0.96 + 0.06 * math.sin((i + 2 * j) * 0.55 + ph + fr * 0.8)) for i in range(n)] for j in range(n)]
+    sway = (0, 1, 2, 1)[fr & 3]
+    for r in range(max(2, n // 4)):                          # ripples: a bright crest over a dark trough
+        x0, y0 = rnd.randrange(n), rnd.randrange(n - 1)
+        ln = max(2, n // 4 + rnd.randrange(max(1, n // 5)))
+        x0 += sway if r % 2 else -sway
+        for i in range(ln):
+            xx = (x0 + i) % n
+            pix[y0][xx] = _shade(B, 1.0 - 0.15 * abs(i - ln / 2) / ln)
+            pix[y0 + 1][(xx + 1) % n] = u
+        if (r + fr) % 4 == 0:
+            pix[y0][(x0 + ln // 2) % n] = (215, 235, 255)  # a glint
+    return pix
+
+
+def _tex_lava(n, rnd, fr):
+    h, H, j_ = SPAL["h"], SPAL["H"], SPAL["j"]
+    glow = 0.92 + 0.08 * math.sin(fr * 1.6)
+    pix = [[_shade(h, _noise_k(rnd, 0.06) * glow) for _ in range(n)] for _ in range(n)]
+    for _ in range(max(1, n // 4)):                          # dark crust plates
+        x, y, r = rnd.randrange(n), rnd.randrange(n), 1 + rnd.randrange(max(1, n // 5))
+        for yy in range(y - r, y + r + 1):
+            for xx in range(x - r, x + r + 1):
+                if 0 <= xx < n and 0 <= yy < n and (xx - x) ** 2 + (yy - y) ** 2 <= r * r:
+                    pix[yy][xx] = _shade(j_, _noise_k(rnd, 0.1))
+    for _ in range(max(1, n // 5)):                          # bright seams
+        x, y = rnd.randrange(n), rnd.randrange(n)
+        for _ in range(n // 2):
+            if 0 <= x < n and 0 <= y < n:
+                pix[y][x] = _shade(H, glow)
+            x += 1
+            y += rnd.choice((-1, 0, 1))
+    return pix
+
+
+def fine_texture(mat, n, tv, fr=0):
+    """n x n RGB texture of a ground material (variant tv, animation frame fr), cached."""
+    cache = _fine_cache(n)["tex"]
+    key = (mat, tv, fr)
+    t = cache.get(key)
+    if t is None:
+        rnd = random.Random("%s/%d/%d/%d" % (mat, n, tv, fr))
+        if mat == "water":
+            t = _tex_water(n, rnd, fr)
+        elif mat == "lava":
+            t = _tex_lava(n, rnd, fr)
+        else:
+            t = {"grass": _tex_grass, "road": _tex_road, "planks": _tex_planks, "flag": _tex_flag,
+                 "cave": _tex_cave}[mat](n, rnd)
+        cache[key] = t
+    return t
+
+
+def fine_chars(rows, n):
+    """A sprite's character rows smoothed (Scale2x/EPX) and resampled to n x n, cached."""
+    cache = _fine_cache(n)["chars"]
+    c = cache.get(rows)
+    if c is None:
+        c = cache[rows] = tuple("".join(r) for r in scale_art(rows, n, n))
+    return c
+
+
+def _lum(c):
+    return 0.30 * c[0] + 0.59 * c[1] + 0.11 * c[2]
+
+
+def fine_tile(rows8, t, n, tv, fr=0, mem=False):
+    """RGB pixels (n x n) of a map tile: smoothed art over textured ground, re-shaded at size n. Cached;
+    mem=True gives the remembered (out of sight) version."""
+    cache = _fine_cache(n)["tiles"]
+    key = (rows8, t, tv, fr, mem)
+    pix = cache.get(key)
+    if pix is not None:
+        return pix
+    if mem:
+        pix = cache[key] = [[memory_rgb(c, 0.5) for c in r] for r in fine_tile(rows8, t, n, tv, fr)]
+        return pix
+    chars = fine_chars(rows8, n)
+    mats = FINE_TILE_MAT.get(t, ())
+    matof = {ch: m for m in mats for ch in FINE_MAT_CHARS[m]}
+    tex = {m: fine_texture(m, n, tv, fr) for m in mats}
+    rnd = random.Random("tile/%d/%d/%d" % (n, tv, t))
+    ground = [[ch in matof for ch in r] for r in chars]
+    pix = [[None] * n for _ in range(n)]
+    lum = {ch: _lum(SPAL[ch]) for r in chars for ch in r if ch in SPAL}
+    sh = 2 if n >= 14 else 1                                 # cast shadow length in pixels
+    for j in range(n):
+        r = chars[j]
+        for i in range(n):
+            ch = r[i]
+            if ground[j][i]:
+                c = tex[matof[ch]][j][i]
+                for s in range(1, sh + 1):                   # shadow of an object standing above/left
+                    if j - s >= 0 and (not ground[j - s][i] or (i and not ground[j - s][i - 1])):
+                        c = _shade(c, 0.70 if s == 1 else 0.85)
+                        break
+                pix[j][i] = c
+                continue
+            k = _noise_k(rnd, 0.045)
+            lc = lum.get(ch, 0)
+            up = chars[j - 1][i] if j else None
+            dn = chars[j + 1][i] if j + 1 < n else None
+            lf = r[i - 1] if i else None
+            rt = r[i + 1] if i + 1 < n else None
+            if up is not None and up != ch and (ground[j - 1][i] or lum.get(up, 0) < lc - 6):
+                k *= 1.16                                    # lit top edge
+            elif lf is not None and lf != ch and (ground[j][i - 1] or lum.get(lf, 0) < lc - 6):
+                k *= 1.07
+            if dn is not None and dn != ch and (ground[j + 1][i] or lum.get(dn, 0) < lc - 6):
+                k *= 0.80                                    # shaded underside
+            elif rt is not None and rt != ch and (ground[j][i + 1] or lum.get(rt, 0) < lc - 6):
+                k *= 0.90
+            pix[j][i] = _shade(SPAL.get(ch, (0, 0, 0)), k)
+    cache[key] = pix
+    return pix
+
+
+def blit_fine(pix, rows, col, tint=None, plate=None):
+    """blit() for smoothed n x n figures: a soft shadow at the feet, rim light on the upper left and shade on
+    the lower right of the figure. Returns {(j, i): colour} of the figure's own pixels (for lighting)."""
+    n = len(rows)
+    feet = [i for i in range(n) for j in range(n - max(2, n // 5), n) if rows[j][i] != "."]
+    if feet and n >= 8:
+        cx_, rx = (min(feet) + max(feet) + 1) / 2.0, max(2.0, (max(feet) - min(feet) + 1) * 0.6)
+        cy_, ry = n - 1.0, max(1.2, n * 0.13)
+        for j in range(max(0, int(cy_ - ry)), n):
+            for i in range(n):
+                d = ((i + 0.5 - cx_) / rx) ** 2 + ((j + 0.5 - cy_) / ry) ** 2
+                if d < 1 and rows[j][i] == ".":
+                    pix[j][i] = _shade(pix[j][i], 0.55 + 0.45 * d)
+    blit(pix, rows, col, tint, plate)
+    out = {}
+    for j in range(n):
+        r = rows[j]
+        for i in range(n):
+            if r[i] == ".":
+                continue
+            k = 1.0
+            if (j and rows[j - 1][i] == ".") or (i and r[i - 1] == "."):
+                k = 1.18
+            elif (j + 1 < n and rows[j + 1][i] == ".") or (i + 1 < n and r[i + 1] == "."):
+                k = 0.78
+            c = pix[j][i] = _shade(pix[j][i], k) if k != 1.0 else pix[j][i]
+            out[(j, i)] = c
+    return out
+
+
+def light_pixels(pix, n, c00, c10, c01, c11, us):
+    """Light an n x n tile per pixel: the light (3 multipliers + 3 glow terms) is blended bilinearly between
+    the tile's four corners, so torch pools and the edge of the party's light fall off smoothly."""
+    out = []
+    if c00 is c10 is c01 is c11:                              # even light: one multiply per channel
+        m0, m1, m2, a0, a1, a2 = c00[0], c00[1], c00[2], c00[3] * 45, c00[4] * 45, c00[5] * 45
+        for r in pix:
+            row = []
+            for c in r:
+                v0, v1, v2 = int(c[0] * m0 + a0), int(c[1] * m1 + a1), int(c[2] * m2 + a2)
+                row.append((v0 if v0 < 255 else 255, v1 if v1 < 255 else 255, v2 if v2 < 255 else 255))
+            out.append(row)
+        return out
+    for j in range(n):
+        v = (j + 0.5) / n
+        L = [a + (b - a) * v for a, b in zip(c00, c01)]
+        R = [a + (b - a) * v for a, b in zip(c10, c11)]
+        d0, d1, d2, d3, d4, d5 = [b - a for a, b in zip(L, R)]
+        l0, l1, l2, l3, l4, l5 = L
+        row = []
+        for c, u in zip(pix[j], us):
+            v0 = int(c[0] * (l0 + d0 * u) + (l3 + d3 * u) * 45)
+            v1 = int(c[1] * (l1 + d1 * u) + (l4 + d4 * u) * 45)
+            v2 = int(c[2] * (l2 + d2 * u) + (l5 + d5 * u) * 45)
+            row.append((v0 if v0 < 255 else 255, v1 if v1 < 255 else 255, v2 if v2 < 255 else 255))
+        out.append(row)
+    return out
 
 
 def art_lines(key):
@@ -7150,19 +7468,34 @@ class UI:
         return (["narrow", "square"] if PIC_MODE else ["narrow"]) + (["sprite", "large", "huge"] if PIC_MODE == "true" else [])
 
     def view_mode(self, vw, vh):
-        """'narrow' (1 column per tile), 'square' (2 columns) or 'sprite' (4x4 pixel tiles)."""
+        """'narrow' (1 column per tile), 'square' (2 columns) or pixel tiles: 'sprite' (4x4), 'large' (8x8),
+        'huge' (16x16). Automatic pixel tiles take any size (see tile_px); the name is the nearest of these."""
         modes = self.view_modes()
         if self.view_pref in modes:
             return self.view_pref
-        if "huge" in modes and vw // 16 >= 16 and vh // 8 >= 9:
-            return "huge"
-        if "large" in modes and vw // 8 >= 18 and vh // 4 >= 10:
-            return "large"
-        if "sprite" in modes and vw // 4 >= 20 and vh // 2 >= 12:
-            return "sprite"
+        n = self.auto_px(vw, vh) if "sprite" in modes else 0
+        if n:
+            return "huge" if n >= 16 else "large" if n >= 8 else "sprite"
         if "square" in modes and vw // 2 >= 22:
             return "square"
         return "narrow"
+
+    def auto_px(self, vw, vh):
+        """Automatic pixel tile size for a vw x vh map area (0: too small for pixel tiles). A bigger window
+        does not just show more map: the tiles grow so it shows about as many tiles as a 120x40 window
+        (21 x 15 tiles of 4x4), drawn finer. Even sizes, so a tile ends on a text row."""
+        if not (vw // 4 >= 20 and vh // 2 >= 12):
+            return 0
+        n = max(4, 2 * int(round(math.sqrt(vw * 2.0 * vh / AUTO_TILES) / 2)))
+        while n > 4 and (vw // n < 18 or 2 * vh // n < 11):
+            n -= 2
+        return n
+
+    def tile_px(self, vw, vh):
+        """Pixel size of a map tile in the current view (0 for the text views)."""
+        if self.view_pref in self.view_modes():
+            return {"sprite": 4, "large": 8, "huge": 16}.get(self.view_pref, 0)
+        return self.auto_px(vw, vh) if "sprite" in self.view_modes() else 0
 
     def wall_glyphs(self, A):
         """Per-area cache: connected box-drawing glyphs for built walls and fences."""
@@ -7259,8 +7592,9 @@ class UI:
     def draw_map(self, g, x0, y0, vw, vh):
         A = g.area
         mode_v = self.view_mode(vw, vh)
-        sprite = mode_v in ("sprite", "large", "huge")
-        px = {"large": 8, "huge": 16}.get(mode_v, 4)
+        px = self.tile_px(vw, vh)
+        sprite = px > 0
+        px = px or 4
         cw = px if sprite else 2 if mode_v == "square" else 1
         mw = vw // cw
         mh = vh // (px // 2) if sprite else vh
@@ -7348,7 +7682,8 @@ class UI:
         walls = self.wall_glyphs(A) if uni else {}
         light = self.light_map(g, A, vis, cx - ox, cy - oy, cx - ox + mw, cy - oy + mh) if raw else None
         if sprite:
-            return self.draw_sprites(g, A, x0, y0, vw, vh, cx, cy, ox, oy, mw, mh, vis, over, fam, light, px)
+            draw = self.draw_sprites if px == 4 else self.draw_fine
+            return draw(g, A, x0, y0, vw, vh, cx, cy, ox, oy, mw, mh, vis, over, fam, light, px)
         # one entry per screen column: [ch, fg, bg, mode, light]; mode: 0 lit, 1 memory, 2 dark, 3 ui/actor
         rows = []
         for sy in range(vh):
@@ -7442,8 +7777,7 @@ class UI:
                 self.put(y0 + sy, x0 + sx0, run, cattr)
 
     def tile_sprite(self, A, x, y, t, fr, n=4):
-        if n == 16:
-            return scale2x(self.tile_sprite(A, x, y, t, fr, 8))
+        """Character rows of a map tile: the 4x4 art (n=4) or the 8x8 art (n=8, the source of fine tiles)."""
         h = (x * 73856093 ^ y * 19349663) & 0xffff
         big = n == 8
         if t in (T_WALL, T_CWALL, T_ORE):
@@ -7465,7 +7799,7 @@ class UI:
         return sp[h % len(sp)]
 
     def draw_sprites(self, g, A, x0, y0, vw, vh, cx, cy, ox, oy, mw, mh, vis, over, fam, light, n=4):
-        """Pixel-tile map: every tile is an n x n sprite (n columns x n/2 rows of half blocks)."""
+        """Pixel-tile map with 4x4 tiles (4 columns x 2 rows of half blocks); larger tiles: draw_fine."""
         now = time.time()
         fr = int(now * 3)
         black = (0, 0, 0)
@@ -7485,9 +7819,6 @@ class UI:
                 if not (lit or A.explored[y][x]):
                     continue
                 pix = [list(r) for r in spr_rgb(self.tile_sprite(A, x, y, A.tiles[y][x], fr, n))]
-                if n == 16:
-                    pix = [[_shade(c, TEX16[(x * 7 + j * 5 + y * 11 + i * 3) % len(TEX16)]) for i, c in enumerate(r)]
-                           for j, r in enumerate(pix)]
                 o = over.get(p) if lit else None
                 tint = self.burst.get(p) if lit else None
                 f = fam.get(p) if o else None
@@ -7503,15 +7834,9 @@ class UI:
                             plate = ((255, 200, 60), 0.45)   # outside combat: this is you
                         elif not a_.is_pc and a_.faction == "hostile":
                             plate = ((200, 30, 30), 0.6)
-                        if n >= 8:
-                            rows8 = ACTOR8["downed"] if f[0] == "downed" else figure8(a_)
-                            blit(pix, scale2x(rows8) if n == 16 else rows8, rgb_of(o[1]), figure_tint(a_), plate)
-                        else:
-                            blit(pix, ACTOR_SPR[f[0]], rgb_of(o[1]), None, plate)
+                        blit(pix, ACTOR_SPR[f[0]], rgb_of(o[1]), None, plate)
                     elif o[0]:
-                        items = ITEM8 if n >= 8 else ITEM_SPR
-                        rows_i = items.get(o[0], items["*"])
-                        blit(pix, scale2x(rows_i) if n == 16 else rows_i, rgb_of(o[1]))
+                        blit(pix, ITEM_SPR.get(o[0], ITEM_SPR["*"]), rgb_of(o[1]))
                 if tint:
                     tc = rgb_of(tint)
                     pix = [[((c[0] + tc[0]) // 2, (c[1] + tc[1]) // 2, (c[2] + tc[2]) // 2) for c in r] for r in pix]
@@ -7533,6 +7858,124 @@ class UI:
                     prow[ty * n + j][tx * n:tx * n + n] = pix[j]
         rows = []
         for j in range(0, mh * n, 2):
+            top, bot = prow[j], prow[j + 1]
+            rows.append([["\u2580", top[i], bot[i]] for i in range(W)])
+        self.fx = [f for f in self.fx if f[4] > now]
+        for (fx_, fy_, text, col, until) in self.fx:
+            age = 1.0 - (until - now)
+            ry = (fy_ - cy + oy) * (n // 2) - int(age * 2)
+            rx = (fx_ - cx + ox) * n + n // 2 - len(text) // 2
+            if 0 <= ry < len(rows) and 0 <= rx and rx + len(text) < W:
+                for i, chx in enumerate(text):
+                    rows[ry][rx + i] = [chx, rgb_of(col), black]
+        self.rawmap = (y0, x0, self.dimmed([[tuple(c) for c in r] for r in rows]))
+        for sy in range(vh):
+            self.put(y0 + sy, x0, " " * vw, self.mark_attr)
+
+    def draw_fine(self, g, A, x0, y0, vw, vh, cx, cy, ox, oy, mw, mh, vis, over, fam, light, n):
+        """Pixel-tile map at any tile size n >= 6: smoothed art over ground textured at screen resolution
+        (fine_tile), figures smoothed and re-shaded at that size, light blended per pixel."""
+        now = time.time()
+        fr = int(now * 3)
+        black = (0, 0, 0)
+        W = mw * n
+        marks = self.actor_marks(g, fam)
+        cur_a = g.current()
+        pulse = int(now * 4) % 2 == 0
+        prow = [[black] * W for _ in range(mh * n)]
+        us = [(i + 0.5) / n for i in range(n)]
+        corners = {}
+        lcache = _fine_cache(n).setdefault("lit", {})
+
+        def corner(x, y):
+            """Light at the corner shared by tiles (x-1, y-1) .. (x, y): the mean of those in sight."""
+            c = corners.get((x, y))
+            if c is None:
+                vs = [v for v in (light.get((x - 1, y - 1)), light.get((x, y - 1)), light.get((x - 1, y)),
+                                  light.get((x, y))) if v is not None]
+                c = corners[(x, y)] = [sum(v[k] for v in vs) / len(vs) for k in range(6)]
+            return c
+
+        for ty in range(mh):
+            y = cy + ty - oy
+            for tx in range(mw):
+                x = cx + tx - ox
+                if not A.inb(x, y):
+                    continue
+                p = (x, y)
+                lit = p in vis
+                if not (lit or A.explored[y][x]):
+                    continue
+                t = A.tiles[y][x]
+                h = (x * 73856093 ^ y * 19349663) & 0xffff
+                rows8 = self.tile_sprite(A, x, y, t, fr, 8)
+                tv, af = (h >> 4) & 3, ((fr + (h & 3)) & 3 if t in FINE_ANIM else 0)
+                if not lit:
+                    pix = fine_tile(rows8, t, n, tv, af, mem=True)
+                    for j in range(n):
+                        prow[ty * n + j][tx * n:tx * n + n] = pix[j]
+                    continue
+                pix = base = fine_tile(rows8, t, n, tv, af)
+                o = over.get(p)
+                tint = self.burst.get(p)
+                f = fam.get(p) if o else None
+                mk = marks.get(p)
+                figpix = None
+                if o or tint or mk:
+                    pix = [r[:] for r in pix]
+                if o:
+                    if o[2]:
+                        tint = o[2]
+                    if f:
+                        a_ = f[1]
+                        plate = None
+                        if a_ is cur_a:
+                            plate = ((255, 200, 60), 0.75 if pulse else 0.6)
+                        elif cur_a is None and a_ is g.leader:
+                            plate = ((255, 200, 60), 0.45)   # outside combat: this is you
+                        elif not a_.is_pc and a_.faction == "hostile":
+                            plate = ((200, 30, 30), 0.6)
+                        rows_f = ACTOR8["downed"] if f[0] == "downed" else figure8(a_)
+                        figpix = blit_fine(pix, fine_chars(rows_f, n), rgb_of(o[1]), figure_tint(a_), plate)
+                    elif o[0]:
+                        blit_fine(pix, fine_chars(ITEM8.get(o[0], ITEM8["*"]), n), rgb_of(o[1]))
+                if tint:
+                    tc = rgb_of(tint)
+                    pix = [[((c[0] + tc[0]) // 2, (c[1] + tc[1]) // 2, (c[2] + tc[2]) // 2) for c in r] for r in pix]
+                    if figpix:
+                        figpix = dict.fromkeys(figpix)
+                lv = light.get(p) if light is not None else None
+                if lv is not None:
+                    c00, c10, c01, c11 = corner(x, y), corner(x + 1, y), corner(x, y + 1), corner(x + 1, y + 1)
+                    if max(abs(a - b) for c in (c00, c10, c01, c11) for a, b in zip(c, lv)) < 0.03:
+                        c00 = c10 = c01 = c11 = lv
+                    unlit = pix
+                    if pix is base:                            # bare ground: lit tiles are cached too
+                        q = (id(base),) + tuple(int(v * 64 + 0.5) for v in c00 + c10 + c01 + c11)
+                        lp = lcache.get(q)
+                        if lp is None:
+                            if len(lcache) > 20000:
+                                lcache.clear()
+                            cs = [[k / 64.0 for k in q[1 + 6 * i:7 + 6 * i]] for i in range(4)]
+                            if c00 is c11:
+                                cs = [cs[0]] * 4
+                            lp = lcache[q] = light_pixels(pix, n, cs[0], cs[1], cs[2], cs[3], us)
+                        pix = lp
+                    else:
+                        pix = light_pixels(pix, n, c00, c10, c01, c11, us)
+                    if figpix:                                 # keep creatures readable at the edge of the light
+                        m0, m1, m2 = max(lv[0], 0.85), max(lv[1], 0.85), max(lv[2], 0.85)
+                        a0, a1, a2 = lv[3] * 45, lv[4] * 45, lv[5] * 45
+                        for (j, i) in figpix:
+                            c = unlit[j][i]
+                            pix[j][i] = (min(255, int(c[0] * m0 + a0)), min(255, int(c[1] * m1 + a1)),
+                                         min(255, int(c[2] * m2 + a2)))
+                if mk:
+                    corner_marks(pix, n, mk)
+                for j in range(n):
+                    prow[ty * n + j][tx * n:tx * n + n] = pix[j]
+        rows = []
+        for j in range(0, mh * n - 1, 2):
             top, bot = prow[j], prow[j + 1]
             rows.append([["\u2580", top[i], bot[i]] for i in range(W)])
         self.fx = [f for f in self.fx if f[4] > now]
@@ -7582,7 +8025,7 @@ class UI:
         for j, row in enumerate(rows):
             y = y0 + j
             pending_move = True
-            last = None
+            lf = lb = None
             for i, (ch, f, b) in enumerate(row):
                 try:
                     v = self.scr.inch(y, x0 + i)
@@ -7598,10 +8041,22 @@ class UI:
                     c = solid_cell(f, b)
                     if c is not None:
                         ch, b = " ", c
-                sgr = (f, b)
-                if sgr != last:
+                if lf is None:
                     out.append("\x1b[0;38;2;%d;%d;%d;48;2;%d;%d;%dm" % (f + b))
-                    last = sgr
+                    lf, lb = f, b
+                elif f != lf or b != lb:                      # only the colour that changed (fine tiles change a lot)
+                    if ch == " ":
+                        out.append("\x1b[48;2;%d;%d;%dm" % b)
+                        lb = b
+                    elif b == lb:
+                        out.append("\x1b[38;2;%d;%d;%dm" % f)
+                        lf = f
+                    elif f == lf:
+                        out.append("\x1b[48;2;%d;%d;%dm" % b)
+                        lb = b
+                    else:
+                        out.append("\x1b[38;2;%d;%d;%d;48;2;%d;%d;%dm" % (f + b))
+                        lf, lb = f, b
                 out.append(ch)
         out.append("\x1b[0m")
         return "".join(out)

@@ -536,7 +536,59 @@ VALUE = (240, 240, 250)
 SCORE_C = (250, 214, 120)
 
 
+_TILES = {}
+
+
+def block_tile(k, c):
+    """A big block (k >= 6) drawn at its own pixel size: mitred bevels that grow with the block, a softly lit
+    face, a thin inner rim and a glint, instead of a 1-pixel bevel around a flat square. Cached per size and
+    colour."""
+    key = (k, c)
+    t = _TILES.get(key)
+    if t is None:
+        b = max(1, k // 6)                              # bevel width
+        hi, hi2, lo, lo2 = shade(c, 1.38), shade(c, 1.18), shade(c, 0.55), shade(c, 0.72)
+        t = []
+        for yy in range(k):
+            row = []
+            for xx in range(k):
+                l, r, u, d = xx, k - 1 - xx, yy, k - 1 - yy
+                m = min(l, r, u, d)
+                if m < b:                               # bevel: which edge is nearest (mitred at the corners)
+                    if m == u and u <= l:
+                        col = hi if u < b - 1 or b == 1 else hi2
+                    elif m == l:
+                        col = hi2
+                    elif m == d:
+                        col = lo
+                    else:
+                        col = lo2
+                else:                                   # the face: light from the top left, a touch of falloff
+                    f = (u + l - 2 * b) / max(1, 2 * (k - 2 * b - 1))
+                    col = shade(c, 1.12 - 0.2 * f)
+                    if k >= 8 and m == b and (d == b or r == b):   # a faint inner rim where the face meets the dark bevel
+                        col = shade(c, 0.9)
+                row.append(col)
+            t.append(row)
+        g = shade(c, 1.65)                              # a short glint in the lit corner
+        gl = max(2, k // 3)
+        for i in range(gl):
+            t[b][b + i] = g if i < gl - 1 else mix(g, t[b][b + i], 0.5)
+        t[b + 1][b] = mix(g, t[b + 1][b], 0.5)
+        _TILES[key] = t
+    return t
+
+
 def block(cv, x, y, k, c):
+    if k >= 6:
+        t = block_tile(k, c)
+        x, y = int(x), int(y)
+        x0, x1 = max(0, -x), min(k, cv.W - x)
+        if x1 <= x0:
+            return
+        for yy in range(max(0, -y), min(k, cv.H - y)):
+            cv.px[y + yy][x + x0:x + x1] = t[yy][x0:x1]
+        return
     if k <= 2:
         cv.rect(x, y, k, k, c)
         cv.set(x, y, shade(c, 1.25))

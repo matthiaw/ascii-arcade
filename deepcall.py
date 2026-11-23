@@ -18,8 +18,8 @@ import sys
 import time
 from collections import deque
 
-from arcadekit import (AUTO_LABEL, AutoMode, Canvas, Terminal, clamp, load_scores, mix, overlay, shade, shared_key,
-                       submit, title_screen)
+from arcadekit import (AUTO_LABEL, AutoMode, Canvas, Terminal, clamp, load_scores, mix, overlay, scale_art, shade,
+                       shared_key, submit, title_screen)
 from arcadesound import Sound
 
 GAME = "deepcall"
@@ -872,11 +872,424 @@ SUB = [
 SUB_PAL = {"h": (210, 180, 70), "H": (240, 220, 120), "w": (120, 230, 255), "p": (150, 150, 160)}
 
 
+# --- big windows: the same view, drawn finer ---------------------------------------------------
+REF_W, REF_H = 120, 78           # the world a 120x40 window shows; bigger windows zoom in to about this view
+
+
+def view_zoom(PW, PH):
+    """Screen pixels per world pixel: 1 up to a medium window, then as much as keeps about the same view."""
+    return max(1.0, min(PW / REF_W, PH / REF_H))
+
+
+_TEX = [[0.9 + 0.2 * random.Random(i * 31 + j).random() for i in range(16)] for j in range(16)]   # fine rock grain
+_SUBART = {}
+
+
+def _disc(px, PW, PH, cx, cy, r, col, k, soft=0.0):
+    """An anti-aliased disc at screen position (cx, cy) with radius r (screen pixels); soft > 0 lets it fade out
+    towards the rim like a glow."""
+    x0, x1 = max(0, int(cx - r - 1)), min(PW, int(cx + r + 2))
+    y0, y1 = max(0, int(cy - r - 1)), min(PH, int(cy + r + 2))
+    for Y in range(y0, y1):
+        row = px[Y]
+        dy = Y + 0.5 - cy
+        for X in range(x0, x1):
+            dd = math.hypot(X + 0.5 - cx, dy)
+            a = r + 0.5 - dd
+            if a <= 0:
+                continue
+            if a > 1:
+                a = 1.0
+            if soft:
+                a *= max(0.0, 1 - dd / (r + 0.5)) ** soft
+            row[X] = mix(row[X], col, k * a)
+
+
+def _seg(px, PW, PH, x0, y0, x1, y1, wd, col, k):
+    """An anti-aliased line from (x0, y0) to (x1, y1), wd screen pixels wide."""
+    h = wd / 2 + 0.5
+    lo_x, hi_x = max(0, int(min(x0, x1) - h)), min(PW, int(max(x0, x1) + h) + 1)
+    lo_y, hi_y = max(0, int(min(y0, y1) - h)), min(PH, int(max(y0, y1) + h) + 1)
+    ux, uy = x1 - x0, y1 - y0
+    L2 = ux * ux + uy * uy or 1e-9
+    for Y in range(lo_y, hi_y):
+        row = px[Y]
+        py = Y + 0.5 - y0
+        for X in range(lo_x, hi_x):
+            pxx = X + 0.5 - x0
+            q = (pxx * ux + py * uy) / L2
+            q = 0.0 if q < 0 else 1.0 if q > 1 else q
+            a = h - math.hypot(pxx - q * ux, py - q * uy)
+            if a > 0:
+                row[X] = mix(row[X], col, k * (1.0 if a > 1 else a))
+
+
+def _sub_art(ow, oh, face):
+    """The sub's letter art smoothed to ow x oh screen pixels, with a lit top, a shaded keel and a dark rim:
+    a list of (dx, dy, letter, brightness)."""
+    key = (ow, oh, face)
+    if key not in _SUBART:
+        art = SUB if face > 0 else [l[::-1] for l in SUB]
+        g = scale_art([list(l) for l in art], ow, oh)
+        out = []
+        for y in range(oh):
+            for x in range(ow):
+                ch = g[y][x]
+                if ch == ".":
+                    continue
+                up = y == 0 or g[y - 1][x] == "."
+                down = y == oh - 1 or g[y + 1][x] == "."
+                side = x == 0 or x == ow - 1 or g[y][x - 1] == "." or g[y][x + 1] == "."
+                k = 1.0 + 0.18 * (1 - y / oh) - 0.25 * (y / oh) ** 2
+                if up:
+                    k += 0.2
+                if down or side:
+                    k -= 0.3
+                out.append((x, y, ch, k))
+        _SUBART[key] = out
+    return _SUBART[key]
+
+
+def draw_fine(d, cv, PW, PH, z, title_mode):
+    """The trench at z screen pixels per world pixel: the same view as a medium window, but the rock is sampled
+    smoothly (anti-aliased edges, fine grain) and lights, rings, creatures and the sub are drawn at screen
+    resolution instead of as enlarged blocks."""
+    w = d.w
+    px = cv.px
+    t = d.t
+    VW, VH = PW / z, PH / z
+    camx = math.floor((d.x - VW / 2) * z) / z
+    camy = math.floor((d.y - VH * 0.42) * z) / z
+    ox, oy = round(camx * z), round(camy * z)       # texture offsets, so the grain moves with the rock
+
+    def sx(x):
+        return (x - camx) * z
+
+    def sy(y):
+        return (y - camy) * z
+
+    # water, darker with depth
+    for Y in range(PH):
+        wy = camy + (Y + 0.5) / z
+        if wy < 0:
+            c = (24, 60, 90)
+        else:
+            c = shade(water_col(wy), 1.0 + max(0.0, (60 - wy) / 60) * 2.2 if wy < 60 else 1.0)
+        px[Y] = [c] * PW
+    # marine snow: as many flakes per view as in a medium window, each one screen pixel
+    rnd = random.Random(3)
+    for i in range(70):
+        X = int((rnd.uniform(0, 400) - camx * 0.6) % VW * z)
+        Y = int((rnd.uniform(0, 400) - camy * 0.6 + t * rnd.uniform(1, 3)) % VH * z)
+        if 0 <= X < PW and 0 <= Y < PH:
+            px[Y][X] = mix(px[Y][X], (120, 140, 150), 0.25)
+    # the rock we know: one colour per world cell, then sampled bilinearly per screen pixel
+    g, mem = w.g, w.mem
+    memcols = [mix(zn[3], zn[2], 0.16) for zn in ZONES]
+    ix0, ix1 = math.floor(camx - 0.5), math.floor(camx + VW - 0.5) + 1
+    iy0, iy1 = math.floor(camy - 0.5), math.floor(camy + VH - 0.5) + 1
+    ncx = ix1 - ix0 + 1
+    cells = []
+    for j in range(iy0, iy1 + 1):
+        if not 0 <= j < H:
+            cells.append(None)
+            continue
+        amb = (1 - j / 110) if j < 110 else 0.0
+        if amb > 0:
+            rc = mix(ZONES[0][3], (70, 120, 140), round(amb * 24) / 24 * 0.8)
+            out = rc
+        else:
+            rc = memcols[zone_of(j)]
+            out = (8, 8, 12)
+        lo, hi = max(ix0, 0), min(ix1 + 1, W)
+        base = j * W
+        if amb > 0:
+            mid = [rc if g[q] else None for q in range(base + lo, base + hi)]
+        else:
+            mid = [rc if g[q] and mem[q] else None for q in range(base + lo, base + hi)]
+        row = [out] * ncx if hi <= lo else [out] * (lo - ix0) + mid + [out] * (ix1 + 1 - hi)
+        cells.append(row if row.count(None) < ncx else None)
+    # echoes: lit rock glows in its sonar colour, fading
+    for i, (t0, s, col) in d.echo.items():
+        b = s * math.exp(-(t - t0) / ECHO_DECAY)
+        if b < 0.035:
+            continue
+        cx, cy = i % W - ix0, i // W - iy0
+        if 0 <= cx < ncx and 0 <= cy <= iy1 - iy0:
+            row = cells[cy]
+            if row is None:
+                row = cells[cy] = [None] * ncx
+            if t - t0 < 0.12:
+                col = mix(col, (255, 255, 255), 0.6)
+            wy = cy + iy0
+            under = row[cx] or shade(water_col(wy), 1.0 + max(0.0, (60 - wy) / 60) * 2.2 if wy < 60 else 1.0)
+            row[cx] = mix(under, col, min(1.0, b))
+    # which cell pair and weight every screen column samples
+    xs = []
+    for X in range(PW):
+        fx = camx + (X + 0.5) / z - 0.5
+        i = math.floor(fx)
+        xs.append((i - ix0, fx - i))
+    runs = []
+    for X in range(PW):
+        ci = xs[X][0]
+        if runs and runs[-1][0] == ci:
+            runs[-1][2] = X + 1
+        else:
+            runs.append([ci, X, X + 1])
+    tex = _TEX
+    for Y in range(PH):
+        fy = camy + (Y + 0.5) / z - 0.5
+        j = math.floor(fy)
+        cj = j - iy0
+        A, B = cells[cj], cells[cj + 1]
+        if A is None and B is None:
+            continue
+        A = A or [None] * ncx
+        B = B or [None] * ncx
+        ty = fy - j
+        row = px[Y]
+        trow = tex[(Y + oy) & 15]
+        for ci, X0, X1 in runs:
+            a, b, c, e = A[ci], A[ci + 1], B[ci], B[ci + 1]
+            if a is None and b is None and c is None and e is None:
+                continue
+            if a is not None and a == b == c == e:
+                r0, g0, b0 = a
+                for X in range(X0, X1):
+                    m = trow[(X + ox) & 15]
+                    row[X] = (min(255, int(r0 * m)), min(255, int(g0 * m)), min(255, int(b0 * m)))
+                continue
+            for X in range(X0, X1):
+                tx = xs[X][1]
+                s = R = G = Bc = 0.0
+                for col, wt in ((a, (1 - tx) * (1 - ty)), (b, tx * (1 - ty)), (c, (1 - tx) * ty), (e, tx * ty)):
+                    if col is not None and wt > 0:
+                        s += wt
+                        R += col[0] * wt
+                        G += col[1] * wt
+                        Bc += col[2] * wt
+                al = (s - 0.5) * z + 0.5
+                if al <= 0:
+                    continue
+                if al > 1:
+                    al = 1.0
+                m = trow[(X + ox) & 15] / s
+                o = row[X]
+                row[X] = (int(o[0] + (min(255.0, R * m) - o[0]) * al), int(o[1] + (min(255.0, G * m) - o[1]) * al),
+                          int(o[2] + (min(255.0, Bc * m) - o[2]) * al))
+    # sonar rings in the open water: a thin line of dots, about two screen pixels apart
+    step = 1 if z >= 1.5 else 2
+    for p in d.pings:
+        fade = max(0.0, 1 - p.r / p.R)
+        for dist, dx, dy, hit in p.rays[::step]:
+            if dist > p.r:
+                X, Y = int(sx(p.x + dx * p.r)), int(sy(p.y + dy * p.r))
+                if 0 <= X < PW and 0 <= Y < PH:
+                    px[Y][X] = mix(px[Y][X], p.color, 0.5 * fade)
+    # vents and their bubbles: small round dots
+    for vx, vy in w.vents:
+        _disc(px, PW, PH, sx(int(vx) + 0.5), sy(int(vy) + 0.5), 0.45 * z, (160, 200, 220), 0.5)
+    br = max(0.5, 0.3 * z)
+    for bx, by, _ in d.bubbles:
+        if math.hypot(bx - d.x, by - d.y) < 90:
+            _disc(px, PW, PH, sx(bx), sy(by), br, (190, 230, 255), 0.55)
+    # finds glint where light has touched them: a bright core and a thin cross of light
+    for it in w.loot:
+        X, Y = sx(int(it["x"]) + 0.5), sy(int(it["y"]) + 0.5)
+        if not (-3 * z <= X < PW + 3 * z and -2 * z <= Y < PH + 2 * z):
+            continue
+        age = t - it["seen"]
+        near = math.hypot(it["x"] - d.x, it["y"] - d.y) < 16
+        if age < 4 or near:
+            b = max(0.3 if near else 0.0, 1 - age / 4)
+            col = {"salvage": GOLD, "oxygen": (120, 220, 255), "battery": (140, 255, 140), "flares": FLARE}[it["kind"]]
+            glint = 1.0 if int(t * 3 + it["x"]) % 3 == 0 else 0.75
+            core = mix(col, (255, 255, 255), 0.55 if glint == 1.0 else 0.25)
+            _seg(px, PW, PH, X - 2.6 * z, Y, X + 2.6 * z, Y, 1.0, col, b * glint * 0.45 * glint)
+            _seg(px, PW, PH, X, Y - 1.5 * z, X, Y + 1.5 * z, 1.0, col, b * glint * 0.6)
+            _disc(px, PW, PH, X, Y, 0.9 * z, col, b * glint * 0.75, soft=0.6)
+            _disc(px, PW, PH, X, Y, 0.45 * z, core, b * glint)
+    # the Source at the bottom: a pale glow you can sense from far away
+    srx, sry = w.source
+    ds = math.hypot(srx - d.x, sry - d.y)
+    if ds < 220:
+        k = (0.6 + 0.4 * math.sin(t * 2)) * (1 - ds / 220)
+        _disc(px, PW, PH, sx(int(srx) + 0.5), sy(int(sry) + 0.5), 9 * z, (230, 255, 240), k, soft=1.5)
+    # creatures
+    for c in w.creatures:
+        X, Y = sx(c.x), sy(c.y)
+        seen = max(0.0, 1 - (t - c.seen) / 2.5)
+        dsub = math.hypot(c.x - d.x, c.y - d.y)
+        if c.kind == "jelly":
+            if not (-5 * z <= X < PW + 5 * z and -5 * z <= Y < PH + 6 * z):
+                continue
+            pulse = 0.45 + 0.35 * math.sin(c.ph * 2.3)
+            col = (255, 120, 210)
+            k = min(1.0, max(pulse, seen))
+            for ddx in (-0.9, 0.0, 0.9):               # trailing tentacles, a pixel wide
+                sw = math.sin(c.ph * 1.7 + ddx * 2)
+                _seg(px, PW, PH, X + ddx * z, Y + 0.6 * z, X + (ddx + 0.4 * sw) * z, Y + 3.6 * z, 1.0, col, 0.35 * k)
+            bell = 1.0 + 0.12 * math.sin(c.ph * 2.3)
+            x0, x1 = max(0, int(X - 2 * z)), min(PW, int(X + 2 * z) + 2)
+            y0, y1 = max(0, int(Y - 1.6 * z)), min(PH, int(Y + 0.8 * z) + 2)
+            for yy in range(y0, y1):
+                for xx in range(x0, x1):
+                    u, v = (xx + 0.5 - X) / (1.7 * z * bell), (yy + 0.5 - Y - 0.5 * z) / (1.9 * z / bell)
+                    if v > 0.05 + 0.08 * math.sin(u * 9):          # a dome with a frilled rim
+                        continue
+                    r = math.hypot(u, v)
+                    a = (1 - r) * 1.7 * z
+                    if a > 0:
+                        px[yy][xx] = mix(px[yy][xx], mix(col, (255, 220, 245), 0.4 * (1 - r)), k * min(1.0, a))
+        elif c.kind == "lurker":
+            if not (-7 * z <= X < PW + 7 * z and -5 * z <= Y < PH + 5 * z):
+                continue
+            col = LURKER
+            if c.chasing:
+                seen = max(seen, 0.35 + 0.15 * math.sin(t * 8))
+            fwd = 1 if c.vx >= 0 else -1
+            if seen > 0:                         # a long fish: thick body, thin tail
+                x0, x1 = max(0, int(X - 5.2 * z)), min(PW, int(X + 5.2 * z) + 2)
+                y0, y1 = max(0, int(Y - 2.2 * z)), min(PH, int(Y + 2.2 * z) + 2)
+                for yy in range(y0, y1):
+                    for xx in range(x0, x1):
+                        u = (xx + 0.5 - X) / z * fwd
+                        hw = 1.6 * max(0.0, 1 - ((u - 0.6) / 4.2) ** 2) ** 0.6 if u > -4.6 else 0.0
+                        if u < -3.0:               # the tail fans out again
+                            hw = max(hw, (-3.0 - u) * 0.9)
+                        a = (hw - abs(yy + 0.5 - Y) / z) * z + 0.5
+                        if a > 0:
+                            px[yy][xx] = mix(px[yy][xx], col, seen * min(1.0, a) * (0.9 - abs(u) * 0.08))
+            if int(c.ph * 1.7) % 4 != 0:         # the lure on its stalk, blinking
+                lx, ly = X + 3.2 * fwd * z, Y - 3.0 * z
+                _seg(px, PW, PH, X + 1.8 * fwd * z, Y - 1.2 * z, lx, ly, 1.0, col, 0.35 * max(seen, 0.2))
+                _disc(px, PW, PH, lx, ly, 0.5 * z, (255, 250, 170), 0.85)
+                _disc(px, PW, PH, lx, ly, 1.6 * z, (255, 250, 170), 0.25, soft=1.0)
+            if dsub < 40 or c.chasing:
+                k = 0.95 if c.chasing else 0.7 * (1 - dsub / 40)
+                for ex in ((-2.5,) if c.x > d.x else (2.5,)):
+                    _disc(px, PW, PH, X + ex * z, Y - 0.3 * z, 0.45 * z, (255, 60, 40), k)
+        else:
+            if seen > 0:                          # the leviathan: one smooth, shaded body, not a chain of discs
+                col = mix(ZONES[zone_of(c.body[0][1])][2], (225, 220, 200), 0.6)
+                pts = [(sx(bx), sy(by), max(1.5, 6 - i * 0.28) * z) for i, (bx, by) in enumerate(c.body)]
+                caps = [(pts[i], pts[i + 1]) for i in range(len(pts) - 1)] or [(pts[0], pts[0])]
+                x0 = max(0, int(min(q[0] - q[2] for q in pts)) - 1)
+                x1 = min(PW, int(max(q[0] + q[2] for q in pts)) + 2)
+                y0 = max(0, int(min(q[1] - q[2] for q in pts)) - 1)
+                y1 = min(PH, int(max(q[1] + q[2] for q in pts)) + 2)
+                for yy in range(y0, y1):
+                    row = px[yy]
+                    Yc = yy + 0.5
+                    near = [cp for cp in caps if min(cp[0][1] - cp[0][2], cp[1][1] - cp[1][2]) - 1 < Yc
+                            < max(cp[0][1] + cp[0][2], cp[1][1] + cp[1][2]) + 1]
+                    if not near:
+                        continue
+                    for xx in range(x0, x1):
+                        Xc = xx + 0.5
+                        best, depth = 0.0, 0.0
+                        for (ax_, ay_, ar), (bx_, by_, br_) in near:
+                            ux, uy = bx_ - ax_, by_ - ay_
+                            L2 = ux * ux + uy * uy
+                            q = 0.0 if L2 < 1e-6 else min(1.0, max(0.0, ((Xc - ax_) * ux + (Yc - ay_) * uy) / L2))
+                            r = ar + (br_ - ar) * q
+                            a = r + 0.5 - math.hypot(Xc - ax_ - q * ux, Yc - ay_ - q * uy)
+                            if a > best:
+                                best, depth = a, a / (r + 0.5)
+                        if best > 0:              # rounder in the middle, darker at the flanks
+                            row[xx] = mix(row[xx], shade(col, 0.6 + 0.55 * depth ** 0.5),
+                                          seen * 0.85 * min(1.0, best))
+            if dsub < 90 or c.state == "hunt":
+                k = 0.9 if c.state == "hunt" else 0.5 * (1 - dsub / 90)
+                for ex in (-2, 2):
+                    _disc(px, PW, PH, X + ex * z, Y - 2 * z, 0.55 * z, (255, 230, 120), k)
+        if c.kind == "leviathan" and c.state == "hunt" and not title_mode and not (0 <= X < PW and 0 <= Y < PH):
+            k = 0.6 + 0.4 * math.sin(t * 7)
+            ex, ey = clamp(X, 3 * z, PW - 9 * z), clamp(Y, 3 * z, PH - 4 * z)
+            for yy in range(int(ey - 3 * z), int(ey + 3 * z) + 1):
+                for xx in range(int(ex - 3 * z), int(ex + 3 * z) + 1):
+                    r = (abs(xx + 0.5 - ex) + abs(yy + 0.5 - ey)) / z
+                    if r <= 2.5 and 0 <= xx < PW and 0 <= yy < PH:
+                        px[yy][xx] = mix(px[yy][xx], (255, 60, 45) if r < 1.5 else (150, 20, 20),
+                                         k * (1.0 if r < 1.5 else 0.8) * min(1.0, (2.5 - r) * z))
+    # flares: a hot core in an orange glow
+    for f in d.flare_list:
+        X, Y = sx(f[0]), sy(f[1])
+        _disc(px, PW, PH, X, Y, 1.8 * z, FLARE, 0.75, soft=0.8)
+        _disc(px, PW, PH, X, Y, 0.55 * z, (255, 230, 160), 1.0)
+    # the sub, with a soft lamp cone
+    if not title_mode:
+        if d.lamp:
+            face = d.face
+            ax = d.x + face * 5
+            xa, xb = sx(ax + face * 0.5), sx(ax + face * 29.5)
+            x0, x1 = max(0, int(min(xa, xb))), min(PW, int(max(xa, xb)) + 1)
+            y0, y1 = max(0, int(sy(d.y - 15.5))), min(PH, int(sy(d.y + 15.5)) + 1)
+            for Y in range(y0, y1):
+                wy = camy + (Y + 0.5) / z
+                dy = abs(wy - d.y)
+                row = px[Y]
+                for X in range(x0, x1):
+                    wx = camx + (X + 0.5) / z
+                    k = (wx - ax) * face
+                    half = k * 0.5
+                    if k < 0.5 or k >= 29.5 or dy > half + 1:
+                        continue
+                    edge = min(1.0, (half + 1 - dy) * z * 0.5)
+                    fx, fy = wx - 0.5, wy - 0.5      # rock blocks the light, sampled as smoothly as it is drawn
+                    i, j = math.floor(fx), math.floor(fy)
+                    if 0 <= i < W - 1 and 0 <= j < H - 1:
+                        q = j * W + i
+                        tx, ty = fx - i, fy - j
+                        rock = ((1 - tx) * (1 - ty) * (g[q] > 0) + tx * (1 - ty) * (g[q + 1] > 0)
+                                + (1 - tx) * ty * (g[q + W] > 0) + tx * ty * (g[q + W + 1] > 0))
+                        if rock >= 0.5:
+                            continue
+                        edge *= min(1.0, (0.5 - rock) * z * 2)
+                    lit = 1 - min(1.0, dy / (half + 1))
+                    row[X] = mix(row[X], LAMP_BEAM, 0.3 * (1 - k / 30) ** 1.4 * (0.45 + 0.55 * lit) * edge)
+        ow, oh = round(12 * z), round(5 * z)
+        left, top = round(sx(d.x - 6.5)), round(sy(d.y - 3.5))
+        pc = (190, 190, 200) if int(t * 12) % 2 else (90, 90, 100)
+        for dx, dy, ch, k in _sub_art(ow, oh, d.face):
+            X, Y = left + dx, top + dy
+            if 0 <= X < PW and 0 <= Y < PH:
+                px[Y][X] = shade(pc if ch == "p" else SUB_PAL[ch], k)
+        if int(t * 2) % 2:
+            nx = d.x + (5 if d.face > 0 else -6)
+            col = (80, 255, 120) if d.face > 0 else (255, 70, 70)
+            _disc(px, PW, PH, sx(nx), sy(d.y - 1), 0.5 * z, col, 1.0)
+            _disc(px, PW, PH, sx(nx), sy(d.y - 1), 1.4 * z, col, 0.3, soft=1.0)
+
+
 def render(d, cols, rows, title_mode=False):
     cv = Canvas(cols, rows)
     PW = cols
     prow = rows - (0 if title_mode else 1)
     PH = prow * 2
+    z = view_zoom(PW, PH)
+    if z > 1:
+        draw_fine(d, cv, PW, PH, z, title_mode)
+    else:
+        draw_pixels(d, cv, PW, PH, title_mode)
+    if not title_mode:
+        # damage and low air pulse red at the edges
+        red = d.hurt * 2 + (max(0.0, 0.3 - d.oxygen / 100) * (0.5 + 0.5 * math.sin(d.t * 6)) * 2)
+        if red > 0:
+            m = max(4, round(4 * z))
+            for y in range(PH):
+                row = cv.px[y]
+                for x in list(range(m)) + list(range(PW - m, PW)):
+                    e = (m - x) / m if x < m else (x - (PW - m - 1)) / m
+                    row[x] = mix(row[x], (220, 30, 30), min(0.8, red * e))
+        depth_gauge(cv, d, PW, PH)
+        hud(cv, d, cols, rows)
+    return cv
+
+
+def draw_pixels(d, cv, PW, PH, title_mode):
+    """The trench at one world pixel per screen pixel (small and medium windows)."""
     w = d.w
     camx = int(d.x - PW / 2)
     camy = int(d.y - PH * 0.42)
@@ -1083,17 +1496,6 @@ def render(d, cols, rows, title_mode=False):
         X, Y = x0 + (5 if d.face > 0 else -6), y0 - 1
         if blink and 0 <= X < PW and 0 <= Y < PH:
             px[Y][X] = (80, 255, 120) if d.face > 0 else (255, 70, 70)
-        # damage and low air pulse red at the edges
-        red = d.hurt * 2 + (max(0.0, 0.3 - d.oxygen / 100) * (0.5 + 0.5 * math.sin(t * 6)) * 2)
-        if red > 0:
-            for y in range(PH):
-                row = px[y]
-                for x in list(range(4)) + list(range(PW - 4, PW)):
-                    e = (4 - x) / 4 if x < 4 else (x - (PW - 5)) / 4
-                    row[x] = mix(row[x], (220, 30, 30), min(0.8, red * e))
-        depth_gauge(cv, d, PW, PH)
-        hud(cv, d, cols, rows)
-    return cv
 
 
 def depth_gauge(cv, d, PW, PH):

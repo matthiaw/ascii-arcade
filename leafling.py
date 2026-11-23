@@ -2952,6 +2952,65 @@ def sprite(art, name, flip):
     return s
 
 
+FINE = 9          # from this tile size on (big windows) things are drawn finer instead of with the small art
+
+
+def fine_k(T):
+    """Detail size in pixels: 1 up to tile size 11, 2 from 12, 3 from 20 ..."""
+    return max(1, round(T / 8))
+
+
+def hero_fine(name, flip, T):
+    """Hero frame for big tiles: the L art smoothed up (Scale2x) to T/6 of its size, then outlined, rim-lit and
+    given eye highlights at that size, so it keeps its proportions to the tiles and gets finer, not blockier."""
+    k = ("F", name, flip, T)
+    s = _SPR.get(k)
+    if s is not None:
+        return s
+    rows = HERO_L[name]
+    rows = [r[::-1] for r in rows] if flip else rows
+    w, h = max(1, round(len(rows[0]) * T / 6)), max(1, round(len(rows) * T / 6))
+    g = arcadekit.scale_art([list(r) for r in rows], w, h)
+    th = max(1, round(T / 12))                       # outline thickness at this size
+    reach = max(th + 1, round(T / 6))                 # how thick the smoothed-up outline came out
+    filled = lambda x, y: 0 <= x < w and 0 <= y < h and g[y][x] != "."
+    near = lambda x, y, r: any(not filled(x + dx, y + dy) for dx in range(-r, r + 1) for dy in range(-r, r + 1))
+    body = lambda x, y, r: next((g[y + dy][x + dx] for dx, dy in ((0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (-1, 1))
+                                 for _ in range(1) if filled(x + dx, y + dy) and g[y + dy][x + dx] != "o"), None)
+    out = [[None] * w for _ in range(h)]
+    for y in range(h):
+        for x in range(w):
+            ch = g[y][x]
+            if ch == ".":
+                continue
+            if ch == "o" and not near(x, y, th) and near(x, y, reach):
+                ch = body(x, y, 1) or "o"           # the inner part of a thick outline: thinned to th pixels
+            c = HERO_COLS[ch]
+            if ch == "e":
+                if not (y > 0 and g[y - 1][x] == "e") and not (x > 0 and g[y][x - 1] == "e"):
+                    c = (236, 236, 255)              # a catch-light in each eye
+            elif ch != "o":
+                lx = -th if not flip else th
+                lit = not filled(x + lx, y) or g[y][x + lx] == "o" or not filled(x, y - th) or g[y - th][x] == "o"
+                dark = not filled(x - lx, y) or g[y][x - lx] == "o" or not filled(x, y + th) or g[y + th][x] == "o"
+                if dark and not lit:
+                    c = shade(c, 0.84)
+                elif lit and not dark:
+                    c = mix(c, (255, 255, 240), 0.22)
+            out[y][x] = c
+    _SPR[k] = out
+    return out
+
+
+def dot(px, W, H, x, y, c, s=1):
+    """A square of s x s pixels with its top-left at (x, y) (s=1: one pixel, like pset)."""
+    x, y = int(x), int(y)
+    for yy in range(max(0, y), min(H, y + s)):
+        row = px[yy]
+        for xx in range(max(0, x), min(W, x + s)):
+            row[xx] = c
+
+
 def blit_scaled(px, W, H, img, cx, by, sx=1.0, sy=1.0, tint=None):
     """Draw img with its bottom centre at (cx, by), scaled (nearest) by sx, sy."""
     h0, w0 = len(img), len(img[0])
@@ -3328,7 +3387,8 @@ def tile_keys(lv):
                 mossy = 0
                 if c == MOSS:
                     mossy = 1
-                keys[y][x] = ("S", mask, v, deep, mossy)
+                covered = y > 0 and code[y - 1][x] in (WAT, THU, THD)        # no grass blades against water/thorns
+                keys[y][x] = ("S", mask, v, deep, mossy, covered)
             elif c == CRUM:
                 keys[y][x] = ("C", (code[y][x - 1] == CRUM if x > 0 else 0) * 1 + (code[y][x + 1] == CRUM if x < W - 1 else 0) * 2, v)
             elif c == ONE:
@@ -3342,13 +3402,250 @@ def tile_keys(lv):
     return keys
 
 
+def round_corners(img, T, corners, R, line):
+    """Cut the given corners (0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right) round with radius R, with a
+    one-pixel rim in `line` (None: keep the pixel's colour, darkened)."""
+    for cn in corners:
+        for j in range(R):
+            for i in range(R):
+                dx, dy = R - i - 0.5, R - j - 0.5
+                d = math.sqrt(dx * dx + dy * dy)
+                x = i if cn in (0, 2) else T - 1 - i
+                y = j if cn in (0, 1) else T - 1 - j
+                if d > R:
+                    img[y][x] = None
+                elif d > R - 1.1 and img[y][x] is not None:
+                    img[y][x] = line if line else shade(img[y][x], 0.7)
+
+
+def make_tile_fine(biome, key, T, frame=0):
+    """make_tile for big tiles (T >= FINE): the same tiles with the detail the extra pixels allow - grass blades and
+    a turf that drips over the edge, bark grain and knots, crystal facets, bevelled bricks, pebbles and buried
+    leaves, rounded outer corners, planks with grain and nails."""
+    p = PAL[biome]
+    kind = key[0]
+    img = [[None] * T for _ in range(T)]
+    k = fine_k(T)
+    tau = 2 * math.pi
+    if kind == "S":
+        _, mask, v, deep, mossy, covered = key
+        top_open, bot_open, l_open, r_open = mask & 1, mask & 2, mask & 4, mask & 8
+        dark = (1.0, 0.86, 0.72)[deep]
+        bw = T // 2                                       # brick height (sky ruins)
+        gp = max(3, T // 3)                               # bark grain spacing
+        kx, ky = hsh(v, 1, biome) % (T - 4) + 2, hsh(v, 2, biome) % (T - 4) + 2
+        knot = biome == 0 and v == 0 and deep == 1
+        for y in range(T):
+            for x in range(T):
+                hc = hsh(x * 4 // T + v * 7, y * 4 // T + v * 3, biome)       # soft patches
+                hf = hsh(x + v * 31, y + v * 17, biome + 8)                   # a fine grain on top
+                c = shade(mix(p["body"][0], p["body"][hc % 3], 0.5), 0.95 + (hf % 11) * 0.01)
+                if biome == 0:
+                    gx = x + 1.3 * math.sin((y + v * 5) * tau / T * 2) + v * 3
+                    m = int(gx) % gp
+                    if m == 0:
+                        c = shade(c, 0.78)                                # bark grain
+                    elif m == 1:
+                        c = mix(c, (255, 226, 180), 0.1)
+                    if knot:
+                        e = ((x + 0.5 - kx) / max(1.5, T * 0.13)) ** 2 + ((y + 0.5 - ky) / max(1.2, T * 0.09)) ** 2
+                        if e < 0.45:
+                            c = shade(p["deep"], 0.85)
+                        elif e < 1.0:
+                            c = shade(c, 0.78)
+                        elif e < 1.6:
+                            c = mix(c, (255, 226, 180), 0.1)
+                elif biome == 1:
+                    q = (x + y * 2 + v * 5) % (T // 2 + 2)
+                    if q == 0:
+                        c = shade(c, 0.86)                                # facets
+                    elif q == 1:
+                        c = mix(c, p["top_hi"], 0.1)
+                    if deep < 2 and v == 0:                               # a glowing crystal fleck
+                        e = abs(x + 0.5 - kx) + abs(y + 0.5 - ky) * 0.7
+                        if e < k + 0.6:
+                            c = p["moss_hi"] if e < k * 0.5 else mix(p["moss"], c, 0.3)
+                elif biome == 2:
+                    row = y // bw
+                    off = (T // 2) * (row % 2) + v * 3
+                    bx = (x + off) % T
+                    bh = hsh((x + off) // T + v, row, 21) % 5
+                    c = shade(c, 0.94 + bh * 0.025)                       # each brick its own shade
+                    if y % bw == bw - 1 or y == T - 1 or bx == T - 1:
+                        c = shade(p["body"][0], 0.8)                      # mortar
+                    elif y % bw == 0 or bx == 0:
+                        c = mix(c, (255, 255, 250), 0.18)                 # bevel: lit top and left
+                    elif y % bw == bw - 2 or bx == T - 2:
+                        c = shade(c, 0.9)
+                    elif hf % 23 == 0:
+                        c = shade(c, 0.88)                                # pits in the stone
+                elif biome == 3:
+                    for s in range(2):
+                        px_, py_ = hsh(v, 5 + s, 3) % (T - 3) + 1.5, hsh(v, 7 + s, 3) % (T - 3) + 1.5
+                        e = ((x + 0.5 - px_) / (T * 0.12)) ** 2 + ((y + 0.5 - py_) / (T * 0.085)) ** 2
+                        if e < 1:
+                            c = mix(p["body"][2], p["crumble"], 0.45)       # a pebble
+                            if (x + 0.5 - px_) + (y + 0.5 - py_) < -T * 0.06:
+                                c = mix(c, (255, 240, 220), 0.25)
+                            elif e > 0.6:
+                                c = shade(c, 0.75)
+                    if hf % 29 == 0 or (hc % 5 == 0 and (x - y + v) % 6 == 0):
+                        c = shade(p["top_lo"], 0.6)                       # buried leaves
+                img[y][x] = shade(c, dark)
+        if l_open:
+            for y in range(T):
+                img[y][0] = mix(img[y][0], p["line"], 0.6)
+                img[y][1] = mix(img[y][1], (255, 240, 220), 0.12)
+        if r_open:
+            for y in range(T):
+                img[y][T - 1] = mix(img[y][T - 1], p["line"], 0.75)
+                img[y][T - 2] = shade(img[y][T - 2], 0.85)
+        if bot_open:
+            for x in range(T):
+                img[T - 1][x] = p["line"]
+                img[T - 2][x] = mix(img[T - 2][x], p["line"], 0.45)
+                img[T - 3][x] = mix(img[T - 3][x], p["line"], 0.18)
+        if mossy:
+            for side, op in ((0, l_open), (T - 1, r_open)):
+                if op:
+                    d = 1 if side == 0 else -1
+                    for y in range(T):
+                        ln = max(2, T // 5) + hsh(y // 2, v, side) % max(2, T // 5)
+                        for j in range(ln):
+                            xx = side + d * j
+                            img[y][xx] = (p["moss_hi"] if j == 0 and (y + v) % 3 == 0 else
+                                          p["moss"] if j < ln - 1 else shade(p["moss"], 0.75))
+        if top_open:
+            ts = max(2, T // 3)
+            bl = max(1, T // 8)                                   # how far grass blades stand up
+            for x in range(T):
+                h = hsh(x, v, 9)
+                depth = ts + int(round(math.sin((x + v * 4) * tau / T) * T * 0.06)) + (h % 3 == 0)
+                if h % 7 == 0:
+                    depth += 1 + h % max(1, T // 5)               # a drip of turf over the edge
+                y0 = 0 if covered or hsh(x, v, 11) % 3 else bl   # grass blades against the sky
+                blade = hsh(x, v, 12) % 3 == 0
+                for y in range(min(T, depth)):
+                    if y < y0:
+                        img[y][x] = None
+                        continue
+                    r = (y - y0) / max(1, depth - y0)
+                    c = p["top_hi"] if y == y0 else (p["top"] if r < 0.7 else p["top_lo"])
+                    if blade and r < 0.5 and y > y0:
+                        c = mix(p["top"], p["top_hi"], 0.55)
+                    elif hsh(x, y, v + 40) % 9 == 0 and y > y0:
+                        c = mix(c, p["top_lo"], 0.6)
+                    img[y][x] = c
+                if depth < T:
+                    img[depth][x] = shade(img[depth][x], 0.78)     # the turf's shadow
+        corners = []
+        if top_open and l_open:
+            corners.append(0)
+        if top_open and r_open:
+            corners.append(1)
+        if bot_open and l_open:
+            corners.append(2)
+        if bot_open and r_open:
+            corners.append(3)
+        round_corners(img, T, corners, max(2, T // 4), p["line"] if not top_open else None)
+        if top_open and corners:
+            round_corners(img, T, [c for c in corners if c >= 2], max(2, T // 4), p["line"])
+        return (all(c is not None for row in img for c in row), img)
+    if kind == "C":
+        _, nb, v = key
+        for y in range(T):
+            for x in range(T):
+                c = shade(p["crumble"], 0.96 + hsh(x, y, v) % 9 * 0.01)
+                if y == 0:
+                    c = mix(c, (255, 255, 255), 0.35)
+                elif y == 1 or (x == 1 and not nb & 1):
+                    c = mix(c, (255, 255, 255), 0.15)
+                elif y == T - 1 or (x == T - 1 and not nb & 2) or (x == 0 and not nb & 1):
+                    c = p["crack"]
+                elif y == T - 2 or (x == T - 2 and not nb & 2):
+                    c = shade(c, 0.86)
+                img[y][x] = c
+        rnd = random.Random(hsh(v, nb, 77))
+        for s in range(2):                                    # two cracks running down
+            x = rnd.randrange(2, T - 2)
+            for y in range(1 + s * T // 3, T - 1):
+                if 0 < x < T - 1:
+                    img[y][x] = p["crack"]
+                    if x + 1 < T - 1:
+                        img[y][x + 1] = mix(img[y][x + 1], (255, 255, 255), 0.2)
+                x += rnd.choice((-1, 0, 0, 1))
+        cs = ([0, 2] if not nb & 1 else []) + ([1, 3] if not nb & 2 else [])
+        round_corners(img, T, cs, max(2, T // 5), p["crack"])
+        return (all(c is not None for row in img for c in row), img)
+    if kind == "O":
+        _, nb, v = key
+        th = max(2, T // 3)
+        for y in range(th):
+            for x in range(T):
+                c = p["plank_hi"] if y == 0 else (p["plank_lo"] if y == th - 1 else
+                                                  mix(p["plank"], p["plank_hi"], 0.4) if y == 1 else p["plank"])
+                if 0 < y < th - 1 and (x + hsh(y, v, 3) % T) % 9 in (0, 1, 2) and biome in (0, 3):
+                    c = shade(c, 0.88)                            # wood grain
+                if (x == 0 and not nb & 1) or (x == T - 1 and not nb & 2):
+                    c = mix(c, p["line"], 0.5)
+                img[y][x] = c
+        if biome in (0, 3) and v % 2 == 0 and th >= 3:           # a nail
+            img[th // 2][T // 2] = shade(p["plank_lo"], 0.7)
+            img[th // 2 - 1][T // 2] = p["plank_hi"]
+        if not nb & 1:
+            img[0][0] = img[th - 1][0] = None
+        if not nb & 2:
+            img[0][T - 1] = img[th - 1][T - 1] = None
+        if biome == 0:                                    # little leaves hanging off the branch
+            for x in range(1, T - 2):
+                if hsh(x, v, 4) % 6 == 0:
+                    for j in range(max(2, T // 6)):
+                        if th + j < T:
+                            img[th + j][x + (j > 0)] = p["top"] if j else p["top_hi"]
+        if biome == 1:                                    # crystal ledges drip light
+            for x in range(T):
+                if hsh(x, v, 6) % 4 == 0:
+                    for j in range(1 + hsh(x, v, 7) % max(1, T // 5)):
+                        if th + j < T:
+                            img[th + j][x] = p["plank_lo"] if j == 0 else mix(p["plank_lo"], p["plank_hi"], 0.4)
+        return (False, img)
+    if kind == "T":
+        _, down, v = key
+        n = max(3, T // 4)
+        w = T / n
+        hgt = max(3, int(T * 0.75))
+        for kk in range(n):
+            cx = (kk + 0.5) * w
+            for y in range(hgt):
+                half = (y + 1) / hgt * w * 0.5
+                for x in range(T):
+                    dx = x + 0.5 - cx
+                    if abs(dx) <= half:
+                        yy = T - hgt + y
+                        if y == 0:
+                            c = p["thorn_hi"]
+                        elif dx < -half * 0.45:
+                            c = mix(p["thorn"], p["thorn_hi"], 0.35)      # the lit side
+                        elif dx > half * 0.4:
+                            c = shade(p["thorn"], 0.62)
+                        else:
+                            c = p["thorn"]
+                        img[(T - 1 - yy) if down else yy][x] = c
+        return (False, img)
+    return None
+
+
 def make_tile(biome, key, T, frame=0):
     """The pixels of one tile: (opaque?, T rows of T colours / None)."""
+    if T >= FINE:
+        t = make_tile_fine(biome, key, T, frame)
+        if t is not None:
+            return t
     p = PAL[biome]
     kind = key[0]
     img = [[None] * T for _ in range(T)]
     if kind == "S":
-        _, mask, v, deep, mossy = key
+        _, mask, v, deep, mossy = key[:5]
         top_open, bot_open, l_open, r_open = mask & 1, mask & 2, mask & 4, mask & 8
         dark = (1.0, 0.86, 0.72)[deep]
         ts = max(1, (T + 1) // 3)
@@ -3552,8 +3849,14 @@ class Painter:
             for yy in range(th):
                 c = p["plank_hi"] if yy == 0 else (p["plank_lo"] if yy == th - 1 else p["plank"])
                 for xx in range(w * T):
+                    if T >= FINE and xx in (0, w * T - 1) and yy in (0, th - 1):
+                        continue                          # rounded ends
                     if xx in (0, w * T - 1):
                         c2 = mix(c, p["line"], 0.6)
+                    elif T >= FINE:
+                        c2 = shade(c, 0.88) if 0 < yy < th - 1 and (xx + hsh(yy, i, 3)) % 11 < 3 else c
+                        if yy == th // 2 and xx % T == T // 2 and 0 < yy < th - 1:
+                            c2 = shade(p["plank_lo"], 0.7)  # nails
                     elif (xx + yy) % 5 == 0 and yy:
                         c2 = shade(c, 0.9)
                     else:
@@ -3580,6 +3883,12 @@ class Painter:
                     c = (242, 150, 52) if yy else (255, 196, 96)
                     if yy == cap_h - 1:
                         c = (190, 96, 34)
+                    elif T >= FINE:
+                        if xx > half * 0.55 or yy > cap_h * 0.6:
+                            c = (214, 124, 42)            # the shaded side of the cap
+                        for qx, qy, qr in ((-0.45, 0.45, 0.14), (0.2, 0.3, 0.12), (0.5, 0.65, 0.08)):
+                            if (xx - qx * cap_w / 2) ** 2 + (yy - qy * cap_h) ** 2 < (qr * cap_w) ** 2:
+                                c = (255, 236, 196)       # spots
                     elif (xx + yy * 2 + sx) % 4 == 0 and yy > 0:
                         c = (255, 236, 196)
                     pset(px, W, H, cx + xx, ctop + yy, c)
@@ -3590,6 +3899,9 @@ class Painter:
             lit = sim is not None and sim.lit >> i & 1
             cx, base = X(lx), Y(ly)
             top = base - int(T * 1.5)
+            if T >= FINE:
+                draw_lantern_fine(px, W, H, cx, base, T, lit, t + i * 2.1)
+                continue
             for yy in range(top + 2, base):
                 pset(px, W, H, cx, yy, (70, 52, 40))
             pset(px, W, H, cx - 1, base - 1, (70, 52, 40))
@@ -3636,6 +3948,26 @@ class Painter:
                 add_glow(px, W, H, cx, cy, T * 0.55, (255, 230, 150), 0.5)
             core, rim = (255, 252, 226), (236, 158, 40)
             tw = int(t * 6 + i) % 8 == 0
+            if T >= FINE:                                 # a round, lit bead at screen resolution
+                r = T * 0.34
+                for yy in range(int(cy - r) - 1, int(cy + r) + 2):
+                    for xx in range(int(cx - r) - 1, int(cx + r) + 2):
+                        dx, dy = xx + 0.5 - cx, yy + 0.5 - cy
+                        d = math.sqrt(dx * dx + dy * dy) / r
+                        if d <= 1:
+                            if d < 0.5:
+                                c = core if dx + dy > -r * 0.45 else (255, 255, 255)
+                            elif d < 0.72:
+                                c = mix(core, rim, (d - 0.5) / 0.22)
+                            else:
+                                c = mix(rim, (255, 220, 120), 0.45) if dx + dy < 0 else shade(rim, 0.82)
+                            pset(px, W, H, xx, yy, c)
+                if tw:
+                    for d in range(1, int(T * 0.28) + 1):
+                        cc = mix((255, 255, 255), (255, 230, 150), d / (T * 0.28))
+                        for qx, qy in ((d, 0), (-d, 0), (0, d), (0, -d)):
+                            pset(px, W, H, cx + qx, cy - r - T * 0.1 + qy, cc)
+                continue
             if T >= 6:
                 for qx, qy in ((0, -2), (-2, 0), (1, 0), (0, 1), (-1, -2), (1, -1), (-2, -1), (-1, 1)):
                     pset(px, W, H, cx + qx, cy + qy, rim)
@@ -3687,6 +4019,14 @@ class Painter:
                 if vis(sx, sy):
                     add_glow(px, W, H, X(sx), Y(sy), T * 0.45, p["shot"], 0.5)
                     disc(px, W, H, X(sx), Y(sy), max(1.0, T * 0.17), p["shot"])
+                    if T >= FINE:                 # a lit seed-ball: dark lower rim, bright spot
+                        r = T * 0.17
+                        for yy in range(int(Y(sy) - r), int(Y(sy) + r) + 1):
+                            for xx in range(int(X(sx) - r), int(X(sx) + r) + 1):
+                                dx, dy = xx + 0.5 - X(sx), yy + 0.5 - Y(sy)
+                                if dx * dx + dy * dy <= r * r and dx + dy > r * 0.6:
+                                    pset(px, W, H, xx, yy, shade(p["shot"], 0.75))
+                        dot(px, W, H, X(sx) - r * 0.5, Y(sy) - r * 0.5, (255, 255, 245), fine_k(T))
             if (5, i) in dead or not vis(x, y):
                 continue
             draw_plant(px, W, H, X(x), Y(y), T, d, lv.plant_mouth(i, f), p["plant"], t + i)
@@ -3720,17 +4060,51 @@ class Painter:
             name = "run%d" % (int(fx.run_phase) % 4 if fx else 0)
         else:
             name = "blink" if (t % 3.7) < 0.12 else "idle"
-        img = sprite(art, name, flip)
+        img = hero_fine(name, flip, T) if T >= FINE else sprite(art, name, flip)
         sq = fx.squash if fx else 0.0
         sx, sy = 1.0 - sq * 0.5, 1.0 + sq
         bob = 0
         if name in ("run1", "run3"):
-            bob = -1
+            bob = -1 if T < FINE else -round(T / 6)
         cx = sim.x * T - ox
         if name == "slide":
             cx += sim.wall * (T * HW - len(img[0]) / 2 + 0.5)
         by = sim.y * T - oy + bob + (1 if name == "glide" and T < 6 else 0)
         blit_scaled(px, W, H, img, cx, by, sx, sy)
+
+
+def draw_lantern_fine(px, W, H, cx, base, T, lit, t):
+    """A lantern on a post, drawn at screen resolution for big tiles: post with a foot, a capped glass box."""
+    iron, iron_hi = (70, 52, 40), (118, 92, 70)
+    pw = max(1, T // 8)
+    top = base - int(T * 1.5)
+    lw, lh = max(3, int(T * 0.3)), max(4, int(T * 0.55))        # half width and height of the box
+    for yy in range(top + lh, base):                             # the post, lit on its left
+        for xx in range(-pw // 2, pw - pw // 2):
+            pset(px, W, H, cx + xx, yy, iron_hi if xx == -pw // 2 and pw > 1 else iron)
+    for xx in range(-max(2, T // 5), max(2, T // 5) + 1):        # the foot
+        pset(px, W, H, cx + xx, base - 1, iron)
+        if abs(xx) < T // 8:
+            pset(px, W, H, cx + xx, base - 2, iron)
+    lc = (255, 214, 120) if lit else (110, 120, 140)
+    for yy in range(lh):
+        for xx in range(-lw, lw + 1):
+            edge = abs(xx) == lw or yy in (0, lh - 1)
+            if edge:
+                c = iron_hi if xx < 0 or yy == 0 else iron
+            elif lit:
+                d = math.hypot(xx / lw, (yy - lh * 0.55) / lh)
+                c = mix((255, 250, 220), lc, min(1.0, d * 1.4))       # the flame's bright heart
+            else:
+                c = mix(lc, (160, 170, 190), 0.4) if xx < -lw * 0.3 else lc   # cold glass with a sheen
+            pset(px, W, H, cx + xx, top + yy, c)
+    for j in range(max(2, T // 6)):                                # a little roof and ring on top
+        for xx in range(-(lw - j) - 1, lw - j + 2):
+            pset(px, W, H, cx + xx, top - 1 - j, iron_hi if xx < 0 else iron)
+    pset(px, W, H, cx, top - 1 - max(2, T // 6), iron)
+    if lit:
+        fl = 0.75 + 0.25 * math.sin(t * 9) * math.sin(t * 5.3)
+        add_glow(px, W, H, cx + 0.5, top + lh * 0.55, T * 1.6, (255, 190, 90), 0.45 * fl)
 
 
 def fx_near(sim, x, y, r=2.2):
@@ -3754,6 +4128,17 @@ def draw_beetle(px, W, H, cx, by, w, h, d, cols, frame):
                 pset(px, W, H, xx, yy, c)
     hx = cx + d * rx * 0.85
     disc(px, W, H, hx, by - max(1.5, ry * 0.45), max(1.0, ry * 0.32), (30, 24, 34))
+    T = w / 0.95
+    s = fine_k(T) if T >= FINE else 1
+    if s > 1 or T >= FINE:                        # big tiles: a real eye with a glint, legs with joints
+        ex, ey = hx + d * ry * 0.18, by - ry * 0.58
+        disc(px, W, H, ex, ey, max(1.0, ry * 0.15), (250, 250, 210))
+        dot(px, W, H, ex + d * ry * 0.04, ey - 0.5, (30, 24, 34), s)
+        for k in range(3):
+            lx = cx - rx * 0.6 + k * rx * 0.6 + (s if (frame + k) % 2 else 0)
+            dot(px, W, H, lx, by - 1 - s, (30, 24, 34), s)
+            dot(px, W, H, lx + (s if k else -s), by - s, (30, 24, 34), s)
+        return
     pset(px, W, H, hx + d * max(1, ry * 0.2), by - max(2, ry * 0.55), (250, 250, 210))
     for k in range(3):                            # legs, scuttling
         lx = cx - rx * 0.6 + k * rx * 0.6 + (1 if (frame + k) % 2 else 0)
@@ -3773,8 +4158,9 @@ def draw_bat(px, W, H, cx, cy, T, swoop, cols, t):
         pset(px, W, H, cx, cy - ry - 1, wing)                       # the feet holding on
         pset(px, W, H, cx - rx * 0.6, cy + ry, body)                 # ears (upside down)
         pset(px, W, H, cx + rx * 0.6, cy + ry, body)
-        pset(px, W, H, cx - 1, cy + ry * 0.45, eye)
-        pset(px, W, H, cx + 1, cy + ry * 0.45, eye)
+        s = fine_k(T) if T >= FINE else 1
+        dot(px, W, H, cx - s, cy + ry * 0.45, eye, s)
+        dot(px, W, H, cx + 1, cy + ry * 0.45, eye, s)
         return
     flap = math.sin(t * 20)
     r = max(1.0, T * 0.2)
@@ -3790,8 +4176,15 @@ def draw_bat(px, W, H, cx, cy, T, swoop, cols, t):
     disc(px, W, H, cx, cy, r, body)
     pset(px, W, H, cx - r * 0.7, cy - r - 0.5, body)                 # ears
     pset(px, W, H, cx + r * 0.7, cy - r - 0.5, body)
-    pset(px, W, H, cx - 1, cy - r * 0.2, eye)
-    pset(px, W, H, cx + 1, cy - r * 0.2, eye)
+    s = fine_k(T) if T >= FINE else 1
+    if T >= FINE:                                 # ears as little points, a lit edge on the body
+        for e in (-1, 1):
+            for j in range(s + 1):
+                pset(px, W, H, cx + e * r * 0.6, cy - r - 0.5 - j, body)
+        for yy in range(int(cy - r), int(cy)):
+            pset(px, W, H, cx - r + 1 + (cy - yy) * 0.3, yy, mix(body, wing, 0.6))
+    dot(px, W, H, cx - s, cy - r * 0.2, eye, s)
+    dot(px, W, H, cx + 1, cy - r * 0.2, eye, s)
 
 
 def draw_plant(px, W, H, cx, by, T, d, mouth, cols, t):
@@ -3829,6 +4222,11 @@ def draw_plant(px, W, H, cx, by, T, d, mouth, cols, t):
                 elif (xx * 3 + yy * 5) % 7 == 0 and dy > -0.3:
                     c = mix(head, (255, 255, 255), 0.3)      # spots
             pset(px, W, H, xx, yy, c)
+    if T >= FINE:                                 # a round eye with a pupil looking ahead
+        ex, ey = hx - d * rx * 0.25, hy - ry * 0.4
+        disc(px, W, H, ex, ey, max(1.2, T * 0.11), (255, 255, 236))
+        disc(px, W, H, ex + d * T * 0.04, ey + T * 0.02, max(0.8, T * 0.06), (30, 20, 30))
+        return
     pset(px, W, H, hx - d * rx * 0.25, hy - ry * 0.45, (255, 255, 236))
     pset(px, W, H, hx - d * rx * 0.25, hy - ry * 0.45 + 1, (30, 20, 30))
 
@@ -3871,18 +4269,23 @@ def draw_boss(px, W, H, cx, by, T, st, tm, face, kind, t):
         pset(px, W, H, hx + face * (T * 0.3 + j * 0.6), by - ry * 0.55 - j, hi)
     ec = eye if st in (WINDUP, CHARGE) else (240, 240, 240)
     pset(px, W, H, hx + face * T * 0.12, by - ry * 0.5, ec)
-    if T >= 6:
+    if T >= FINE:
+        disc(px, W, H, hx + face * T * 0.14, by - ry * 0.5, T * 0.1, ec)
+        dot(px, W, H, hx + face * T * 0.18, by - ry * 0.5 - 0.5, (20, 16, 20), fine_k(T))
+    elif T >= 6:
         pset(px, W, H, hx + face * T * 0.12 + 1, by - ry * 0.5, ec)
+    s = fine_k(T) if T >= FINE else 1
     for k in range(4):                            # legs
-        lx = cx - rx * 0.7 + k * rx * 0.46 + ((int(t * 12) + k) % 2 if st == CHARGE else 0)
-        pset(px, W, H, lx, by - 1, (20, 16, 20))
-        pset(px, W, H, lx, by - 2, (20, 16, 20))
+        lx = cx - rx * 0.7 + k * rx * 0.46 + ((int(t * 12) + k) % 2 * s if st == CHARGE else 0)
+        dot(px, W, H, lx, by - 1, (20, 16, 20), s)
+        dot(px, W, H, lx, by - 1 - s, (20, 16, 20), s)
     if st == STUN:                                # dizzy stars
         for k in range(3):
             a = t * 5 + k * 2.094
             sx, sy = cx + math.cos(a) * rx * 0.7, by - ry - T * 0.4 + math.sin(a) * T * 0.25
-            pset(px, W, H, sx, sy, (255, 250, 150))
-            pset(px, W, H, sx + 1, sy, (255, 220, 90))
+            s = fine_k(T) if T >= FINE else 1
+            dot(px, W, H, sx, sy, (255, 250, 150), s)
+            dot(px, W, H, sx + s, sy, (255, 220, 90), s)
 
 
 def draw_chase(px, W, H, ex, T, biome, t):
@@ -4105,6 +4508,26 @@ class Fx:
 
     def paint(self, cv, ox, oy, T):
         px, W, H = cv.px, cv.W, cv.H
+        if T >= FINE:                                     # big tiles: particles as little squares and leaves
+            s = fine_k(T)
+            for p in self.parts:
+                a = p[4] / p[5]
+                x, y = int(p[0] * T - ox), int(p[1] * T - oy)
+                c = p[6]
+                if p[7] == "dust":
+                    sz = max(1, int(s * (0.6 + a)))
+                    for yy in range(max(0, y), min(H, y + sz)):
+                        row = px[yy]
+                        for xx in range(max(0, x), min(W, x + sz)):
+                            row[xx] = mix(row[xx], c, a * 0.85)
+                else:
+                    sz = s if a > 0.35 else 1
+                    dot(px, W, H, x, y, c, sz)
+                    if p[7] == "leaf":
+                        dot(px, W, H, x + sz, y + (sz > 1), shade(c, 0.8), sz)
+                    elif sz > 1 and a > 0.6:
+                        dot(px, W, H, x - 1, y - 1, mix(c, (255, 255, 255), 0.5), 1)
+            return
         for p in self.parts:
             a = p[4] / p[5]
             x, y = p[0] * T - ox, p[1] * T - oy
@@ -4156,8 +4579,9 @@ class Camera:
 
 
 def tile_size(W, H):
-    """Pixels per tile for a canvas of W x H pixels: 4 at 70x22, more on big windows."""
-    return int(clamp(min(H / 11.5, W / 17.0), 4, 8))
+    """Pixels per tile for a canvas of W x H pixels: 4 at 70x22, 6 at 120x40, 8 at 160x50 and on up, so a big
+    window shows about the same 17-23 x 11-14 tiles as a medium one - with finer pixels, not more level."""
+    return int(clamp(min(H / 11.5, W / 17.0), 4, 40))
 
 
 def weather(cv, lv, sim, fx, ox, oy, T, t):
