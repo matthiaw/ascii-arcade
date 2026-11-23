@@ -730,6 +730,8 @@ ACCENTS = {  # (top, bottom) of each game's title gradient
     "GEMBURROW": ((255, 214, 120), (176, 104, 220)),
     "WEFTWAR": ((255, 214, 110), (236, 70, 120)),
     "PEBBLEPUTT": ((255, 196, 150), (70, 185, 110)),
+    "THATCHWOLD": ((250, 222, 130), (150, 176, 74)),
+    "FENMARK": ((236, 228, 150), (86, 170, 150)),
 }
 
 

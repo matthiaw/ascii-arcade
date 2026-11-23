@@ -114,13 +114,20 @@ GAMES = [
     dict(file="pebbleputt.py", name="PEBBLEPUTT", tag="putt a pebble round odd courses",
          info=["27 holes: a meadow, ice caverns and a", "copper foundry at night. Slopes, ramps,", "portals, gear arms; 1-4 players, scorecard."],
          keys="arrows aim/power   Space swing   Enter strike", size=(60, 22), score="pebbleputt"),
+    dict(file="thatchwold.py", name="THATCHWOLD", tag="a village, one season at a time",
+         info=["Every turn a season: sow, harvest, winter.", "Fields by water, mills by fields, forecasts.", "Five scenarios easy to hard, plus endless."],
+         keys="arrows move   Tab pick   B build   U undo   Enter end season", size=(70, 22), score="thatchwold"),
+    dict(file="fenmark.py", name="FENMARK", tag="sound the fen, mend the windows",
+         info=["Probe the fen for bog-eyes without one guess:", "every fen proved solvable by logic. 22 hand-", "made leadlight panes + random, hints, auto."],
+         keys="arrows move   Space probe/glass   F/X flag/lead", size=(70, 22), score="fenmark"),
 ]
 GENRE = {"hoverdrift.py": "flight", "emberfall.py": "role-playing", "blockfire.py": "shooter", "deepcall.py": "exploration",
          "lightkeeper.py": "action", "skyshot.py": "artillery", "nightdrive.py": "racing", "orbital.py": "puzzle",
          "leafling.py": "platformer", "stackfall.py": "blocks", "depthwell.py": "3D blocks",
          "glimmer.py": "maze chase", "sporefield.py": "fixed shooter", "scaffold.py": "climber",
          "voidlance.py": "shoot 'em up", "shatterwick.py": "brick breaker",
-         "wardstone.py": "tower defense", "clatterbell.py": "pinball", "cairnward.py": "box-pushing", "gemburrow.py": "cave digger", "weftwar.py": "trail duel", "pebbleputt.py": "minigolf"}
+         "wardstone.py": "tower defense", "clatterbell.py": "pinball", "cairnward.py": "box-pushing", "gemburrow.py": "cave digger", "weftwar.py": "trail duel", "pebbleputt.py": "minigolf",
+         "thatchwold.py": "settlement", "fenmark.py": "logic puzzles"}
 HELP = [
     "ASCII ARCADE - keys",
     "",
@@ -356,7 +363,16 @@ def thumb_demo(module):
         d = _DEMOS[module]
         dt = min(0.1, max(0.0, t - d[1]))
         d[1] = t
-        blit_scene(cv, x, y, w, h, d[0].scene(w, (h + 1) // 2, dt))
+        rows = (h + 1) // 2
+        try:
+            sub = d[0].scene(w, rows, dt)
+        except Exception:          # too small for this game's scene: draw it bigger and shrink it into the box
+            bw, br = max(w, 48), max(rows, 16)
+            big = d[0].scene(bw, br, 0.0)
+            sub = Canvas(w, rows)
+            sub.px = [[big.px[min(big.H - 1, int((yy + 0.5) * big.H / (rows * 2)))][min(big.W - 1, int((xx + 0.5) * bw / w))]
+                       for xx in range(w)] for yy in range(rows * 2)]
+        blit_scene(cv, x, y, w, h, sub)
     return thumb
 
 
@@ -364,7 +380,8 @@ THUMBS = {"nightdrive.py": thumb_night, "orbital.py": thumb_orbital, "leafling.p
           "depthwell.py": thumb_depth, "blockfire.py": thumb_block, "glimmer.py": thumb_demo("glimmer"),
           "sporefield.py": thumb_demo("sporefield"), "scaffold.py": thumb_demo("scaffold"),
           "voidlance.py": thumb_demo("voidlance"), "shatterwick.py": thumb_demo("shatterwick"),
-          "wardstone.py": thumb_demo("wardstone"), "clatterbell.py": thumb_demo("clatterbell"), "cairnward.py": thumb_demo("cairnward"), "gemburrow.py": thumb_demo("gemburrow"), "weftwar.py": thumb_demo("weftwar"), "pebbleputt.py": thumb_demo("pebbleputt")}
+          "wardstone.py": thumb_demo("wardstone"), "clatterbell.py": thumb_demo("clatterbell"), "cairnward.py": thumb_demo("cairnward"), "gemburrow.py": thumb_demo("gemburrow"), "weftwar.py": thumb_demo("weftwar"), "pebbleputt.py": thumb_demo("pebbleputt"),
+          "thatchwold.py": thumb_demo("thatchwold"), "fenmark.py": thumb_demo("fenmark")}
 
 
 
@@ -387,6 +404,14 @@ def record_line(g):
     rec = load_scores().get(g["score"], {})
     if not rec:
         return "no records yet"
+    if g["score"] == "thatchwold":
+        won = sum(1 for k in rec if k.startswith("s") and k[1:].isdigit())
+        return "best: %d of 5 scenarios won%s" % (won, (", endless %s" % rec["endless"]) if "endless" in rec else "")
+    if g["score"] == "fenmark":
+        def mmss(v):
+            return "%d:%02d" % (v // 60, v % 60)
+        parts = ["%s %s" % (k, mmss(rec[k])) for k in ("Reedbed", "Peat Meadow", "Deep Fen") if k in rec]
+        return "best: " + ", ".join(parts + ["%d of 22 panes" % rec.get("panes", 0)])
     if g["score"] == "cairnward":
         return "best: %d of 42 cairns set, %d at par" % (rec.get("solved", 0), rec.get("par", 0))
     if g["score"] == "leafling":

@@ -1,10 +1,10 @@
 # ASCII ARCADE
 
-![The ASCII ARCADE start screen: all twenty-two games playing at once](docs/screenshots/start.gif)
+![The ASCII ARCADE start screen: all twenty-four games playing at once](docs/screenshots/start.gif)
 
 A little collection of games for the terminal. Start the launcher: the start screen shows all games playing at once
 (Enter starts the highlighted one, any other key opens the menu). Pick a game with the arrow keys (or its number:
-1-22, two digits typed quickly one after the other), press Enter. When the game ends you are back in the menu.
+1-24, two digits typed quickly one after the other), press Enter. When the game ends you are back in the menu.
 
 ```sh
 python3 arcade.py
@@ -125,6 +125,8 @@ No dependencies: Python 3 on macOS or Linux (on Windows use WSL). Best in WezTer
 | **GEMBURROW** | A cave digger: Pell the badger digs for sunstones while rocks fall and roll, beetles and glassmoths creep along the walls, creepmoss spreads and rune seams turn rock to gems. Twenty caves in five worlds plus five intermissions, easy / normal / hard. | 60x22+ |
 | **WEFTWAR** | None | 60x22+ |
 | **PEBBLEPUTT** | Top-down minigolf: three courses of nine holes (a willow meadow, ice caverns, a copper foundry at night) with slopes, ramps, portals, ice, belts and moving gear arms. Solo or two to four players at one keyboard, scorecard with par. | 60x22+ |
+| **THATCHWOLD** | A turn-based settlement game: every turn is a season. Place cottages, farms, fisheries, woodcutters, quarries, mines, mills and markets where the land and the neighbours pay most, lay up stores for winter, answer droughts, fevers, floods, wolves and raiders. Five scenarios with goals plus an endless mode. | 70x22+ |
+| **FENMARK** | Logic puzzles: sound a peat fen for hidden bog-eyes (every fen is proved solvable without guessing) and mend leadlight windows from row and column clues (22 hand-made pictures plus random ones, each with exactly one solution). Hints that explain the next deduction, best times. | 70x22+ |
 
 ## Screenshots
 
@@ -146,8 +148,8 @@ No dependencies: Python 3 on macOS or Linux (on Windows use WSL). Best in WezTer
 | **SHATTERWICK** | **WARDSTONE** | **CLATTERBELL** |
 | <img src="docs/screenshots/cairnward.png" alt="CAIRNWARD" width="260"> | <img src="docs/screenshots/gemburrow.png" alt="GEMBURROW" width="260"> | <img src="docs/screenshots/weftwar.png" alt="WEFTWAR" width="260"> |
 | **CAIRNWARD** | **GEMBURROW** | **WEFTWAR** |
-| <img src="docs/screenshots/pebbleputt.png" alt="PEBBLEPUTT" width="260"> |  |  |
-| **PEBBLEPUTT** |  |  |
+| <img src="docs/screenshots/pebbleputt.png" alt="PEBBLEPUTT" width="260"> | <img src="docs/screenshots/thatchwold.png" alt="THATCHWOLD" width="260"> | <img src="docs/screenshots/fenmark.png" alt="FENMARK" width="260"> |
+| **PEBBLEPUTT** | **THATCHWOLD** | **FENMARK** |
 
 The pictures come straight from the games' own canvases: `python3 scripts/screenshots.py` renders them again
 (needs Pillow).
@@ -523,6 +525,56 @@ belts, gear arms, pistons, pipes, springs and pools of glowing slag. Hills and s
 downhill arrows. Water and slag cost a stroke and put the pebble back, and the pebble only drops when it is slow
 over the cup. Play solo or with two to four players at one keyboard, with a scorecard showing par, birdies and
 bogeys, and a best round for every course and the 27-hole Grand Tour.
+
+## THATCHWOLD keys
+
+| Key | |
+|---|---|
+| Arrows / WASD | move the cursor (hold to keep going) |
+| Tab / `]`, Shift-Tab / `[` | next / previous in the build menu |
+| `1`-`9`, `0` | pick Cottage ... Market directly |
+| `B` / `E` | build (or use the tool) at the cursor |
+| `I` / `X` | improve / pull down what is under the cursor |
+| `U` / `Z` / Backspace | undo this season's last placement |
+| `K` | choose what the lore house studies |
+| `H` | cursor back to the hall |
+| Enter / Space | end the season (in an event: take the choice; `1`-`5` pick directly) |
+| Esc / `P` | pause (`Q`: leave, or retire in endless; `M`: sound) |
+| `?` | help |
+
+Reeve Maudry leads a handful of thatchers out to settle the empty wolds, one season per turn. Farms grow in summer,
+are harvested in autumn and rest in winter, when every hearth burns wood, so the autumn stores decide who sees the
+spring. Placement matters: farms beside water and mills, woodcutters among trees, markets among cottages, wells and
+greens near houses, watchtowers against wolves and raiders. The panel shows exactly what ending the season will
+bring (+12 food, two born, mood 62 to 66), and every placement of the season can be undone. A small lore track
+unlocks mills, longhouses and the Moot Ring. Five scenarios (Brackenleigh, Larkholm, Gorsecombe, Harrowmoor,
+Saltcrag) have goals and time limits; endless mode grows a new wold. In auto mode the reeve plays a sensible
+economy.
+
+## FENMARK keys
+
+| Key | |
+|---|---|
+| Arrows / WASD | move the lamp (hold to glide) |
+| Space / Enter | probe a tussock, chord on a number / set glass |
+| `F` / `X` | plant a reed flag / mark lead |
+| hold Space or `X` + move | drag a stroke (kitty releases; classic: quick move, or `V` brush lock) |
+| `U` / Backspace | undo (also climbs out of a bog, +30 s) |
+| `H` | hint: the solver's next deduction, explained and highlighted (+15 s) |
+| `C` | check flags / cells for errors (+20 s) |
+| `N` / `R` | new fen or random pane / clear the pane |
+| `[` / `]` | previous / next pane |
+| Esc / `P` | pause (`Q` there: back), `?` help |
+
+Odile Sedge is warden of the Fenmark, a lantern-lit peat marsh. By day she sounds the fen with her ash pole: every
+probed tussock tells how many hidden bog-eyes touch it, and reed flags mark the ones that must be there. The first
+probe is always safe, and every fen is laid so that it can be sounded without a single guess; a logic solver proves
+this before the fen is handed over. By night she mends the pump-house windows from the glazier's ledger. Each row
+and column lists its runs of glass, and the 22 hand-made panes (heron, windpump, owl, lantern boat and more) light
+up in colour once solved; random panes are added on demand. Every pane has exactly one solution that row-by-row
+logic finds. Hints explain the next deduction and highlight the cells it used, a check marks mistakes for a time
+penalty, and best times are kept per difficulty and pane. In auto mode the solver plays one explained step at a
+time, using only what a player can see.
 
 ## Versions and releases
 
