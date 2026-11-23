@@ -82,6 +82,9 @@ HOLD_MOVE = 0.20          # most terminals have no key-up events: a key press "h
 HOLD_TURN = 0.15
 EASE = 14.0               # how fast movement and turning follow the keys (smooths out key-repeat gaps)
 BRIDGE_TURN = 0.4         # share of turn speed while waiting for the keyboard's auto-repeat to start
+TAP_ANGLE = math.radians(4)   # one tap of a turn key turns this far (fine aiming); holding turns on smoothly
+TURN_RAMP = 0.45          # seconds of holding until turning reaches full speed (it starts at TURN_START)
+TURN_START = 0.4
 BRIDGE_MOVE = 0.85        # the same for walking and strafing
 PLAYER_R = 0.22
 BOT_R = 0.25
@@ -255,6 +258,9 @@ class Game:
         self.hurt_t = 0.0
         self.moving = False
         self.smv = self.sst = self.str = 0.0   # eased move / strafe / turn
+        self.nudge = 0.0          # turn still to do from taps (applied over a few frames)
+        self.turn_t = 0.0         # how long a turn key has been held (turning speeds up)
+        self.human = False        # a person at the keys: taps turn a fixed step (the bot holds keys)
         self.bob = 0.0
         self.msgs = []
         self.fx = []              # events for the renderer: hits, kills, enemy shots
@@ -387,6 +393,11 @@ class Game:
         elif action == "fire":
             self.fire()
 
+    def tap_turn(self, action):
+        """One tap of a turn key: a small fixed step (holding the key then turns on)."""
+        if not (self.over or self.paused):
+            self.nudge += TAP_ANGLE if action == "tr" else -TAP_ANGLE
+
     def aim_bot(self, ca, sa, wall_d=None):
         """The living bot a shot fired now would hit (or None)."""
         if wall_d is None:
@@ -502,7 +513,12 @@ class Game:
             if abs(getattr(self, name)) < 0.02:
                 setattr(self, name, 0.0)
         mv, st, tr = self.smv, self.sst, self.str
-        self.a = (self.a + tr * TURN_SPEED * dt) % (2 * math.pi)
+        if self.human:            # people: slow at first for aiming, then full speed
+            self.turn_t = self.turn_t + dt if abs(tr) > 0.05 else 0.0
+            tr *= TURN_START + (1 - TURN_START) * min(1.0, self.turn_t / TURN_RAMP)
+        step = self.nudge * min(1.0, dt * 30)
+        self.nudge -= step
+        self.a = (self.a + tr * TURN_SPEED * dt + step) % (2 * math.pi)
         ca, sa = math.cos(self.a), math.sin(self.a)
         vx = ca * mv - sa * st
         vy = sa * mv + ca * st
@@ -2842,15 +2858,24 @@ def run(term):
         dt = now - last
         last = now
         keys = term.keys(0)
+        released = set()
         for k in term.releases:
             a = KEYMAP.get(k)
             if a:
+                released.add(a)
                 held.discard(a)
                 if a in g.hold:
                     g.hold[a] = 0.0
         term.releases.clear()
-        if term.kitty:
-            held.update(KEYMAP[k] for k in keys if k in KEYMAP)
+        if term.kitty and not (g.over or g.paused):
+            for k in keys:
+                a = KEYMAP.get(k)
+                if a is None:
+                    continue
+                if a in ("tl", "tr") and a not in held:
+                    g.tap_turn(a)                  # a fresh press turns one step at once
+                if a not in released:              # pressed and let go in the same frame: a tap, not a hold
+                    held.add(a)
             for a in held:
                 if a in g.hold:
                     g.hold[a] = max(g.hold[a], 0.25)
@@ -2883,6 +2908,17 @@ def run(term):
                     g.hold[h] = g.bridge[h] = 0.0
                 continue
             a = KEYMAP.get(k)
+            if a in ("tl", "tr") and not term.kitty:
+                gap = now - rep_last.get(a, -9.0)
+                rep_last[a] = now
+                n = rep_seq[a] = rep_seq.get(a, 0) + 1 if gap < 0.8 else 0
+                if n <= 1:         # a tap (or the first auto-repeat, which looks just like one): one step
+                    g.tap_turn(a)
+                else:              # a steady run of repeats: the key is held, turn on smoothly
+                    g.press(a)
+                    g.hold[a] = max(g.hold[a], rep_t["rate"] + 0.03)   # short: no long overrun after letting go
+                    g.bridge[a] = 0.0
+                continue
             if a in g.hold and not term.kitty:
                 gap = now - rep_last.get(a, -9.0)
                 rep_last[a] = now
@@ -2906,6 +2942,7 @@ def run(term):
                 g.show_map = not g.show_map
             elif k in KEYMAP:
                 g.press(KEYMAP[k])
+        g.human = True             # taps turn a fixed step, held keys speed up
         g.update(dt)
         r.events(0 if g.paused else min(dt, 0.1))
         cols, rows = os.get_terminal_size()
