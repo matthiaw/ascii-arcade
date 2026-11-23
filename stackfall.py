@@ -14,8 +14,8 @@ import random
 import sys
 import time
 
-from arcadekit import (PAUSE_LINES, Canvas, Terminal, clamp, draw_title, footer, load_scores, mix, overlay, shade,
-                       shared_key, submit, title_screen, title_width)
+from arcadekit import (AUTO_LABEL, PAUSE_LINES, AutoMode, Canvas, Terminal, clamp, draw_title, footer, load_scores, mix,
+                       overlay, shade, shared_key, submit, title_screen, title_width)
 from arcadesound import Sound
 
 W, H = 10, 20
@@ -43,7 +43,7 @@ GARBAGE = (104, 108, 124)
 MODES = [
     ("Marathon", "endless; every 10 rows it gets faster"),
     ("Sprint", "clear 40 rows as fast as you can"),
-    ("Rising", "the floor keeps pushing up rubble rows"),
+    ("Rising", "the floor keeps pushing up rubble rows"),   # its level climbs with time (every 45 s), not rows
 ]
 LINE_SCORE = [0, 100, 300, 500, 800]
 SND = Sound(GAME, {
@@ -99,6 +99,8 @@ HELP = [
     "",
     "Esc / P                  pause menu (Q quit, M sound)",
     "?                        this help",
+    "",
+    "Auto mode: the game plays itself (Space pause, +/- speed, Esc stop).",
 ]
 
 
@@ -124,6 +126,7 @@ class Stack:
         self.rise_t = 0.0
         self.pops = []          # floating texts: [text, t_end, colour]
         self.slam_t = 0.0
+        self.serial = 0         # counts the pieces that appeared (the auto-mode bot plans once per piece)
         self.spawn()
 
     # --- pieces ----------------------------------------------------------------------------------
@@ -148,6 +151,7 @@ class Stack:
         return True
 
     def spawn(self, kind=None):
+        self.serial += 1
         self.kind = kind or self.queue.pop(0)
         if kind is None:
             self.queue.append(self.draw())
@@ -266,7 +270,7 @@ class Stack:
         if self.mode == "Sprint" and self.lines >= 40:
             self.won = self.over = True
             return
-        if self.mode != "Sprint":
+        if self.mode == "Marathon":     # Rising climbs with time only (see update), Sprint keeps its level
             lv = self.level
             self.level = max(self.level, self.start_level + self.lines // 10)
             if self.level > lv:
@@ -339,6 +343,184 @@ class Stack:
             self.hard()
         elif k in ("c", "tab"):
             self.do_hold()
+
+
+# =============================================================================================
+# Auto mode: a placement bot that tries every turn and column of the piece (and of the hold piece), looks one
+# piece ahead and rates the stack with the classic four numbers (height, holes, bumpiness, rows cleared).
+# It then plays the move with the keys like a person: a short look, turn, slide, slam.
+# =============================================================================================
+FULL = (1 << W) - 1
+WEIGHTS = (-0.510066, 0.760666, -0.35663, -0.184483)     # aggregate height, rows, holes, bumpiness
+
+
+def bot_masks(board):
+    return [sum(1 << x for x in range(W) if row[x] is not None) for row in board]
+
+
+def bot_cells(kind, r, x, y):
+    return [(x + cx, y + cy) for cx, cy in ROT[kind][r % 4]]
+
+
+def bot_fits(m, cells):
+    for x, y in cells:
+        if x < 0 or x >= W or y >= H + HID or (y >= 0 and m[y] >> x & 1):
+            return False
+    return True
+
+
+def bot_place(m, cells):
+    m = list(m)
+    for x, y in cells:
+        if y >= 0:
+            m[y] |= 1 << x
+    keep = [r for r in m if r != FULL]
+    n = len(m) - len(keep)
+    return [0] * n + keep, n
+
+
+def bot_rate(m, lines):
+    heights, holes = [0] * W, 0
+    n = len(m)
+    for x in range(W):
+        bit, seen = 1 << x, False
+        for y in range(n):
+            if m[y] & bit:
+                if not seen:
+                    heights[x], seen = n - y, True
+            elif seen:
+                holes += 1
+    bump = sum(abs(heights[i] - heights[i + 1]) for i in range(W - 1))
+    top = max(heights)
+    v = WEIGHTS[0] * sum(heights) + WEIGHTS[1] * lines + WEIGHTS[2] * holes + WEIGHTS[3] * bump
+    if top > H - 5:                                  # close to the top: anything that keeps it low wins
+        v -= (top - (H - 5)) * 3.0
+    return v
+
+
+def bot_moves(m, kind, rot, x, y):
+    """Every landing reachable by turning in place (0, 1 or 2 times either way) and then sliding:
+    {landed cells: (rotation, column, turns)}."""
+    out = {}
+    for turns in (0, 1, -1, 2):
+        r, cx, cy = rot, x, y
+        ok = True
+        for _ in range(abs(turns)):
+            nr = (r + (1 if turns > 0 else -1)) % 4
+            for kx, ky in KICKS:
+                if bot_fits(m, bot_cells(kind, nr, cx + kx, cy + ky)):
+                    r, cx, cy = nr, cx + kx, cy + ky
+                    break
+            else:
+                ok = False
+                break
+        if not ok or not bot_fits(m, bot_cells(kind, r, cx, cy)):
+            continue
+        for d in (-1, 1):
+            tx = cx
+            while True:
+                ty = cy
+                while bot_fits(m, bot_cells(kind, r, tx, ty + 1)):
+                    ty += 1
+                key = frozenset(bot_cells(kind, r, tx, ty))
+                if key not in out or abs(out[key][2]) > abs(turns):
+                    out[key] = (r, tx, turns)
+                if not bot_fits(m, bot_cells(kind, r, tx + d, cy)):
+                    break
+                tx += d
+    return out
+
+
+def bot_best(m, kind, rot, x, y, nxt, rnd=None, err=0.0):
+    """The best landing for kind, looking one piece (nxt) ahead. Returns (value, rotation, column, turns)."""
+    first = []
+    for cells, (r, tx, turns) in bot_moves(m, kind, rot, x, y).items():
+        m1, n1 = bot_place(m, cells)
+        if any(cy < HID for _, cy in cells):         # would lock above the well: game over
+            continue
+        first.append((bot_rate(m1, n1), m1, n1, r, tx, turns))
+    if not first:
+        return None
+    first.sort(key=lambda c: -c[0])
+    if rnd is not None and err and rnd.random() < err and len(first) > 2:   # a human slip now and then
+        c = first[rnd.choice((1, 2))]
+        return c[0], c[3], c[4], c[5]
+    best = None
+    for v1, m1, n1, r, tx, turns in first[:6]:
+        v = v1
+        if nxt:
+            v = v1 - 50                              # the next piece would not fit anywhere
+            for cells in bot_moves(m1, nxt, 0, 3, HID - 1):
+                if not any(cy < HID for _, cy in cells):
+                    m2, n2 = bot_place(m1, cells)
+                    v = max(v, bot_rate(m2, n1 + n2))
+        if best is None or v > best[0]:
+            best = (v, r, tx, turns)
+    return best
+
+
+class StackBot:
+    """Plays STACKFALL through Stack.key, at a human pace that quickens with the falling speed."""
+
+    def __init__(self, rnd=None, err=0.06, pace=1.3, fmin=1.0):
+        self.rnd = rnd or random.Random()
+        self.err = err                               # chance of a slightly worse move
+        self.pace = pace                             # 1 = human-ish; smaller = quicker hands
+        self.fmin = fmin                             # how much quicker the hands get when pieces fall fast
+        self.serial = None
+        self.plan = None
+        self.wait = 0.0
+        self.replans = 0
+
+    def delays(self, g):
+        f = clamp(g.interval() / 0.3, self.fmin, 1.0) * self.pace
+        return (0.2 + self.rnd.random() * 0.15) * f, (0.075 + self.rnd.random() * 0.03) * f
+
+    def choose(self, g, allow_hold=True):
+        m = bot_masks(g.board)
+        cur = bot_best(m, g.kind, g.rot, g.x, g.y, g.queue[0], self.rnd, self.err)
+        if allow_hold and not g.held:
+            alt, nxt = (g.hold, g.queue[0]) if g.hold else (g.queue[0], g.queue[1])
+            other = bot_best(m, alt, 0, 3, HID - 1, nxt)
+            if other is not None and (cur is None or other[0] > cur[0] + 0.3):
+                return "hold"
+        return cur
+
+    def update(self, g, dt):
+        if g.over or g.clearing or g.paused:
+            return
+        if g.serial != self.serial:
+            self.serial, self.plan, self.replans = g.serial, None, 0
+            self.wait = self.delays(g)[0]
+        self.wait -= dt
+        if self.wait > 0:
+            return
+        act = self.delays(g)[1]
+        if self.plan is None:
+            self.plan = self.choose(g)
+            if self.plan is None:                    # nothing fits any more: slam and hope
+                g.key(" ")
+                return
+            if self.plan == "hold":
+                g.key("c")
+                self.wait = act
+                return
+        _, r, tx, _ = self.plan
+        before = (g.rot, g.x, g.y)
+        if g.rot != r:
+            g.key("up" if (r - g.rot) % 4 in (1, 2) else "z")
+        elif g.x != tx:
+            g.key("right" if tx > g.x else "left")
+        else:
+            g.key(" ")
+            return
+        if (g.rot, g.x, g.y) == before:              # blocked on the way: think again from here
+            self.replans += 1
+            self.plan = self.choose(g, allow_hold=False) if self.replans < 3 else None
+            if self.plan is None:
+                g.key(" ")
+                return
+        self.wait = act
 
 
 # =============================================================================================
@@ -508,8 +690,8 @@ def render(g, cols, rows):
     panel(cv, lx, sr, LW, sh, g.mode.upper(), (200, 204, 232))
     for i, ln in enumerate(lines):
         r = sr + 1 + i
-        if ln is None:   # a bar: rows towards the next level (Marathon / Rising) or towards 40 (Sprint)
-            frac = g.lines / 40 if sprint else (g.lines % 10) / 10
+        if ln is None:   # a bar: rows towards the next level (Marathon), time towards it (Rising) or rows to 40
+            frac = g.lines / 40 if sprint else (g.t % 45) / 45 if g.mode == "Rising" else (g.lines % 10) / 10
             n = LW - 4
             cv.rect(lx + 2, r * 2, n, 1, (38, 42, 70))
             cv.rect(lx + 2, r * 2, int(round(n * clamp(frac, 0, 1))), 1, (90, 190, 230) if sprint else (110, 204, 120))
@@ -534,7 +716,7 @@ def render(g, cols, rows):
     return cv
 
 
-def render_over(g, cv, record):
+def render_over(g, cv, record, auto=False):
     lines = ["SPRINT DONE!" if g.won else "GAME OVER", ""]
     if g.mode == "Sprint" and g.won:
         lines.append("time  %s" % fmt_time(g.t))
@@ -543,7 +725,7 @@ def render_over(g, cv, record):
     lines.append("rows  %d   level %d" % (g.lines, g.level))
     if record:
         lines += ["", "** NEW RECORD **"]
-    lines += ["", "Enter: again   Esc / Q: menu"]
+    lines += ["", "auto mode: a new round starts" if auto else "Enter: again   Esc / Q: menu"]
     w = max(len(l) for l in lines) + 4
     x, y = max(0, (cv.cols - w) // 2), max(0, cv.rows // 2 - len(lines) // 2 - 1)
     edge = SCORE_C if record else (110, 204, 120) if g.won else (200, 76, 86)
@@ -551,7 +733,7 @@ def render_over(g, cv, record):
     cv.box(x, y, [l.center(w - 4) for l in lines], (240, 240, 246), (24, 22, 44))
 
 
-def render_menu(cols, rows, sel, level, t, help_=False):
+def render_menu(cols, rows, sel, level, t, help_=False, mode=None):
     cv = Canvas(cols, rows)
     cv.vgradient((10, 10, 22), (26, 14, 34))
     rnd = random.Random(7)
@@ -562,20 +744,69 @@ def render_menu(cols, rows, sel, level, t, help_=False):
         y = int((rnd.uniform(0, cv.H) + t * sp) % (cv.H + 8)) - 4
         block(cv, x, y, 3, mix(rnd.choice(cols_), (16, 12, 28), 0.3))
     rec = load_scores().get(GAME, {})
-    name = MODES[sel][0]
+    mode = sel if mode is None else mode            # auto mode plays the mode chosen last
+    name = MODES[mode][0]
     r = rec.get(name)
     best = None if r is None else "best %s: %s" % (name, fmt_time(r) if name == "Sprint" else r)
-    items = ["%-9s %s" % m for m in MODES]
+    items = ["%-9s %s" % m for m in MODES] + ["%-9s %s" % (AUTO_LABEL, "watch it play %s" % name)]
     title_screen(cv, "STACKFALL", "falling blocks, ten wide, twenty deep", items, sel, best,
                  extra=["", "start level   < %d >" % level],
-                 keys="Up/Down mode   Left/Right level   Enter start   M %s   ? help   Esc back" % SND.label().lower(),
+                 keys="Up/Down choose   Left/Right level   Enter start   M %s   ? help   Esc back" % SND.label().lower(),
                  help_lines=HELP, show_help=help_)
     return cv
 
 
+STEP = 1 / 120              # auto mode steps the game in fixed slices (more of them when sped up)
+
+
+def run_auto(term, mode, level):
+    """Auto mode: the bot plays rounds of the chosen mode until the viewer stops it. Nothing is recorded."""
+    auto = AutoMode()
+    while True:
+        g = Stack(mode, level)
+        bot = StackBot()
+        last = time.time()
+        over_at = None
+        while True:
+            now = time.time()
+            dt = min(0.1, now - last)
+            last = now
+            for k in term.keys(0):
+                a = auto.key(k)
+                if a == "stop":
+                    return
+                if a == "sound" and SND.toggle():
+                    SND.play("sound_on")
+            for _ in range(auto.steps(dt, STEP)):
+                if g.over:
+                    break
+                bot.update(g, STEP)
+                g.update(STEP)
+            if g.over and over_at is None:
+                SND.play("win" if g.won else "over")
+                over_at = now
+            if over_at is not None and not auto.paused:
+                if now - over_at > 3.0:
+                    break
+            elif over_at is not None:
+                over_at += dt                        # paused: the result box stays
+            cols, rows = term.size()
+            if cols < 40 or rows < 20:
+                term.write("\x1b[0m\x1b[2J\x1b[HPlease make the window larger (40x20).")
+                time.sleep(0.2)
+                continue
+            cv = render(g, cols, rows)
+            if g.over:
+                render_over(g, cv, None, auto=True)
+            auto.banner(cv, extra="%s  level %d" % (g.mode, g.level))
+            term.write(cv.emit())
+            time.sleep(max(0, 1 / 60 - (time.time() - now)))
+
+
 def main():
     with Terminal() as term:
-        sel, level = 0, 1
+        sel, level, mode = 0, 1, 0
+        n_items = len(MODES) + 1                     # the modes, then auto mode
         help_ = False
         while True:
             # menu
@@ -583,7 +814,7 @@ def main():
             go = False
             while not go:
                 cols, rows = term.size()
-                term.write(render_menu(cols, rows, sel, level, time.time() - t0, help_).emit())
+                term.write(render_menu(cols, rows, sel, level, time.time() - t0, help_, mode).emit())
                 for k in term.keys(1 / 20):
                     if help_:            # any key closes the help
                         help_ = False
@@ -593,10 +824,10 @@ def main():
                     elif k in ("q", "esc"):
                         return
                     if k in ("up", "w"):
-                        sel = (sel - 1) % len(MODES)
+                        sel = (sel - 1) % n_items
                         SND.play("menu")
                     elif k in ("down", "s"):
-                        sel = (sel + 1) % len(MODES)
+                        sel = (sel + 1) % n_items
                         SND.play("menu")
                     elif k in ("left", "a"):
                         level = max(1, level - 1)
@@ -610,6 +841,11 @@ def main():
                     elif k in ("enter", " "):
                         SND.play("start")
                         go = True
+                    if sel < len(MODES):
+                        mode = sel
+            if sel == len(MODES):
+                run_auto(term, MODES[mode][0], level)
+                continue
             # play
             while True:
                 g = Stack(MODES[sel][0], level)
@@ -665,5 +901,109 @@ def main():
                     break
 
 
+# =============================================================================================
+# Self-test:  python3 stackfall.py --selftest
+# =============================================================================================
+class FakeTerm:
+    """Stands in for the terminal: scripted keys by time, a fixed size, output thrown away."""
+
+    def __init__(self, script, size=(90, 32)):
+        self.script = sorted(script)                 # [(seconds after start, key)]
+        self.t0 = time.time()
+        self.cols_rows = size
+        self.frames = 0
+
+    def keys(self, timeout=0.0):
+        now = time.time() - self.t0
+        out = [k for t, k in self.script if t <= now]
+        self.script = [(t, k) for t, k in self.script if t > now]
+        return out
+
+    def size(self):
+        return self.cols_rows
+
+    def write(self, s):
+        self.frames += 1
+
+
+def selftest():
+    import os
+    import tempfile
+    import arcadekit
+    t0 = time.time()
+    tmp = os.path.join(tempfile.mkdtemp(), "scores.json")
+    arcadekit.SCORES_PATH = tmp                      # never touch the player's real scores
+    random.seed(1)
+    # rules: a full row clears and scores, hold swaps once per piece
+    g = Stack("Marathon")
+    for x in range(W):
+        if x not in (3, 4, 5, 6):
+            g.board[H + HID - 1][x] = GARBAGE
+    g.kind, g.rot, g.x, g.y = "I", 0, 3, HID - 1
+    g.hard()
+    g.update(0.3)
+    assert g.lines == 1 and g.score >= 100, "a full row did not clear"
+    k = g.kind
+    g.do_hold()
+    assert g.hold == k and g.held
+    g.do_hold()
+    assert g.hold == k, "hold worked twice for one piece"
+    # Rising climbs with time, not with rows
+    g = Stack("Rising")
+    g.lines = 35
+    g.board[H + HID - 1] = [GARBAGE] * (W - 1) + [None]
+    g.t = 44.0
+    g.update(0.01)
+    assert g.level == 1
+    g.update(1.5)
+    assert g.level == 2
+    # the bot: legal placements only, it plays well enough to watch
+    m = bot_masks(Stack("Marathon").board)
+    moves = bot_moves(m, "T", 0, 3, HID - 1)
+    assert len(moves) == 34, "T piece: %d landings" % len(moves)
+    for mode in ("Marathon", "Sprint", "Rising"):
+        random.seed(5)
+        g = Stack(mode, 1)
+        bot = StackBot(random.Random(5))
+        auto = AutoMode()
+        for _ in range(5):
+            auto.key("+")                           # x8
+        assert auto.speed == 8.0
+        frames = 0
+        while not g.over and frames < 60 * 25:      # 25 s of watching at x8 = 200 s of play
+            for _ in range(auto.steps(1 / 60, STEP)):
+                if g.over:
+                    break
+                bot.update(g, STEP)
+                g.update(STEP)
+            frames += 1
+            if frames % 120 == 0:
+                cv = render(g, 90, 32)
+                auto.banner(cv, extra="%s  level %d" % (g.mode, g.level))
+                cv.emit()
+        if mode == "Sprint":
+            assert g.won and g.t < 200, "the bot did not finish the sprint (%d rows)" % g.lines
+        else:
+            assert g.lines >= 60, "%s: the bot cleared only %d rows" % (mode, g.lines)
+        cv = render(g, 90, 32)
+        render_over(g, cv, None, auto=True)
+        cv.emit()
+    # the real auto-mode loop: speed up, pause, help, stop
+    term = FakeTerm([(0.05, "+"), (0.1, "+"), (0.15, "+"), (0.6, " "), (0.8, "?"), (0.9, "x"), (1.0, " "), (1.4, "esc")])
+    run_auto(term, "Marathon", 3)
+    assert term.frames > 10 and not term.script
+    # the title draws with the auto-mode entry, at the smallest and a large size
+    for cols, rows in ((40, 20), (160, 48)):
+        for sel in range(len(MODES) + 1):
+            render_menu(cols, rows, sel, 3, 1.0, False, 1).emit()
+        render_menu(cols, rows, 3, 3, 1.0, True, 2).emit()
+    assert not os.path.exists(tmp), "auto mode wrote a score"
+    print("Self-test ok: rows, hold, Rising levels by time, bot landings, auto mode Marathon / Sprint / Rising at x8 "
+          "(no scores written), auto loop keys, title (%.1fs)" % (time.time() - t0))
+
+
 if __name__ == "__main__":
-    main()
+    if "--selftest" in sys.argv:
+        selftest()
+    else:
+        main()

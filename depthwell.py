@@ -12,8 +12,8 @@ import math
 import random
 import time
 
-from arcadekit import (PAUSE_LINES, Canvas, Terminal, clamp, draw_title, footer, load_scores, mix, overlay, shade,
-                       shared_key, submit, title_screen, title_width)
+from arcadekit import (AUTO_LABEL, PAUSE_LINES, AutoMode, Canvas, Terminal, clamp, draw_title, footer, load_scores, mix,
+                       overlay, shade, shared_key, submit, title_screen, title_width)
 from arcadesound import Sound
 
 GAME = "depthwell"
@@ -44,6 +44,9 @@ BIG = {
 SETS = [("Flat", "flat pieces only", FLAT), ("Solid", "adds pieces that use all three axes", {**FLAT, **SOLID}),
         ("Wild", "adds big five-cube pieces", {**FLAT, **SOLID, **BIG})]
 PITS = [(3, 3, 10), (4, 4, 12), (5, 5, 12), (6, 6, 14)]
+# Pieces left out of the 3x3 well: the plus leaves four lone corners in every way it can lie there, and with it
+# Wild games in 3x3 lasted about 35 s (level 2-3) against level 12+ for Solid; without it level 10.
+NOT_IN_3X3 = ("plus",)
 # one colour per depth layer, from the rim down
 LAYER = [(236, 84, 84), (244, 150, 56), (236, 212, 70), (130, 214, 76), (56, 200, 160), (60, 170, 236),
          (100, 110, 240), (170, 96, 236), (226, 90, 200), (200, 200, 210), (140, 120, 100), (90, 150, 130),
@@ -105,6 +108,8 @@ HELP = [
     "",
     "Esc / P                  pause menu (Q quit, M sound)",
     "?                        this help",
+    "",
+    "Auto mode: the game plays itself (Space pause, +/- speed, Esc stop).",
 ]
 
 
@@ -123,6 +128,8 @@ def rot(c, axis, n):
 class Well:
     def __init__(self, pit, pieces, level=1):
         self.W, self.H, self.D = pit
+        if self.W * self.H <= 9:
+            pieces = {k: v for k, v in pieces.items() if k not in NOT_IN_3X3} or pieces
         self.pieces = pieces
         self.cell = [[[False] * self.W for _ in range(self.H)] for _ in range(self.D)]  # [z][y][x], z=0 rim
         self.score = self.cubes = self.layers = 0
@@ -308,6 +315,184 @@ class Well:
             self.drop()
         elif k in ("enter", "z", "y"):
             self.step()
+
+
+# =============================================================================================
+# Auto mode: a placement bot. It tries every orientation the turn keys can reach and every spot across the well,
+# rates the result (stack height, holes, bumpiness in both directions, layers cleared), then plays it with the
+# keys like a person: a short look, the turns, the slides, the drop.
+# =============================================================================================
+TURN_KEYS = {"q": (0, 1), "a": (0, 3), "w": (1, 1), "s": (1, 3), "e": (2, 1), "d": (2, 3)}
+
+
+def orient_key(offs):
+    return tuple(sorted(offs))
+
+
+def turn_paths(offs):
+    """Breadth-first over the turn keys: {orientation: shortest key list} (at most 24 orientations)."""
+    start = orient_key(offs)
+    seen = {start: []}
+    todo = [start]
+    while todo:
+        o = todo.pop(0)
+        for k, (axis, n) in TURN_KEYS.items():
+            p = orient_key(rot(c, axis, n) for c in o)
+            if p not in seen:
+                seen[p] = seen[o] + [k]
+                todo.append(p)
+    return seen
+
+
+class WellBot:
+    """Plays DEPTHWELL through Well.key, at a human pace that quickens with the sinking speed."""
+    WEIGHTS = (-0.5, 4.0, -0.9, -0.2)               # stack height, layers, holes, bumpiness
+
+    def __init__(self, rnd=None, err=0.06, pace=1.6, fmin=1.0):
+        self.rnd = rnd or random.Random()
+        self.err = err                               # chance of a slightly worse move
+        self.pace = pace                             # 1 = human-ish; smaller = quicker hands
+        self.fmin = fmin                             # how much quicker the hands get when pieces sink fast
+        self.piece = None
+        self.plan = None
+        self.wait = 0.0
+        self.replans = 0
+
+    def delays(self, g):
+        f = clamp(g.interval() / 0.8, self.fmin, 1.0) * self.pace
+        return (0.35 + self.rnd.random() * 0.25) * f, (0.11 + self.rnd.random() * 0.05) * f
+
+    # --- planning --------------------------------------------------------------------------------------------
+    def columns(self, g):
+        W, H, D = g.W, g.H, g.D
+        top = [[D] * W for _ in range(H)]
+        holes = [[0] * W for _ in range(H)]
+        for y in range(H):
+            for x in range(W):
+                t = D
+                for z in range(D):
+                    if g.cell[z][y][x]:
+                        t = z
+                        break
+                top[y][x] = t
+                holes[y][x] = sum(1 for z in range(t, D) if not g.cell[z][y][x])
+        return top, holes
+
+    def rate(self, g, top, holes, layers):
+        W, H, D = g.W, g.H, g.D
+        agg = hol = bump = 0
+        hi = 0
+        for y in range(H):
+            for x in range(W):
+                h = D - top[y][x]
+                agg += h
+                hi = max(hi, h)
+                hol += holes[y][x]
+                if x + 1 < W:
+                    bump += abs(top[y][x] - top[y][x + 1])
+                if y + 1 < H:
+                    bump += abs(top[y][x] - top[y + 1][x])
+        w = self.WEIGHTS
+        n = W * H
+        v = (w[0] * agg + w[2] * hol * 1.0 + w[3] * bump) / n * 16 + w[1] * layers
+        if hi > D - 4:                               # close to the rim: keep it low above all
+            v -= (hi - (D - 4)) * 6.0
+        return v
+
+    def options(self, g):
+        """[(value, orientation, px, py)] for every landing of the current piece."""
+        W, H, D = g.W, g.H, g.D
+        top, holes = self.columns(g)
+        full = W * H
+        counts = [sum(row.count(True) for row in g.cell[z]) for z in range(D)]
+        out = []
+        done = set()
+        for o in turn_paths(g.offs):
+            xs, ys, zs = zip(*o)
+            norm = orient_key((x - min(xs), y - min(ys), z - min(zs)) for x, y, z in o)
+            if norm in done:                         # the same shape at another pivot: same landings
+                continue
+            done.add(norm)
+            for px in range(-min(xs), W - max(xs)):
+                for py in range(-min(ys), H - max(ys)):
+                    pz = min(top[py + y][px + x] - 1 - z for x, y, z in o)
+                    if pz + min(zs) < 0:
+                        continue                     # sticks out over the rim
+                    cubes = [(px + x, py + y, pz + z) for x, y, z in o]
+                    add = {}
+                    for x, y, z in cubes:
+                        add[z] = add.get(z, 0) + 1
+                    layers = sum(1 for z, n in add.items() if counts[z] + n == full)
+                    if layers:                       # rare: recount the columns properly
+                        cell = [[row[:] for row in lay] for lay in g.cell]
+                        for x, y, z in cubes:
+                            cell[z][y][x] = True
+                        cell = [lay for lay in cell if not all(all(r) for r in lay)]
+                        cell = [[[False] * W for _ in range(H)] for _ in range(D - len(cell))] + cell
+                        t2 = [[next((z for z in range(D) if cell[z][y][x]), D) for x in range(W)] for y in range(H)]
+                        h2 = [[sum(1 for z in range(t2[y][x], D) if not cell[z][y][x]) for x in range(W)]
+                              for y in range(H)]
+                    else:
+                        t2 = [r[:] for r in top]
+                        h2 = [r[:] for r in holes]
+                        col = {}
+                        for x, y, z in cubes:
+                            c = col.setdefault((x, y), [D, 0])
+                            c[0] = min(c[0], z)
+                            c[1] += 1
+                        for (x, y), (zt, n) in col.items():
+                            h2[y][x] += top[y][x] - zt - n
+                            t2[y][x] = zt
+                    out.append((self.rate(g, t2, h2, layers), o, px, py))
+        out.sort(key=lambda c: -c[0])
+        return out
+
+    def choose(self, g):
+        opts = self.options(g)
+        if not opts:
+            return None
+        if self.err and len(opts) > 2 and self.rnd.random() < self.err:
+            return opts[self.rnd.choice((1, 2))]
+        return opts[0]
+
+    # --- playing ---------------------------------------------------------------------------------------------
+    def update(self, g, dt):
+        if g.over or g.clearing or g.paused:
+            return
+        if (g.kind, g.cubes, g.layers) != self.piece:
+            self.piece, self.plan, self.replans = (g.kind, g.cubes, g.layers), None, 0
+            self.wait = self.delays(g)[0]
+        self.wait -= dt
+        if self.wait > 0:
+            return
+        act = self.delays(g)[1]
+        if self.plan is None:
+            self.plan = self.choose(g)
+            if self.plan is None:
+                g.key(" ")
+                return
+        _, o, px, py = self.plan
+        before = (orient_key(g.offs), g.px, g.py)
+        if orient_key(g.offs) != o:
+            path = turn_paths(g.offs).get(o)
+            if not path:
+                self.plan = None
+                return
+            g.key(path[0])
+        elif g.px != px:
+            g.key("right" if px > g.px else "left")
+        elif g.py != py:
+            g.key("down" if py > g.py else "up")
+        else:
+            g.key(" ")
+            return
+        if (orient_key(g.offs), g.px, g.py) == before:   # blocked: think again from here
+            self.replans += 1
+            self.plan = self.choose(g) if self.replans < 3 else None
+            if self.plan is None:
+                g.key(" ")
+                return
+        self.wait = act
 
 
 # =============================================================================================
@@ -593,11 +778,11 @@ def render(g, cols, rows, ghost=True):
     return cv
 
 
-def render_over(g, cv, record):
-    lines = ["THE WELL IS FULL", "", "score  %d" % g.score, "layers %d   cubes %d" % (g.layers, g.cubes)]
+def render_over(g, cv, record, auto=False):
+    lines = ["THE WELL IS FULL", "", "score  %d" % g.score, "layers %d   cubes %d   level %d" % (g.layers, g.cubes, g.level)]
     if record:
         lines += ["", "** NEW RECORD **"]
-    lines += ["", "Enter: again   Esc / Q: menu"]
+    lines += ["", "auto mode: a new round starts" if auto else "Enter: again   Esc / Q: menu"]
     w = max(len(l) for l in lines) + 4
     cv.box(max(0, (cv.cols - w) // 2), max(0, cv.rows // 2 - len(lines) // 2 - 1), [l.center(w - 4) for l in lines],
            (240, 240, 246), (24, 22, 44))
@@ -625,13 +810,60 @@ def render_menu(cols, rows, sel, opts, t, help_=False):
     draw_cubes(cv, v)
     pit, si, level = opts
     items = ["well     < %dx%dx%d >" % PITS[pit], "pieces   < %s - %s >" % (SETS[si][0], SETS[si][1]),
-             "level    < %d >" % level, "START"]
+             "level    < %d >" % level, "START", AUTO_LABEL]
     rec = load_scores().get(GAME, {}).get(mode_key(PITS[pit], si))
     title_screen(cv, "DEPTHWELL", "falling blocks in three dimensions", items, sel,
                  "best for this well: %d" % rec if rec is not None else None,
                  keys="Up/Down choose   Left/Right change   Enter start   M %s   ? help   Esc back" % SND.label().lower(),
                  help_lines=HELP, show_help=help_)
     return cv
+
+
+STEP = 1 / 120              # auto mode steps the game in fixed slices (more of them when sped up)
+
+
+def run_auto(term, pit, si, level):
+    """Auto mode: the bot plays rounds in the chosen well until the viewer stops it. Nothing is recorded."""
+    auto = AutoMode()
+    while True:
+        g = Well(pit, SETS[si][2], level)
+        bot = WellBot()
+        last = time.time()
+        over_at = None
+        while True:
+            now = time.time()
+            dt = min(0.1, now - last)
+            last = now
+            for k in term.keys(0):
+                a = auto.key(k)
+                if a == "stop":
+                    return
+                if a == "sound" and SND.toggle():
+                    SND.play("sound_on")
+            for _ in range(auto.steps(dt, STEP)):
+                if g.over:
+                    break
+                bot.update(g, STEP)
+                g.update(STEP)
+            if g.over and over_at is None:
+                SND.play("over")
+                over_at = now
+            if over_at is not None:
+                if auto.paused:
+                    over_at += dt                    # paused: the result box stays
+                elif now - over_at > 3.0:
+                    break
+            cols, rows = term.size()
+            if cols < 70 or rows < 22:
+                term.write("\x1b[0m\x1b[2J\x1b[HPlease make the window larger (70x22).")
+                time.sleep(0.2)
+                continue
+            cv = render(g, cols, rows)
+            if g.over:
+                render_over(g, cv, None, auto=True)
+            auto.banner(cv, extra="level %d" % g.level)
+            term.write(cv.emit())
+            time.sleep(max(0, 1 / 30 - (time.time() - now)))
 
 
 def main():
@@ -653,10 +885,10 @@ def main():
                     elif k in ("q", "esc"):
                         return
                     if k in ("up", "w"):
-                        sel = (sel - 1) % 4
+                        sel = (sel - 1) % 5
                         SND.play("menu")
                     elif k in ("down", "s"):
-                        sel = (sel + 1) % 4
+                        sel = (sel + 1) % 5
                         SND.play("menu")
                     elif k in ("left", "right", "a", "d") and sel < 3:
                         d = -1 if k in ("left", "a") else 1
@@ -670,6 +902,9 @@ def main():
                         SND.play("start")
                         go = True
             pit, si, level = PITS[opts[0]], opts[1], opts[2]
+            if sel == 4:
+                run_auto(term, pit, si, level)
+                continue
             while True:
                 g = Well(pit, SETS[si][2], level)
                 ghost = True
@@ -723,5 +958,93 @@ def main():
                     break
 
 
+# =============================================================================================
+# Self-test:  python3 depthwell.py --selftest
+# =============================================================================================
+class FakeTerm:
+    """Stands in for the terminal: scripted keys by time, a fixed size, output thrown away."""
+
+    def __init__(self, script, size=(100, 32)):
+        self.script = sorted(script)                 # [(seconds after start, key)]
+        self.t0 = time.time()
+        self.cols_rows = size
+        self.frames = 0
+
+    def keys(self, timeout=0.0):
+        now = time.time() - self.t0
+        out = [k for t, k in self.script if t <= now]
+        self.script = [(t, k) for t, k in self.script if t > now]
+        return out
+
+    def size(self):
+        return self.cols_rows
+
+    def write(self, s):
+        self.frames += 1
+
+
+def selftest():
+    import os
+    import sys
+    import tempfile
+    import arcadekit
+    t0 = time.time()
+    tmp = os.path.join(tempfile.mkdtemp(), "scores.json")
+    arcadekit.SCORES_PATH = tmp                      # never touch the player's real scores
+    random.seed(2)
+    # rules: a full layer vanishes and scores
+    g = Well(PITS[0], FLAT)
+    for y in range(3):
+        for x in range(3):
+            g.cell[g.D - 1][y][x] = (x, y) not in ((0, 1), (1, 1), (2, 1))
+    g.offs, g.px, g.py, g.pz = [(-1, 0, 0), (0, 0, 0), (1, 0, 0)], 1, 1, 0
+    g.drop()
+    g.update(0.5)
+    assert g.layers == 1 and g.height() == 0, "a full layer did not clear"
+    # the turn keys reach every orientation (24 for an asymmetric piece, 6 for the long bar about its pivot)
+    assert "plus" not in Well(PITS[0], SETS[2][2]).pieces and "plus" in Well(PITS[1], SETS[2][2]).pieces
+    assert len(turn_paths(SOLID["twist"])) == 24 and len(turn_paths(FLAT["long"])) == 6
+    # the bot plays every well and piece set at x8 without errors; the results stay unrecorded
+    for pit in PITS:
+        for name, _, pieces in SETS:
+            random.seed(7)
+            g = Well(pit, pieces, 1)
+            bot = WellBot(random.Random(7))
+            auto = AutoMode()
+            for _ in range(5):
+                auto.key("+")
+            assert auto.speed == 8.0
+            frames = 0
+            while not g.over and frames < 60 * 8:   # 8 s of watching at x8 = 64 s of play
+                for _ in range(auto.steps(1 / 60, STEP)):
+                    if g.over:
+                        break
+                    bot.update(g, STEP)
+                    g.update(STEP)
+                frames += 1
+            assert g.cubes > 0
+            assert g.layers >= 3, "%s %s: the bot cleared only %d layers" % (pit, name, g.layers)
+            cv = render(g, 100, 32)
+            auto.banner(cv, extra="level %d" % g.level)
+            if g.over:
+                render_over(g, cv, None, auto=True)
+            cv.emit()
+    # the real auto-mode loop: speed up, pause, help, stop
+    term = FakeTerm([(0.05, "+"), (0.1, "+"), (0.15, "+"), (0.6, " "), (0.8, "?"), (0.9, "x"), (1.0, " "), (1.4, "esc")])
+    run_auto(term, PITS[1], 1, 2)
+    assert term.frames > 10 and not term.script
+    for cols, rows in ((70, 22), (160, 48)):
+        for sel in range(5):
+            render_menu(cols, rows, sel, [1, 1, 1], 1.0).emit()
+        render_menu(cols, rows, 4, [1, 1, 1], 1.0, True).emit()
+    assert not os.path.exists(tmp), "auto mode wrote a score"
+    print("Self-test ok: layers, turn reach, auto mode in all %d wells x %d piece sets at x8 (no scores written), "
+          "auto loop keys, title (%.1fs)" % (len(PITS), len(SETS), time.time() - t0))
+
+
 if __name__ == "__main__":
-    main()
+    import sys
+    if "--selftest" in sys.argv:
+        selftest()
+    else:
+        main()

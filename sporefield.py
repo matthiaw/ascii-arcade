@@ -16,8 +16,8 @@ import random
 import sys
 import time
 
-from arcadekit import (PAUSE_LINES, Canvas, HeldKeys, KeyTerminal, clamp, footer, load_scores, mix, overlay,
-                       shade, shared_key, submit, title_screen)
+from arcadekit import (AUTO_LABEL, PAUSE_LINES, AutoMode, Canvas, HeldKeys, KeyTerminal, clamp, footer, load_scores,
+                       mix, overlay, shade, shared_key, submit, title_screen)
 from arcadesound import Sound
 
 GAME = "sporefield"
@@ -74,11 +74,11 @@ GOLD = (250, 214, 120)
 
 # powers carried by the glowing seeds: (name, colour, seconds; bombs count charges)
 POWERS = {
-    "double": ("DOUBLE", (150, 255, 110), 9.0),
-    "pierce": ("PIERCE", (110, 236, 255), 9.0),
-    "slow": ("SLOW", (150, 160, 255), 6.5),
-    "bomb": ("BOMBS", (255, 160, 60), 3),
-    "shell": ("SHELL", (255, 226, 110), 15.0),
+    "double": ("DOUBLE", (150, 255, 110), 12.0),
+    "pierce": ("PIERCE", (110, 236, 255), 12.0),
+    "slow": ("SLOW", (150, 160, 255), 8.0),
+    "bomb": ("BOMBS", (255, 160, 60), 4),
+    "shell": ("SHELL", (255, 226, 110), 20.0),
 }
 CRITTERS = ("jitterleg", "plumbug", "gloammoth", "puffball", "burrowgrub")
 SPAWN_EVERY = {"jitterleg": (4, 8), "plumbug": (2, 4), "gloammoth": (11, 18), "puffball": (14, 22),
@@ -145,6 +145,9 @@ def help_lines(kitty=True):
         "",
         "Esc / P              pause menu (Q quit, M sound)",
         "?                    this help",
+        "",
+        "Auto mode: the game plays itself (Space pause,",
+        "+/- speed, Esc stop) on the difficulty chosen last.",
     ]
 
 
@@ -271,12 +274,12 @@ class Game:
                 n += 1
 
     def worm_iv(self):
-        return max(0.042, 0.108 / self.D["speed"] / (1 + 0.07 * (self.wave - 1)))
+        return max(0.042, 0.108 / self.D["speed"] / (1 + 0.05 * (self.wave - 1)))
 
     def start_wave(self):
         rnd = self.rng
         total = min(17, 10 + self.wave)
-        heads = min(self.wave - 1, 6)
+        heads = min(self.wave // 2, 6)          # extra lone heads: 1 from wave 2, 2 from wave 4, ... 6 from 12
         iv = self.worm_iv()
         self.chains = []
         x = rnd.randrange(4, GW - 4)
@@ -460,7 +463,7 @@ class Game:
                "puffball": (210, 230, 160), "burrowgrub": (240, 220, 190)}[c.kind]
         self.burst(c.x, c.y, col, 18, 8.0, 0.7)
         self.count("kill_" + c.kind)
-        chance = {"gloammoth": 0.7, "puffball": 0.6}.get(c.kind, 0.3)
+        chance = {"gloammoth": 0.7, "puffball": 0.6}.get(c.kind, 0.4)
         if self.rng.random() < chance:
             self.drop_seed(c.x, c.y)
         return True
@@ -884,6 +887,86 @@ def bot_input(g):
     dx = sgn(tx - x) if abs(tx - x) > 0.3 else 0
     dy = sgn(ty - y) if abs(ty - y) > 0.4 else 0
     return (dx, dy, True)
+
+
+def predict_head(g, ch, n):
+    """Where a chain's head will be after n more steps (the worm's turning rules, without changing anything)."""
+    x, y = ch.segs[0][0], ch.segs[0][1]
+    dx, vdir, dive = ch.dx, ch.vdir, ch.dive
+    for _ in range(n):
+        if y < 0:
+            y += 1
+            continue
+        if dive:
+            if y < GH - 1:
+                y += 1
+                continue
+            dive, vdir = False, -1
+        nx = x + dx
+        cap = g.caps.get((nx, y))
+        if 0 <= nx < GW and cap is None:
+            x = nx
+            continue
+        if cap is not None and cap[1]:
+            dive = True
+        dx = -dx
+        ny = y + vdir
+        if ny > GH - 1:
+            vdir, ny = -1, y - 1
+        elif vdir < 0 and ny < ZONE:
+            vdir, ny = 1, y + 1
+        y = ny
+    return x, y
+
+
+def pilot_input(g):
+    """Auto mode's beetle: dodge like the title autopilot, but aim. The target is the worm piece that is lowest
+    (heads first, they lead the worm into the corner) and the beetle leads its shot: it moves under the cell
+    where that head will be when the sap gets there. Seeds lying close by are picked up when it is calm."""
+    if g.state != "play":
+        return (0, 0, False)
+    x, y = g.px, g.py
+    dodge = bot_input(g)
+    segs = g.segments()
+    near = any(math.hypot(sx - x, sy - y) < 3.6 for sx, sy, _, _ in segs) or any(
+        math.hypot(c.x - x, c.y - y) < 4.0 for c in g.critters if not (c.kind == "burrowgrub" and c.phase == "rumble"))
+    if near:
+        return dodge
+    tx, ty = x, GH - 1.5
+    seed = next((s for s in g.seeds if s[3] is not None and abs(s[0] - x) < 6), None)
+    if seed and not any(sy > ZONE - 3 for sx, sy, _, _ in segs):
+        tx, ty = seed[0], seed[1]
+    elif g.chains:
+        ch = max(g.chains, key=lambda c: c.segs[0][1] + 3 * (c.segs[0][1] >= ZONE) + 0.05 * len(c.segs))
+        hx, hy = ch.segs[0][0], ch.segs[0][1]
+        flight = max(0.0, (y - hy - 0.5)) / 56.0 + 0.05
+        steps = int((flight + max(0.0, abs(hx + 0.5 - x) - 0.5) / 12.0) / ch.iv * (0.45 if g.active("slow") else 1.0))
+        ax, ay = predict_head(g, ch, steps)
+        tx = ax + 0.5
+        if ay >= ZONE and ay > y - 2.5:       # it is coming along the bottom row: keep out of its way, above it
+            ty = ZONE + 0.5
+    elif g.critters:
+        tx = g.critters[0].x
+    dx = sgn(tx - x) if abs(tx - x) > 0.3 else 0
+    dy = sgn(ty - y) if abs(ty - y) > 0.4 else 0
+    return (dx, dy, True)
+
+
+class Pilot:
+    """Auto mode's player: pilot_input, looked at again only every THINK seconds (a human's reaction time);
+    in between the beetle keeps doing what it did."""
+    THINK = 0.12
+
+    def __init__(self):
+        self.t = self.next = 0.0
+        self.inp = (0, 0, False)
+
+    def __call__(self, g, dt):
+        self.t += dt
+        if self.t >= self.next:
+            self.next = self.t + self.THINK
+            self.inp = pilot_input(g)
+        return self.inp
 
 
 # =============================================================================================
@@ -1384,11 +1467,11 @@ def draw_hud(cv, g):
         cv.put(cols - 4, 0, "+%d" % (n - 5), SHELL)
 
 
-def render_over(g, cv, record):
+def render_over(g, cv, record, auto=False):
     lines = ["THE ROOTS ARE LOST", "", "score %d" % g.score, "wave  %d   (%s)" % (g.wave, g.D["name"])]
     if record:
         lines += ["", "** NEW RECORD **"]
-    lines += ["", "Enter: again   Esc / Q: menu"]
+    lines += ["", "auto mode: a new round starts" if auto else "Enter: again   Esc / Q: menu"]
     w = max(len(l) for l in lines) + 4
     x, y = max(0, (cv.cols - w) // 2), max(0, cv.rows // 2 - len(lines) // 2 - 1)
     edge = GOLD if record else (200, 90, 140)
@@ -1415,13 +1498,83 @@ class TitleDemo:
         return render(g, cols, rows, hud=False, foot=False)
 
 
-def render_menu(demo, cols, rows, sel, dt, kitty, help_=False):
+class AutoRun:
+    """Auto mode: the real game on the chosen difficulty (real waves, lives, creatures and sound), played by a
+    Pilot. After a game over the result stays for a few seconds, then a new round starts. No score is kept."""
+    OVER_SHOW = 3.0
+
+    def __init__(self, diff, sound=True, seed=None):
+        self.diff, self.sound, self.seed = diff, sound, seed
+        self.auto = AutoMode()
+        self.rounds = 0
+        self.new()
+
+    def new(self):
+        self.rounds += 1
+        self.g = Game(self.diff, demo=not self.sound, seed=None if self.seed is None else self.seed + self.rounds)
+        self.pilot = Pilot()
+        self.over_t = 0.0
+
+    def key(self, k):
+        a = self.auto.key(k)
+        if a == "sound" and SND.toggle():
+            SND.play("sound_on")
+        return a
+
+    def frame(self, dt, cols, rows, draw=True):
+        g = self.g
+        if g.state == "over":
+            if not (self.auto.paused or self.auto.help):
+                self.over_t += dt
+            if self.over_t >= self.OVER_SHOW:
+                self.new()
+                g = self.g
+        else:
+            for _ in range(self.auto.steps(dt, DT)):
+                g.inp = self.pilot(g, DT)
+                g.step(DT)
+                if g.state == "over":
+                    if self.sound:
+                        SND.play("over")
+                    break
+        if not draw:
+            return None
+        cv = render(g, cols, rows)
+        if g.state == "over":
+            render_over(g, cv, False, auto=True)
+        self.auto.banner(cv, extra="%s  round %d" % (g.D["name"], self.rounds))
+        return cv
+
+
+def run_auto(term, diff):
+    """Auto mode until the viewer stops it (Esc / Q)."""
+    run = AutoRun(diff)
+    last = time.time()
+    while True:
+        now = time.time()
+        dt, last = min(0.1, now - last), now
+        for k in term.keys(0):
+            if run.key(k) == "stop":
+                return
+        cols, rows = term.size()
+        if cols < 60 or rows < 22:
+            too_small(term)
+            time.sleep(0.2)
+            continue
+        term.write(run.frame(dt, cols, rows).emit())
+        time.sleep(max(0.0, 1 / 30 - (time.time() - now)))
+
+
+def render_menu(demo, cols, rows, sel, dt, kitty, help_=False, diff=None):
     cv = demo.scene(cols, rows, dt)
     rec = load_scores().get(GAME, {})
-    name = DIFFS[sel]["name"]
+    diff = sel if sel < len(DIFFS) else (1 if diff is None else diff)
+    name = DIFFS[diff]["name"]
     best = "best %s: %d" % (name, rec[name]) if name in rec else None
-    items = ["%-7s %s" % (d["name"], d["desc"]) for d in DIFFS]
+    items = ["%-7s %s" % (d["name"], d["desc"]) for d in DIFFS] + [AUTO_LABEL]
     extra = ["", "Keys: %s" % ("held keys (kitty protocol)" if kitty else "classic mode - F: auto-fire")]
+    if sel == len(DIFFS):
+        extra = ["", "the game plays itself on %s" % name]
     title_screen(cv, "SPOREFIELD", "stop the sporeworm before it reaches the roots", items, sel, best, extra=extra,
                  keys="Up/Down difficulty   Enter start   M %s   ? help   Esc back" % SND.label().lower(),
                  help_lines=help_lines(kitty), show_help=help_, dim=0.45)
@@ -1507,6 +1660,7 @@ def main():
     with KeyTerminal() as term:
         demo = TitleDemo()
         sel, help_ = 1, False
+        diff = 1                    # the difficulty chosen last (auto mode plays on it)
         last = time.time()
         while True:
             now = time.time()
@@ -1517,7 +1671,7 @@ def main():
                     return
                 last = time.time()
                 continue
-            term.write(render_menu(demo, cols, rows, sel, min(0.1, now - last), term.kitty, help_).emit())
+            term.write(render_menu(demo, cols, rows, sel, min(0.1, now - last), term.kitty, help_, diff).emit())
             last = now
             go = False
             for k in term.keys(max(0.0, 1 / 30 - (time.time() - now))):
@@ -1529,10 +1683,10 @@ def main():
                 elif k in ("q", "esc"):
                     return
                 elif k in ("up", "w"):
-                    sel = (sel - 1) % len(DIFFS)
+                    sel = (sel - 1) % (len(DIFFS) + 1)
                     SND.play("menu")
                 elif k in ("down", "s"):
-                    sel = (sel + 1) % len(DIFFS)
+                    sel = (sel + 1) % (len(DIFFS) + 1)
                     SND.play("menu")
                 elif k == "m":
                     if SND.toggle():
@@ -1540,8 +1694,13 @@ def main():
                 elif k in ("enter", " "):
                     SND.play("start")
                     go = True
+            if sel < len(DIFFS):
+                diff = sel
             if go:
-                play(term, sel)
+                if sel == len(DIFFS):
+                    run_auto(term, diff)
+                else:
+                    play(term, sel)
                 last = time.time()
 
 
@@ -1590,7 +1749,7 @@ def selftest():
         g.lives = 99
         forced = 0
         sim = 0.0
-        while sim < 420 and g.wave < 6:
+        while sim < 420 and (g.wave < 6 or not g.stats.get("kill_plumbug")):
             g.inp = bot_input(g)
             g.step(DT)
             sim += DT
@@ -1670,6 +1829,34 @@ def selftest():
         if rtimes[s]:
             print("render+emit %3dx%-3d  %5.1f ms  (%d frames)" % (s[0], s[1], 1000 * sum(rtimes[s]) / len(rtimes[s]),
                                                                     len(rtimes[s])))
+    # auto mode: the real game (no extra lives, no help) at x8; pause, speed and stop work; no score is kept
+    submitted = []
+    real_submit = globals()["submit"]
+    globals()["submit"] = lambda *a, **k: submitted.append(a)
+    try:
+        run = AutoRun(1, sound=False, seed=21)
+        assert run.g.lives == DIFFS[1]["lives"] and run.g.invuln == 0.0
+        run.key(" ")
+        snap = (run.g.t, run.g.score)
+        for _ in range(30):
+            run.frame(1 / 30, 70, 22, draw=False)
+        assert (run.g.t, run.g.score) == snap, "auto mode ran on while paused"
+        run.key(" ")
+        for _ in range(5):
+            run.key("+")
+        assert run.auto.speed == 8.0
+        auto_secs, results = 40, []
+        for i in range(auto_secs * 30):
+            g0 = run.g
+            run.frame(1 / 30, 70 + i % 3 * 25, 22 + i % 2 * 10, draw=i % 20 == 0)
+            if run.g is not g0:
+                results.append((g0.wave, g0.score))
+        results.append((run.g.wave, run.g.score))
+        assert run.key("esc") == "stop"
+        assert not submitted, "auto mode submitted a score"
+    finally:
+        globals()["submit"] = real_submit
+    print("auto mode %d s at x8 (Normal): %d round(s), (wave, score) %s, nothing recorded" % (auto_secs, run.rounds, results))
     # simulation speed
     g = Game(2, seed=9)
     g.lives = 99

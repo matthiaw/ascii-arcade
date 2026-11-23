@@ -9,6 +9,8 @@ A party-based fantasy role-playing game drawn entirely in ASCII, for the termina
 Start:      python3 emberfall.py
 Self-test:  python3 emberfall.py --selftest
 Demo bot:   python3 emberfall.py --bot 600
+Auto mode:  python3 emberfall.py --auto      (the game plays itself; also on the title screen)
+Balance:    python3 emberfall.py --simulate 40 [--diff easy|normal|hard]
 Art dump:   python3 emberfall.py --art
 
 The rules are a simplified take on the 5th-edition d20 rules from the System
@@ -6795,7 +6797,7 @@ class UI:
         self.rng = random.Random(7)
         self.pics, self.shown_pics = [], []
         self.rawmap, self.shown_raw = None, False
-        self.pilot, self.watch_speed, self.paused = None, 1.0, False
+        self.pilot, self.watch_speed, self.paused, self.auto_next = None, 1.0, False, False
         self.view_pref = None
         self.mark_attr = self.C((1, K.COLOR_RED), BLACK)  # marks map cells the lit renderer may paint
         global PIC_MODE
@@ -7013,7 +7015,9 @@ class UI:
             if k != -1 and k != curses.KEY_RESIZE:
                 return k
 
-    # --- watch mode: the autopilot plays, the viewer can pause, speed up or stop --------------
+    # --- Auto mode: the autopilot plays, the viewer can pause, speed up or stop --------------
+    AUTO_SPEEDS = (0.25, 0.5, 1.0, 2.0, 4.0, 8.0)   # the same steps as every other ASCII ARCADE game
+
     def watch_pause(self, secs):
         """Wait about secs (scaled by speed) while handling the viewer's keys."""
         if self.bot:
@@ -7023,19 +7027,33 @@ class UI:
             return
         end = time.time() + secs / self.watch_speed
         self.scr.timeout(30)
+        sp = self.AUTO_SPEEDS
         try:
             while self.paused or time.time() < end:
                 k = self.scr.getch()
                 if k in (27, ord('q'), ord('Q')):
                     raise BackToTitle()
-                if k == ord(' '):
+                if k in (ord(' '), ord('p'), ord('P')):
                     self.paused = not self.paused
                     self.watch_status()
-                elif k in (ord('+'), ord('=')):
-                    self.watch_speed = min(8.0, self.watch_speed * 1.5)
+                elif k in (ord('+'), ord('='), curses.KEY_UP, curses.KEY_RIGHT):
+                    self.watch_speed = next((v for v in sp if v > self.watch_speed + 1e-9), sp[-1])
+                    end = time.time() + min(end - time.time(), secs / self.watch_speed)
                     self.watch_status()
-                elif k in (ord('-'), ord('_')):
-                    self.watch_speed = max(0.25, self.watch_speed / 1.5)
+                elif k in (ord('-'), ord('_'), curses.KEY_DOWN, curses.KEY_LEFT):
+                    self.watch_speed = next((v for v in reversed(sp) if v < self.watch_speed - 1e-9), sp[0])
+                    self.watch_status()
+                elif k in (ord('m'), ord('M')):
+                    SND.toggle()
+                    if self.g:
+                        self.g.msg(SND.label() + ".", GRAY)
+                    self.watch_status()
+                elif k == ord('?'):
+                    was, self.paused = self.paused, True
+                    self.auto_help()
+                    self.paused = was
+                    if self.g and self.g.area:
+                        self.draw_main(self.g, refresh=False)
                     self.watch_status()
                 elif k in (ord('v'), ord('V')) and self.g and self.g.area:
                     modes = self.view_modes()
@@ -7046,11 +7064,32 @@ class UI:
         finally:
             self.scr.timeout(140)
 
+    def auto_help(self):
+        lines = ["AUTO MODE - the game plays itself", "", "Space            pause / continue",
+                 "+ / -            faster / slower", "M                sound on / off", "v                map view",
+                 "Esc / Q          stop (back to the title)", "?                this help", "", "Press any key."]
+        H, W = self.scr.getmaxyx()
+        w = max(len(l) for l in lines) + 4
+        y0, x0 = max(0, (H - len(lines)) // 2 - 1), max(0, (W - w) // 2)
+        for j in range(len(lines) + 2):
+            self.put(y0 + j, x0, " " * w, self.C(LIGHT, PANEL))
+        for j, l in enumerate(lines):
+            self.put(y0 + 1 + j, x0 + 2, l, self.C(YELLOW if j == 0 else LIGHT, PANEL))
+        self.refresh()
+        self.scr.timeout(-1)
+        try:
+            self.scr.getch()
+        finally:
+            self.scr.timeout(30)
+
     def watch_status(self):
         H, W = self.scr.getmaxyx()
         goal = self.pilot.goal if self.pilot else ""
-        txt = " AUTOPILOT: %s   %s  speed x%.1f   [Space] pause  [+/-] speed  [v] view  [Esc] stop " % (
-            goal, "PAUSED" if self.paused else "", self.watch_speed)
+        sp = ("x%g" % self.watch_speed).replace("x0.", "x.")
+        txt = " AUTO: %s   %s  Space pause  +/- speed  v view  Esc stop " % (
+            goal, "PAUSED" if self.paused else sp)
+        if len(txt) > W - 1:
+            txt = " AUTO %s  Esc stop " % ("PAUSED" if self.paused else sp)
         self.put(0, max(0, W - len(txt) - 1), txt[:W - 1], self.C(BLACK, AMBER))
         self.refresh()
 
@@ -7692,7 +7731,7 @@ class UI:
                 if g.combat and acting:
                     bits.append(("Move %d" % p.mp + (" · acted" if PIC_MODE and p.acted else " acted" if p.acted else ""), GOLD))
                 if p.ai:
-                    bits.append(("AI", DGRAY))
+                    bits.append(("AUTO", DGRAY))
                 cx = x + 3
                 for t, c in bits:
                     if cx + len(t) > x + w - 1:
@@ -8295,13 +8334,13 @@ class UI:
             on = not all(p.ai for p in g.party[1:]) if len(g.party) > 1 else False
             for p in g.party[1:]:
                 p.ai = on
-            g.msg("Companions are now %s." % ("AI-controlled" if on else "under your control"), CYAN)
+            g.msg("Companions %s." % ("now act on their own (auto)" if on else "are under your control again"), CYAN)
             return
         p = g.current() if g.combat else g.party[self.sel % len(g.party)]
         if p is None or not p.is_pc:
             return
         p.ai = not p.ai
-        g.msg("%s is now %s." % (p.name, "AI-controlled" if p.ai else "under your control"), CYAN)
+        g.msg("%s %s." % (p.name, "now acts on its own (auto)" if p.ai else "is under your control again"), CYAN)
 
     # --- screens ------------------------------------------------------------------------------
     def full_box(self, title, fg=GOLD):
@@ -8465,7 +8504,7 @@ class UI:
                 txt = "%-7s %s" % (s.capitalize(), ITEMS[it]["name"] + "  - " + item_desc(it) if it else "-")
                 self.put(ey + 1 + j, cx, (" " + txt).ljust(W - cx - 3)[:W - cx - 3], a)
             ai = "on" if p.ai else "off"
-            foot = "[Left/Right] member   [Up/Down] slot   [Enter] change   [a] AI: %s" % ai
+            foot = "[Left/Right] member   [Up/Down] slot   [Enter] change   [a] auto: %s" % ai
             if p is not g.leader:
                 foot += "   [D] dismiss"
             self.hint_line(H - 2, 3, foot, W - 6)
@@ -8715,7 +8754,7 @@ class UI:
             ("Each round every creature acts in initiative order. On a party member's turn:", LIGHT),
             ("  move up to its speed in tiles, and take one action:", LIGHT),
             ("  f attack (or walk into a foe)   z cast a spell   p drink a potion", LIGHT),
-            ("  Space / . ends the turn   a lets the AI play this character (A: all companions)", LIGHT),
+            ("  Space / . ends the turn   a puts this character on auto (A: all companions)", LIGHT),
             ("Attack roll: d20 + bonus vs the target's Armour Class. A natural 20 is a critical hit.", LIGHT),
             ("Rogues deal Sneak Attack damage when an ally stands next to the target.", LIGHT),
             ("Sleeping or paralysed foes are hit automatically harder. Fireball burns friends too!", LIGHT),
@@ -8731,10 +8770,14 @@ class UI:
             ("v cycles the map view: narrow, square and pixel tiles (pixel tiles need truecolour).", LIGHT),
             ("", LIGHT),
             ("OTHER KEYS", YELLOW),
-            ("i inventory   c character sheet (equipment, AI, dismiss)   j journal   m message log", LIGHT),
+            ("i inventory   c character sheet (equipment, auto, dismiss)   j journal   m message log", LIGHT),
             ("r rest (restores HP and spells; might be interrupted)   Tab select party member", LIGHT),
             ("S save   L load   v map view (narrow/square/pixel/large/huge)", LIGHT),
             ("Esc / Q game menu: keep playing, help, sound on/off, save and quit   ? this help", LIGHT),
+            ("", LIGHT),
+            ("AUTO MODE (title screen)", YELLOW),
+            ("Auto mode: the game plays itself (Space pause, +/- speed, Esc stop). A random hero sets out; after "
+             "the end of an adventure the next one begins. Your save game is never touched.", LIGHT),
             ("d difficulty: Easy / Normal / Hard (any time outside combat)", LIGHT),
             ("", LIGHT),
             ("Rules after the D&D 5e System Reference Document 5.1 (CC-BY-4.0, Wizards of the Coast).", DGRAY),
@@ -8779,6 +8822,10 @@ class UI:
             y += 1
         self.refresh()
         sfx("gameover")
+        if self.pilot:            # Auto mode: show the result for a few seconds, then the next round starts
+            self.watch_pause(3.0)
+            self.auto_next = True
+            raise BackToTitle()
         time.sleep(0 if self.bot else 0.8)
         self.wait_key()
         raise BackToTitle()
@@ -8803,6 +8850,10 @@ class UI:
             y += 1
         self.refresh()
         sfx("victory")
+        if self.pilot:            # Auto mode: never touch the player's save; next round after a few seconds
+            self.watch_pause(4.0)
+            self.auto_next = True
+            raise BackToTitle()
         time.sleep(0 if self.bot else 1.0)
         self.wait_key()
         try:
@@ -8818,7 +8869,7 @@ class UI:
         sel = 0
         has_save = os.path.exists(self.save_path)
         opts = [("Continue", "continue")] if has_save else []
-        opts += [("New adventure", "new"), ("Watch the AI play", "watch"), ("How to play", "help"), ("Quit", "quit")]
+        opts += [("New adventure", "new"), ("Auto mode", "watch"), ("How to play", "help"), ("Quit", "quit")]
         while True:
             if self.too_small():
                 self.wait_key()
@@ -9044,25 +9095,32 @@ def play(scr, bot=0, save_path=SAVE_PATH, start=None, watch=False):
                          "huge": "Huge pixel tiles (16x16)"}
                 items = [("Automatic (fits the window)", "auto", True)] + [(names[m], m, True) for m in ui.view_modes()]
                 cur = ui.view_pref if ui.view_pref in ui.view_modes() else "auto"
-                pick = ui.menu("How should the map look?", items, sel=[v for _, v, _ in items].index(cur),
-                               footer="[Enter] start watching   [Esc] back   (v switches later too)")
+                pick = ui.menu("Auto mode: how should the map look?", items, sel=[v for _, v, _ in items].index(cur),
+                               footer="[Enter] start auto mode   [Esc] back   (v switches later too)")
                 if pick is None:
                     if watch:
                         return
                     continue
                 ui.view_pref = None if pick == "auto" else pick
-            race, cls = random.choice(list(RACES)), random.choice(list(CLASSES))
-            g = Game()
-            g.new_game(make_pc(random.choice(NAMES), race, cls, assign_stats(roll_stats(), cls), portrait=race + "_" + cls))
-            ui.pilot = Autopilot()
-            ui.message("Watching the AI play", "%s the %s %s sets out from Emberfall. Sit back and watch.\n\n"
-                       "[Space] pause   [+/-] speed   [Esc] stop" % (g.leader.name, RACES[race]["name"],
-                                                                     CLASSES[cls]["name"]), race + "_" + cls)
-            try:
-                ui.run(g)
-            except (BackToTitle, LoadGame):
-                pass
-            ui.pilot, ui.paused = None, False
+            first = True
+            while True:       # Auto mode: one adventure after the other until the viewer stops it
+                race, cls = random.choice(list(RACES)), random.choice(list(CLASSES))
+                g = Game()
+                g.new_game(make_pc(random.choice(NAMES), race, cls, assign_stats(roll_stats(), cls),
+                                   portrait=race + "_" + cls))
+                ui.pilot, ui.auto_next = Autopilot(), False
+                try:
+                    if first:
+                        ui.message("Auto mode", "%s the %s %s sets out from Emberfall. Sit back - the game plays "
+                                   "itself.\n\n[Space] pause   [+/-] speed   [m] sound   [Esc] stop" % (
+                                       g.leader.name, RACES[race]["name"], CLASSES[cls]["name"]), race + "_" + cls)
+                    first = False
+                    ui.run(g)
+                except (BackToTitle, LoadGame):
+                    pass
+                if not ui.auto_next or bot:
+                    break
+            ui.pilot, ui.paused, ui.auto_next = None, False, False
             if watch and not bot:
                 return
             if bot:
@@ -9098,8 +9156,8 @@ def play(scr, bot=0, save_path=SAVE_PATH, start=None, watch=False):
 
 
 # =============================================================================
-# Autopilot: plays the whole adventure like a careful player. Used to watch the
-# game play itself (--watch, title menu) and for balance runs (--simulate).
+# Autopilot: plays the whole adventure like a careful player. Drives Auto mode
+# (the game plays itself: title menu, --auto / --watch) and for balance runs (--simulate).
 # =============================================================================
 STORY_AREAS = ["cellar", "forest", "mine1", "mine2", "sanctum", "lair"]
 AREA_GRAPH = {"town": ["cellar", "world"], "cellar": ["town"], "forest": ["world"], "mine1": ["world", "mine2"],
@@ -10069,8 +10127,56 @@ def selftest(verbose=True):
         report.append(" ".join(stages))
         if ok and g.flags.get("ashmaw_dead"):
             wins += 1
+    # 6) Auto mode: the autopilot plays the real game headless for a few seconds (as fast as x8 and faster),
+    #    and Auto mode never touches the player's save file (not on defeat, not on victory)
+    import tempfile
+    save_before = os.path.getmtime(SAVE_PATH) if os.path.exists(SAVE_PATH) else None
+    auto_steps, auto_areas, t_auto = 0, set(), time.time()
+    seed = 0
+    while time.time() - t_auto < 4.0:
+        random.seed(seed)
+        g = Game(seed=seed)
+        rnd_ = random.Random(seed)
+        race, cls = rnd_.choice(list(RACES)), rnd_.choice(list(CLASSES))
+        g.new_game(make_pc("Auto", race, cls, assign_stats(roll_stats(), cls)))
+        pilot = Autopilot(seed)
+        while not g.over and time.time() - t_auto < 4.0:
+            pilot_pending(g, pilot)
+            if g.over:
+                break
+            if g.combat:
+                g.step_ai()
+            else:
+                pilot.step(g)
+            g.events.clear()
+            auto_steps += 1
+            auto_areas.add(g.area.id)
+        seed += 1
+    check(auto_steps > 150, "auto mode barely moved (%d steps)" % auto_steps)
+
+    class _Screen:                            # stands in for the curses UI around the end screens
+        def __getattr__(self, name):
+            return lambda *a, **k: (40, 120)
+    tmp = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+    tmp.write("{}")
+    tmp.close()
+    for end in ("gameover", "victory"):
+        ui = _Screen()
+        ui.pilot, ui.bot, ui.save_path, ui.auto_next = Autopilot(1), 1, tmp.name, False
+        try:
+            getattr(UI, end)(ui, g)
+        except BackToTitle:
+            pass
+        check(ui.auto_next, "auto mode does not start the next round after %s" % end)
+        check(os.path.exists(tmp.name), "auto mode deleted the save file on %s" % end)
+    os.remove(tmp.name)
+    save_after = os.path.getmtime(SAVE_PATH) if os.path.exists(SAVE_PATH) else None
+    check(save_before == save_after, "auto mode wrote the save file")
+
     took = time.time() - t0
     if verbose:
+        print("Auto mode: %d autopilot steps in 4s headless (%s), end screens start the next round, "
+              "save file untouched." % (auto_steps, ", ".join(sorted(auto_areas))))
         print("Campaign simulations (AI party, rests between fights):")
         for r in report:
             print("   ", r)
@@ -10113,7 +10219,7 @@ def main():
         bot = int(args[i + 1]) if i + 1 < len(args) else 600
         save = os.path.join(os.path.expanduser("~"), ".emberfall_bot_save.json")
     start = args[args.index("--start") + 1] if "--start" in args else None
-    watch = "--watch" in args
+    watch = "--watch" in args or "--auto" in args
     locale.setlocale(locale.LC_ALL, "")
     os.environ.setdefault("ESCDELAY", "25")
     try:

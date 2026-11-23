@@ -21,7 +21,8 @@ import sys
 import time
 from collections import deque
 
-from arcadekit import Canvas, Terminal, clamp, load_scores, mix, overlay, shade, shared_key, submit, title_screen
+from arcadekit import (AUTO_LABEL, AutoMode, Canvas, Terminal, clamp, load_scores, mix, overlay, shade, shared_key,
+                       submit, title_screen)
 from arcadesound import Sound
 
 GAME = "skyshot"
@@ -454,25 +455,31 @@ def cpu_plan(world, tanks, me, wind, diff, rnd, shots=0):
             d += 300
         return d
 
+    # The search runs over the elevation e (degrees above the horizon towards the target) so both sides think
+    # alike: ties (several shots that all hit) go to the flatter shot for either tank. (It used to search the
+    # raw barrel angle, which broke ties towards flat shots for the left tank but towards steep, wind-prone
+    # lobs for the right one - the left tank won ~70% of the rounds between equal computers.)
+    ang = (lambda e: e) if right else (lambda e: 180 - e)
     grid = []
-    for a in (range(16, 104, 5) if right else range(76, 165, 5)):
+    for e in range(16, 104, 5):
         for p in range(14, 101, 6):
-            grid.append((score(simulate(world, tanks, me, a, p, known, exact=False)), a, p))
+            grid.append((score(simulate(world, tanks, me, ang(e), p, known, exact=False)), e, p))
         yield None
     grid.sort()
     best = grid[0]
     seen = set()
-    for _, a0, p0 in grid[:3]:
-        for a in range(a0 - 3, a0 + 4, 1):
+    for _, e0, p0 in grid[:3]:
+        for e in range(e0 - 3, e0 + 4, 1):
             for p in range(p0 - 4, p0 + 5, 2):
-                if (a, p) in seen or not 2 <= a <= 178 or not 5 <= p <= 100:
+                if (e, p) in seen or not 2 <= e <= 178 or not 5 <= p <= 100:
                     continue
-                seen.add((a, p))
-                s = score(simulate(world, tanks, me, a, p, known))
+                seen.add((e, p))
+                s = score(simulate(world, tanks, me, ang(e), p, known))
                 if s < best[0]:
-                    best = (s, a, p)
+                    best = (s, e, p)
         yield None
-    miss, a, p = best
+    miss, e, p = best
+    a = ang(e)
     if miss > 0:                                  # fine power search for the best angle
         for dp in (-1, 1):
             q = p + dp
@@ -487,8 +494,8 @@ def cpu_plan(world, tanks, me, wind, diff, rnd, shots=0):
     w = 0
     if miss < 6 and me.ammo[1] and rnd.random() < (0.35, 0.6, 0.8)[diff]:
         w = 1
-    elif 3 < miss < 16 and me.ammo[2] and rnd.random() < 0.5:
-        w = 2
+    elif miss < 16 and me.ammo[2] and rnd.random() < (0.45, 0.35, 0.2)[diff]:
+        w = 2           # the splitter forgives a miss (it used to need 3 < miss, so it was never fired)
     elif diff > 0 and me.ammo[3] and miss < 8 and tgt.hp > 60 and rnd.random() < 0.08:
         w = 3
     yield (round(a), round(p), w)
@@ -498,13 +505,14 @@ def cpu_plan(world, tanks, me, wind, diff, rnd, shots=0):
 # A match: best of three rounds
 # =============================================================================================
 class Match:
-    def __init__(self, W, H, mode="cpu", diff=1, seed=None, names=None):
+    def __init__(self, W, H, mode="cpu", diff=1, seed=None, names=None, diffs=None):
         self.W, self.H = W, H
         self.mode, self.diff = mode, diff
+        self.diffs = list(diffs) if diffs else [diff, diff]     # per tank (auto mode / balance runs can mix them)
         self.rnd = random.Random(seed)
-        self.cpu = [mode == "demo", mode in ("cpu", "demo")]
+        self.cpu = [mode in ("demo", "auto"), mode in ("cpu", "demo", "auto")]
         self.names = names or {"cpu": ["YOU", "COMPUTER"], "two": ["PLAYER 1", "PLAYER 2"],
-                               "demo": ["BLUE", "RED"]}[mode]
+                               "demo": ["BLUE", "RED"], "auto": ["BLUE", "RED"]}[mode]
         self.wins = [0, 0]
         self.round_no = 0
         self.starter = 0
@@ -545,7 +553,8 @@ class Match:
         self.target = None
         if self.cpu[self.turn]:
             t = self.tanks[self.turn]
-            self.plan = cpu_plan(self.world, self.tanks, t, self.wind, self.diff, self.rnd, self.shots[self.turn])
+            self.plan = cpu_plan(self.world, self.tanks, t, self.wind, self.diffs[self.turn], self.rnd,
+                                 self.shots[self.turn])
 
     def sfx(self, name, vol=1.0, gap=0.04):
         if not self.quiet:
@@ -1115,7 +1124,7 @@ def overlay_texts(cv, m):
         wn = m.round_winner
         who = m.names[wn]
         lines = ["%s %s THE ROUND" % (who, "WIN" if who == "YOU" else "WINS"), "", "rounds   %d : %d" % tuple(m.wins)]
-        if m.phase_t > 0.6:
+        if m.phase_t > 0.6 and m.mode != "auto":
             lines += ["", "Enter  continue"]
         wd = max(len(l) for l in lines) + 4
         cv.box(max(0, (cols - wd) // 2), max(3, rows // 2 - 5), lines, (14, 14, 20), m.tanks[wn].colour)
@@ -1177,7 +1186,10 @@ def render_over(cv, m, record, streak):
     lines = [head, "", "rounds   %d : %d" % tuple(m.wins)]
     if m.mode == "cpu":
         lines.append("win streak vs computer (%s): %d%s" % (DIFFS[m.diff], streak, "   new record!" if record else ""))
-    lines += ["", "Enter  play again      Esc / Q  back to the title"]
+    if m.mode == "auto":
+        lines += ["", "the next duel starts in a moment      Esc  back to the title"]
+    else:
+        lines += ["", "Enter  play again      Esc / Q  back to the title"]
     wd = max(len(l) for l in lines) + 4
     x, y = max(0, (cv.cols - wd) // 2), max(2, cv.rows // 2 - 5)
     cv.frame(x - 1, y * 2 - 1, wd + 2, (len(lines) + 2) * 2 + 2, m.tanks[wn].colour)   # a rim in the winner's colour
@@ -1203,6 +1215,9 @@ HELP = [
     "",
     "Esc / P                 pause menu (Q quit, M sound)",
     "?                       this help",
+    "",
+    "Auto mode: the game plays itself (Space pause, +/- speed,",
+    "Esc stop) - two computers at the chosen difficulty duel.",
 ]
 PAUSE = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "M                 sound on / off",
          "Q                 quit to the menu"]
@@ -1238,7 +1253,8 @@ class TitleDemo:
         cv = render(m, cols, rows, title_mode=True)
         best = load_scores().get(GAME, {})
         rec = "  ".join("%s %d" % (d, best["streak " + d]) for d in DIFFS if ("streak " + d) in best)
-        items = ["One player vs computer", "Two players (one keyboard)", "Computer:  < %s >" % DIFFS[self.diff]]
+        items = ["One player vs computer", "Two players (one keyboard)", AUTO_LABEL,
+                 "Computer:  < %s >" % DIFFS[self.diff]]
         title_screen(cv, "SKYSHOT", "an artillery duel on crumbling hills", items, sel,
                      "best win streak vs computer:  " + rec if rec else None,
                      extra=["", "Left / Right: computer difficulty"],
@@ -1272,6 +1288,64 @@ def too_small(term):
     term.write("\x1b[0m\x1b[2J\x1b[HPlease make the window larger (70x22).")
 
 
+def auto_frame(m, auto, cols, rows):
+    """One auto-mode frame: the real duel with its HUD, the AUTO bar just above the HUD, the end box."""
+    cv = render(m, cols, rows)
+    names = "%s %s vs %s %s" % (m.names[0], DIFFS[m.diffs[0]], m.names[1], DIFFS[m.diffs[1]])
+    auto.banner(cv, row=rows - 2, extra=names if cols >= 110 else "")
+    if m.phase == "matchover":
+        render_over(cv, m, None, 0)
+    return cv
+
+
+def auto_step(m, auto, dt, budget=0.012):
+    """Advance an auto-mode duel by a real frame of dt: speed x0.25..x8 runs that many physics steps."""
+    n = auto.steps(dt, PH)
+    for i in range(n):
+        m.update(PH, budget=budget if i == 0 else 0.0)   # the computers think within the frame budget
+    return n
+
+
+def run_auto(term, diff, seconds=None, headless=None):
+    """Auto mode: computer vs computer at the chosen difficulty, one match after the other, until Esc.
+    headless=(cols, rows) runs without a terminal at x8 for `seconds` (the self-test); never records scores."""
+    auto = AutoMode(8.0 if headless else 1.0)
+    rnd = random.Random()
+    matches = 0
+    t_end = time.time() + seconds if seconds else None
+    while True:
+        cols, rows = headless or term.size()
+        m = Match(*world_size(cols, rows - 1), mode="auto", diff=diff, seed=rnd.randrange(1 << 30))
+        m.quiet = bool(headless)
+        last = time.time()
+        while True:
+            now = time.time()
+            if t_end and now > t_end:
+                return matches
+            if headless:
+                auto_step(m, auto, 1 / 30, budget=None)
+            else:
+                for k in term.keys(0):
+                    a = auto.key(k)
+                    if a == "stop":
+                        return matches
+                    if a == "sound":
+                        if SND.toggle():
+                            SND.play("sound_on")
+                auto_step(m, auto, min(0.1, now - last))
+                last = now
+                cols, rows = term.size()
+                if cols < 70 or rows < 22:
+                    too_small(term)
+                    time.sleep(0.2)
+                    continue
+                term.write(auto_frame(m, auto, cols, rows).emit())
+                time.sleep(max(0.0, 1 / 30 - (time.time() - now)))
+            if m.phase == "matchover" and m.phase_t > 3.0:   # the result box for ~3 s, then the next duel
+                matches += 1
+                break
+
+
 def main():
     with Terminal() as term:
         cols, rows = term.size()
@@ -1299,10 +1373,10 @@ def main():
                     elif k in ("q", "esc"):
                         return
                     elif k in ("up", "w"):
-                        sel = (sel - 1) % 3
+                        sel = (sel - 1) % 4
                         SND.play("menu")
                     elif k in ("down", "s"):
-                        sel = (sel + 1) % 3
+                        sel = (sel + 1) % 4
                         SND.play("menu")
                     elif k in ("left", "a", "right", "d"):
                         demo.diff = (demo.diff + (1 if k in ("right", "d") else -1)) % 3
@@ -1310,13 +1384,16 @@ def main():
                     elif k == "m":
                         if SND.toggle():
                             SND.play("sound_on")
-                    elif k in ("1", "2"):
+                    elif k in ("1", "2", "3"):
                         sel = int(k) - 1
                         go = True
                         SND.play("start")
                     elif k in ("enter", " "):
                         go = True
                         SND.play("start")
+            if sel == 2:
+                run_auto(term, demo.diff)
+                continue
             mode = "two" if sel == 1 else "cpu"
             diff = demo.diff
             while True:                                   # one match; Enter on the end screen starts another
@@ -1518,10 +1595,35 @@ def selftest():
         cv = Canvas(cols, rows)
         preview(cv, 2, 2, 40, 24, 0.0)
         preview(cv, 2, 2, 40, 24, 0.1)
+    # auto mode: the real duel at x8 for a few seconds headless, frames render, no score is ever submitted
+    global submit
+    real_submit, sent = submit, []
+    submit = lambda *a, **k: sent.append(a)
+    try:
+        played = run_auto(None, 1, seconds=6, headless=(100, 30))
+    finally:
+        submit = real_submit
+    assert not sent, "auto mode submitted a score"
+    auto = AutoMode()
+    for k in ("+", "+", "+", "+", "+", "+"):
+        auto.key(k)
+    assert auto.speed == 8.0
+    am = Match(*world_size(160, 44), mode="auto", diff=2, seed=7)
+    am.quiet = True
+    steps = sum(auto_step(am, auto, 1 / 30, budget=None) for _ in range(30))
+    assert steps >= 400, "x8 ran only %d physics steps in 30 frames (x1: 60)" % steps
+    assert am.cpu == [True, True] and am.diffs == [2, 2]
+    auto.key(" ")
+    assert auto_step(am, auto, 1 / 30) == 0, "auto mode keeps running while paused"
+    auto_frame(am, auto, 160, 45).emit(True)
+    am.phase, am.winner, am.wins = "matchover", 1, [1, 2]
+    auto.key("?")
+    auto_frame(am, auto, 70, 22).emit(True)
     print("Self-test ok: %d lands with both tanks on solid ground; craters dig, earth settles, tanks fall; "
           "splitter bursts in 3; stationary target hit by hard %d/40, normal %d/40, easy %d/40; "
-          "7 computer matches finished in %s turns; frames at 70x22 and 160x45 render (%.1fs)"
-          % (n, hard, normal, easy, "/".join(map(str, results)), time.time() - t0))
+          "7 computer matches finished in %s turns; frames at 70x22 and 160x45 render; auto mode ran 6s at x8 "
+          "(%d duels done, %d physics steps per 30 frames), no score submitted (%.1fs)"
+          % (n, hard, normal, easy, "/".join(map(str, results)), played, steps, time.time() - t0))
 
 
 def bench():

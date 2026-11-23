@@ -17,8 +17,8 @@ import random
 import sys
 import time
 
-from arcadekit import (PAUSE_LINES, Canvas, HeldKeys, KeyTerminal, clamp, footer, load_scores, mix, overlay, shade,
-                       shared_key, submit, title_screen)
+from arcadekit import (AUTO_LABEL, PAUSE_LINES, AutoMode, Canvas, HeldKeys, KeyTerminal, clamp, footer, load_scores,
+                       mix, overlay, shade, shared_key, submit, title_screen)
 from arcadesound import Sound
 
 GAME = "scaffold"
@@ -116,7 +116,9 @@ def help_lines(kitty=True):
             "wrench to smash them for 8 seconds (no climbing meanwhile).",
             "Falls further than your jump are fatal. The bonus counts",
             "down; it is yours when you reach the kill switch.",
-            "Extra rigger at %d points." % EXTRA_LIFE]
+            "Extra rigger at %d points." % EXTRA_LIFE, "",
+            "Auto mode: the game plays itself (Space pause, +/- speed,",
+            "Esc stop), from the stage chosen in Stage select."]
 
 
 # =============================================================================================
@@ -630,9 +632,10 @@ class Robot:
 # The game
 # =============================================================================================
 class Game:
-    def __init__(self, stage=0, night=1, demo=False, hazards=True, seed=None):
+    def __init__(self, stage=0, night=1, demo=False, hazards=True, seed=None, quiet=False):
         self.rng = random.Random(seed)
         self.demo, self.hazards = demo, hazards
+        self.quiet = quiet          # no sound (auto mode's self-test); the demo is quiet and never loses a life
         self.score, self.lives, self.night = 0, 3, night
         self.stage_i = stage
         self.extra_given = False
@@ -652,7 +655,7 @@ class Game:
 
     # --- helpers ---------------------------------------------------------------------------------
     def snd(self, name, vol=1.0, gap=0.04):
-        if not self.demo:
+        if not (self.demo or self.quiet):
             SND.play(name, vol, gap)
 
     @property
@@ -921,7 +924,7 @@ class Game:
                 r.state, r.st_t = "idle", 0.0
                 r.item = None
                 r.until_stomp -= 1
-                base = [2.3, 2.1, 2.0, 2.4, 2.2][st.kind]
+                base = [2.3, 2.1, 2.0, 3.0, 2.6][st.kind]     # crane yard and breakers: fewer throws, they have wind / homing gears
                 r.timer = self.rng.uniform(0.6, 1.3) * base / spd
         elif r.state == "stomp":
             for at in (0.22, 0.6):
@@ -1189,11 +1192,15 @@ class Game:
             h.y = floor - 4 * 2.25 * min(1.0, u) * (1 - min(1.0, u))
             if u >= 1.0:
                 if st.support(h.x, floor, self.t, 0.3, cars=False) is None:
-                    h.mode, h.vx, h.vy = "drop", h.dir * 0.5, 0.5
+                    h.mode, h.vx, h.vy = "drop", 0.0 if st.chute_zone else h.dir * 0.5, 0.5
                 else:
                     self.snd("thud", 0.4, 0.15)
                     self.burst(h.x, floor, 3, [(140, 130, 120)], 1.5, 0.5, 0.3)
                     h.hop = self.new_hop(h.x)
+                    z = st.chute_zone
+                    if z and st.support(h.x + h.dir * h.hop[1], floor, self.t, 0.3, cars=False) is None:
+                        # the last hop goes over the edge: it lands in the marked chute, never in the lift shaft
+                        h.hop[1] = max(0.5, abs((z[0] + z[1]) / 2 - h.x))
                     return
             h.hop[3] = u
         else:
@@ -1257,7 +1264,7 @@ class Game:
                 if abs(h.x - p.x) < hw + 0.1 and p.y < h.y - hh + 0.05 and abs(h.y - p.jump_y) < 1.3:
                     p.scored.append(h)
                     n = len(p.scored)
-                    pts = 100 if n == 1 else 200 if n == 2 else 500
+                    pts = 200 if n == 1 else 400 if n == 2 else 800     # a jump is riskier than a wrench smash
                     self.jumped += 1
                     self.add(pts, h.x, h.y - 1.6)
                     self.snd("hop" if n == 1 else "hop2")
@@ -1515,6 +1522,7 @@ class Bot:
         wr = g.wrench_t
         sup = st.support(p.x, p.y, g.t, 0.5)
         carry = (sup[2] + st.belt_at(sup[1], g.t) + g.wind) if sup and p.mode == "walk" else 0.0
+        drift = st.belt_at(sup[1], g.t) if sup and p.mode == "walk" else 0.0
         air = 2 * JUMP_V / GRAV
 
         def where(tau):
@@ -1554,7 +1562,8 @@ class Bot:
                 cx, cy = clamp(bx, pb[0] - 0.15, pb[2] + 0.15), clamp(by, pb[1] - 0.15, pb[3])
                 if (cx - bx) ** 2 + (cy - by) ** 2 < 0.55 ** 2:
                     return tau, False
-            if dx and not jump and not dy and p.mode == "walk" and tau <= 0.12:   # walking off into a deep drop
+            if (dx or drift) and not jump and not dy and p.mode == "walk" and tau <= (0.12 if dx else 0.8):
+                # walking off into a deep drop, or a belt carrying the rigger off while it waits
                 if st.support(x, y, g.t + tau, 0.6) is None and st.land(x, y, y + FALL_LIMIT - 0.2, g.t + tau) is None:
                     return tau, False
         if st.kind == 4 and p.mode == "walk":
@@ -1660,6 +1669,8 @@ class Bot:
                     return True
             if h.mode == "ladder" and h.lad is L:
                 return True
+            if h.kind in ("drum", "hot") and h.mode in ("fall", "fly") and h.y < L.ytop and abs(h.x - L.x) < 3.5:
+                return True       # dropping onto the girder at the top of this ladder
         return False
 
     def choose(self, base):
@@ -1704,9 +1715,26 @@ class Bot:
         """A jump here lands safely (no fall too far, no gap)."""
         g = self.g
         p, st = g.player, g.st
-        x = clamp(p.x + dx * WALK * 2 * JUMP_V / GRAV, PW, SW - PW)
+        sup = st.support(p.x, p.y, g.t, 0.5)
+        belt = st.belt_at(sup[1], g.t) * 0.5 if sup else 0.0      # a jump keeps half the belt's speed
+        x = clamp(p.x + (dx * WALK + belt) * 2 * JUMP_V / GRAV, PW, SW - PW)
         s = st.support(x, p.y, g.t + 0.6, 0.9)
         return s is not None
+
+
+class Pilot(Bot):
+    """Auto mode's rigger: the autopilot, with a human's reaction time. Something the Wrecker has just thrown
+    (younger than REACT seconds) is not seen yet, so a dodge comes a moment later than the autopilot's."""
+    REACT = 0.25
+
+    def __call__(self):
+        g = self.g
+        every = g.hz
+        g.hz = [h for h in every if h.age >= self.REACT]
+        try:
+            return Bot.__call__(self)
+        finally:
+            g.hz = every
 
 
 # =============================================================================================
@@ -2588,11 +2616,11 @@ def draw_hud(cv, g):
             cv.put(rx, 0, s, (170, 190, 240), HUD_BG)
 
 
-def render_over(g, cv, record):
+def render_over(g, cv, record, auto=False):
     lines = ["GAME OVER", "", "score  %d" % g.score, "night  %d   stage %d/5" % (g.night, g.stage_i % 5 + 1)]
     if record:
         lines += ["", "** NEW RECORD **"]
-    lines += ["", "Enter: again   Esc / Q: menu"]
+    lines += ["", "auto mode: a new round starts" if auto else "Enter: again   Esc / Q: menu"]
     w = max(len(l) for l in lines) + 4
     x, y = max(0, (cv.cols - w) // 2), max(0, cv.rows // 2 - len(lines) // 2 - 1)
     edge = GOLD if record else (200, 76, 86)
@@ -2676,13 +2704,84 @@ class Controls:
         return dx, dy, j
 
 
+class AutoRun:
+    """Auto mode: the real game from the chosen stage (three riggers, real nights, sound), played by a Pilot.
+    After a game over the result stays for a few seconds, then a new round starts. No score is kept."""
+    OVER_SHOW = 3.0
+
+    def __init__(self, stage, sound=True, seed=None):
+        self.stage, self.sound, self.seed = stage, sound, seed
+        self.auto = AutoMode()
+        self.rounds = 0
+        self.new()
+
+    def new(self):
+        self.rounds += 1
+        self.g = Game(self.stage, quiet=not self.sound, seed=None if self.seed is None else self.seed + self.rounds)
+        self.bot = Pilot(self.g)
+        self.mark = (self.g.stage_i, self.g.deaths)
+        self.over_t = 0.0
+
+    def key(self, k):
+        a = self.auto.key(k)
+        if a == "sound" and SND.toggle():
+            SND.play("sound_on")
+        return a
+
+    def frame(self, dt, cols, rows, draw=True):
+        g = self.g
+        if g.over:
+            if not (self.auto.paused or self.auto.help):
+                self.over_t += dt
+            if self.over_t >= self.OVER_SHOW:
+                self.new()
+                g = self.g
+        else:
+            for _ in range(self.auto.steps(dt, DT)):
+                i = self.bot()
+                if i[2]:
+                    g.jbuf = 0.13
+                g.step((i[0], i[1], g.jbuf > 0))
+                if (g.stage_i, g.deaths) != self.mark:      # a new stage or a retry: the route starts again
+                    self.mark = (g.stage_i, g.deaths)
+                    self.bot.reset()
+                if g.over:
+                    break
+        if not draw:
+            return None
+        cv = render(g, cols, rows)
+        if g.over:
+            render_over(g, cv, False, auto=True)
+        self.auto.banner(cv, extra="round %d" % self.rounds)
+        return cv
+
+
+def run_auto(term, stage):
+    """Auto mode until the viewer stops it (Esc / Q)."""
+    run = AutoRun(stage)
+    last = time.time()
+    while True:
+        now = time.time()
+        dt, last = min(0.1, now - last), now
+        for k, kind in term.events(0):
+            if kind == "press" and run.key(k) == "stop":
+                return
+        cols, rows = term.size()
+        if cols < 60 or rows < 22:
+            too_small(term)
+            time.sleep(0.2)
+            continue
+        term.write(run.frame(dt, cols, rows).emit())
+        time.sleep(max(0.0, 1 / 30 - (time.time() - now)))
+
+
 def render_menu(demo, cols, rows, sel, stage, dt, help_, kitty):
     cv = demo.scene(cols, rows, dt)
     rec = load_scores().get(GAME, {})
     best = None
     if rec.get("score"):
         best = "best score %d   (reached night %d)" % (rec["score"], rec.get("night", 1))
-    items = ["Start the night shift", "Stage select   < %d  %s >" % (stage + 1, STAGE_NAMES[stage])]
+    items = ["Start the night shift", "Stage select   < %d  %s >" % (stage + 1, STAGE_NAMES[stage]), AUTO_LABEL]
     extra = ["", "A runaway demolition robot holds the top of", "the tower. Climb up and switch it off.",
              "Keys: %s" % ("with releases (kitty protocol)" if kitty else "classic terminal mode")]
     title_screen(cv, "SCAFFOLD", "climb the tower, dodge what the Wrecker throws", items, sel, best, extra=extra,
@@ -2789,16 +2888,19 @@ def main():
                     help_ = True
                 elif k in ("q", "esc"):
                     return
-                elif k in ("up", "w", "down", "s", "tab"):
-                    sel = 1 - sel
+                elif k in ("down", "s", "tab"):
+                    sel = (sel + 1) % 3
+                    SND.play("menu")
+                elif k in ("up", "w"):
+                    sel = (sel - 1) % 3
                     SND.play("menu")
                 elif k in ("left", "a"):
                     stage = (stage - 1) % 5
-                    sel = 1
+                    sel = sel if sel == 2 else 1
                     SND.play("menu")
                 elif k in ("right", "d"):
                     stage = (stage + 1) % 5
-                    sel = 1
+                    sel = sel if sel == 2 else 1
                     SND.play("menu")
                 elif k == "m":
                     if SND.toggle():
@@ -2807,6 +2909,10 @@ def main():
                     SND.play("start")
                     go = True
             if not go:
+                continue
+            if sel == 2:
+                run_auto(term, stage)
+                last = time.time()
                 continue
             while play(term, ctl, 0 if sel == 0 else stage) == "again":
                 pass
@@ -3015,7 +3121,29 @@ def selftest():
     for cols, rows, r_, e_ in timing:
         print("  %3dx%-3d render %5.1f ms  emit %5.1f ms  = %5.1f ms per frame (%3.0f fps)" % (
             cols, rows, r_, e_, r_ + e_, 1000 / max(0.1, r_ + e_)))
-    # 7. physics speed
+    # 7. auto mode: the real game (three riggers, lives are lost) at x8; pause, speed and stop work; no score kept
+    run = AutoRun(0, sound=False, seed=31)
+    assert run.g.lives == 3 and not run.g.demo
+    run.key(" ")
+    snap = (run.g.clock, run.g.score)
+    for _ in range(30):
+        run.frame(1 / 30, 70, 22, draw=False)
+    assert (run.g.clock, run.g.score) == snap, "auto mode ran on while paused"
+    run.key(" ")
+    for _ in range(5):
+        run.key("+")
+    assert run.auto.speed == 8.0
+    auto_secs, results = 40, []
+    for i in range(auto_secs * 30):
+        g0 = run.g
+        run.frame(1 / 30, 70 + i % 3 * 25, 22 + i % 2 * 10, draw=i % 20 == 0)
+        if run.g is not g0:
+            results.append("n%d s%d %d" % (g0.night, g0.stage_i % 5 + 1, g0.score))
+    results.append("n%d s%d %d" % (run.g.night, run.g.stage_i % 5 + 1, run.g.score))
+    assert run.key("esc") == "stop"
+    print("auto mode: %d s at x8, %d round(s) (night, stage, score: %s), nothing recorded" % (
+        auto_secs, run.rounds, ", ".join(results)))
+    # 8. physics speed
     g = Game(0, seed=2)
     bot = Bot(g)
     a = time.time()

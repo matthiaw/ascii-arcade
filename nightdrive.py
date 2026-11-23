@@ -18,7 +18,7 @@ import random
 import sys
 import time
 
-from arcadekit import FONT, Canvas, Terminal, clamp, load_scores, mix, overlay, shade, shared_key, submit, title_screen
+from arcadekit import AUTO_LABEL, FONT, AutoMode, Canvas, Terminal, clamp, load_scores, mix, overlay, shade, shared_key, submit, title_screen
 
 try:
     from arcadesound import Sound
@@ -76,6 +76,9 @@ CAR_W = 500.0             # width of a car in world units
 CAR_HALF = CAR_W / RW / 2
 OFFROAD_V = MAXV * 0.33   # the verge will not let you go faster than this
 BEAM_N = 44               # how many segments the headlights reach
+CRASH_ONC = 1.6           # seconds spinning after a head-on hit (oncoming car)
+CRASH_SIDE = 1.3          # ... after hitting a tree, lamp post or rock
+CRASH_REAR = 0.9          # ... after running hard into a car from behind
 
 # ---- stages ------------------------------------------------------------------------------------------------
 # colours are "fully lit"; the renderer darkens them by the light falling on them and fades them into the haze
@@ -90,7 +93,7 @@ STAGES = [
          ground=((14, 34, 62), (110, 96, 76)), ground2=((16, 38, 68), (118, 104, 82)), road=((78, 80, 92), (73, 75, 87)),
          rumble=((230, 50, 50), (230, 230, 236)), lane=(240, 240, 240), amb=0.34, fog=0.8, moon=0.1, stars=1.0,
          lamp=0.4, neon=((255, 120, 60), (60, 200, 255), (255, 230, 120), (255, 80, 120))),
-    dict(name="PINE FOREST", pace=25.5, scene="forest", lanes=4, oncoming=True, traffic=6, curve=2.3, straight=0.3, hill=40,
+    dict(name="PINE FOREST", pace=24.5, scene="forest", lanes=4, oncoming=True, traffic=6, curve=2.3, straight=0.3, hill=40,
          length=2300, seed=303, sky=((2, 6, 10), (24, 40, 46)), haze=(22, 34, 38), far=(14, 26, 22),
          ground=((26, 58, 30), (30, 66, 34)), road=((74, 76, 80), (70, 72, 76)), rumble=((230, 230, 230), (40, 40, 44)),
          lane=(235, 235, 235), amb=0.3, fog=1.0, fogpow=0.65, moon=0.05, stars=0.6, lamp=0.4,
@@ -100,7 +103,7 @@ STAGES = [
          ground=((120, 92, 62), (128, 100, 68)), road=((84, 78, 82), (79, 73, 77)), rumble=((240, 160, 40), (230, 226, 220)),
          lane=(245, 240, 230), amb=0.36, fog=0.75, moon=0.13, stars=1.2, lamp=0.45,
          neon=((255, 70, 90), (90, 220, 255), (255, 200, 60), (255, 120, 220))),
-    dict(name="MOUNTAIN PASS", pace=21.5, scene="mountain", lanes=4, oncoming=True, traffic=5, curve=3.2, straight=0.18, hill=50,
+    dict(name="MOUNTAIN PASS", pace=22.5, scene="mountain", lanes=4, oncoming=True, traffic=5, curve=3.2, straight=0.18, hill=50,
          length=2400, seed=505, sky=((2, 4, 20), (40, 52, 96)), haze=(30, 38, 72), far=(24, 28, 50),
          ground=((62, 62, 70), (68, 68, 76)), road=((76, 76, 84), (71, 71, 79)), rumble=((235, 40, 40), (235, 235, 240)),
          lane=(240, 240, 245), amb=0.34, fog=0.8, moon=0.085, stars=1.0, lamp=0.4,
@@ -118,6 +121,15 @@ TRAFFIC_COLOURS = [(200, 40, 40), (230, 230, 235), (40, 90, 200), (240, 190, 40)
 def allowance(si):
     """Seconds on the clock for stage si (also the checkpoint bonus when you reach it)."""
     return int(STAGES[si]["length"] / STAGES[si].get("pace", 28.0) + 0.5) + (4 if si == 0 else 0)
+
+
+CP_SHARE = 0.9   # a checkpoint adds this share of the stage's allowance: time saved earlier still helps, but a
+                 # run from stage 1 no longer arrives at the storm with a minute and a half in the bank
+
+
+def checkpoint_bonus(si):
+    """Seconds a checkpoint adds when the run reaches stage si."""
+    return int(allowance(si) * CP_SHARE + 0.5)
 
 
 def traffic_gap(st):
@@ -530,7 +542,7 @@ class Race:
                 for kind, off, seed in trk.spr[min(i, trk.n - 1)]:
                     w = SOLID.get(kind, 0)
                     if w and abs(self.x - off) < w / RW / 2 + CAR_HALF * 0.8:
-                        self.crash(0.9, 0.18, -math.copysign(1, off))
+                        self.crash(CRASH_SIDE, 0.18, -math.copysign(1, off))
                         self.x -= math.copysign(0.18, off)
                         break
         self.traffic(dt, old_pz)
@@ -555,7 +567,7 @@ class Race:
             else:
                 s = self.trk.ranges[self.ci][0]
                 self.reached = max(self.reached, s)
-                bonus = allowance(s)
+                bonus = checkpoint_bonus(s)
                 if not self.demo:
                     self.time_left += bonus
                     self.score += 1000
@@ -642,7 +654,7 @@ class Race:
                     continue
                 if abs(dz) < 260 or (pdz > 0) != (dz > 0):
                     if c.onc:
-                        self.crash(1.1, 0.08, 1 if self.x > c.x else -1)
+                        self.crash(CRASH_ONC, 0.08, 1 if self.x > c.x else -1)
                         self.x += 0.35 if self.x >= c.x else -0.35
                     elif self.speed > c.v:
                         rel = (self.speed - c.v) / MAXV
@@ -654,7 +666,7 @@ class Race:
                         if rel <= 0.4:
                             self.sfx("bump", 0.8, 0.3)
                         if rel > 0.4:
-                            self.crash(0.6, c.v * 0.8 / MAXV, 1 if self.x > c.x else -1)
+                            self.crash(CRASH_REAR, c.v * 0.8 / MAXV, 1 if self.x > c.x else -1)
         self.cars = [c for c in cars if pz - 25 * SEG < c.z < pz + (DRAW + 160) * SEG]
         self.fill_traffic()
 
@@ -1711,6 +1723,9 @@ HELP = [
     "Curves push you outwards; the verge slows you; trees, lamps and",
     "rocks spin you round. Throttle auto/manual is set on the title.",
     "",
+    "Auto mode (title menu): the game plays itself (Space pause,",
+    "+/- speed, Esc stop) - with the stage and throttle chosen there.",
+    "",
     "Esc / P                  pause menu (Q there: quit)",
     "M  (in the pause menu)   sound on / off",
     "?                        this help",
@@ -1719,7 +1734,7 @@ PAUSE = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 hel
          "Q                 quit to the menu"]
 
 
-def render_end(cv, r, record):
+def render_end(cv, r, record, auto=False):
     fin = r.state == "finish"
     s = r.trk.ranges[min(r.ci, len(r.trk.ranges) - 1)][0]
     lines = ["F I N I S H" if fin else "T I M E   U P", ""]
@@ -1732,14 +1747,14 @@ def render_end(cv, r, record):
     lines += ["", "distance  %.1f km   passed  %d cars" % (r.dist / 1000, r.overtakes), "score  %d" % int(r.score)]
     if record:
         lines += ["", "** NEW RECORD **"]
-    lines += ["", "Enter: drive again   Esc / Q: menu"]
+    lines += ["", "Auto mode: the next run starts in a moment" if auto else "Enter: drive again   Esc / Q: menu"]
     w = max(len(l) for l in lines) + 4
     cv.box(max(0, (cv.cols - w) // 2), max(0, cv.rows // 2 - len(lines) // 2 - 1), [l.center(w - 4) for l in lines],
            (240, 240, 246), (40, 14, 46) if fin else (46, 14, 20))
 
 
 # =============================================================================================
-# The autopilot (title demo and tests): it only presses keys, like a player
+# The autopilot (title demo, auto mode and tests): it only presses keys, like a player
 # =============================================================================================
 def safe_speed(c, margin=0.8):
     """The highest speed fraction at which the steering can still hold curve c."""
@@ -1753,24 +1768,35 @@ def safe_speed(c, margin=0.8):
 
 
 class Driver:
-    def __init__(self, sloppy=False, seed=1):
-        self.sloppy = sloppy
+    """sloppy: reacts ten times a second and wobbles a little. human (auto mode): reacts about every 0.13 s,
+    wobbles more and now and then misses a car for a moment - it crashes sometimes, like a person."""
+
+    def __init__(self, sloppy=False, seed=1, human=False, form=(4, 0.16, 25.0, 0.75)):
+        self.sloppy = sloppy or human
+        self.human = human
+        self.every, self.wobble, self.lapse_every, self.margin = form if human else (3, 0.12, 0.0, 0.75)
         self.rnd = random.Random(seed)
         self.lane = None
         self.tick = 0
         self.noise = 0.0
         self.lane_cool = 0.0
+        self.lapse = 0.0                              # seconds left of not watching the traffic
 
     def act(self, r, dt=1 / 30):
         self.tick += 1
         if r.state != "run":
             return
         if self.sloppy:
-            if self.tick % 3:                         # reacts ten times a second
+            every = self.every                        # sloppy: reacts ten times a second
+            if self.tick % every:
                 return
-            dt *= 3
-            if self.tick % 30 == 0:
-                self.noise = self.rnd.uniform(-0.12, 0.12)
+            dt *= every
+            if self.tick % (every * 10) == 0:
+                self.noise = self.rnd.uniform(-self.wobble, self.wobble)
+        if self.human:
+            self.lapse -= dt
+            if self.lapse <= 0 and self.rnd.random() < dt / self.lapse_every:   # now and then a glance away
+                self.lapse = self.rnd.uniform(0.3, 0.8)
         trk = r.trk
         st = STAGES[trk.stage[trk.seg(r.pz)]]
         lanes = same_lanes(st)
@@ -1785,7 +1811,7 @@ class Driver:
         def first(lx, back=-1.5 * SEG):
             """The nearest car in the lane at lx that is in the way (distance, car)."""
             best = (None, None)
-            for c in r.cars:
+            for c in ([] if self.lapse > 0 else r.cars):
                 if abs(c.x - lx) < 0.45:
                     dz = c.z - pz
                     if back < dz < look and (c.onc or c.v < r.speed * 0.98 or dz < 3 * SEG):
@@ -1812,7 +1838,7 @@ class Driver:
         # a car in the way of the car's actual path (e.g. while crossing a lane): give up the move or brake
         path_d, path_c = None, None
         tx = lanes[self.lane]
-        for c in r.cars:
+        for c in ([] if self.lapse > 0 else r.cars):
             dz = c.z - pz
             if -1.0 * SEG < dz < look and min(r.x, tx) - 0.4 < c.x < max(r.x, tx) + 0.4 and abs(c.x - r.x) < 0.75:
                 if (c.onc or c.v < r.speed) and (path_d is None or dz < path_d):
@@ -1840,7 +1866,7 @@ class Driver:
         # speed: brake for curves the car cannot hold, and when boxed in
         span = int(10 + 26 * sp)
         cmax = max(abs(trk.curve[min(trk.n - 1, pseg + j)]) for j in range(0, span, 2))
-        limit = safe_speed(cmax, 0.75 if self.sloppy else 0.85)
+        limit = safe_speed(cmax, self.margin if self.sloppy else 0.85)
         brake = sp > limit + 0.02
         for d, c in ((cur_d, cur_c), (path_d, path_c)):
             if c is not None and (c is path_c or abs(r.x - lanes[self.lane]) < 0.3):
@@ -1892,7 +1918,7 @@ class TitleDemo:
         cv = self.scene(cols, rows, dt)
         sc = load_scores().get(GAME, {})
         items = ["Drive", "Start  < stage %d  %s >" % (start + 1, STAGES[start]["name"]),
-                 "Throttle  < %s >" % ("auto" if auto else "manual")]
+                 "Throttle  < %s >" % ("auto" if auto else "manual"), AUTO_LABEL]
         best = sc.get("score")
         line = None
         if best is not None:
@@ -1904,6 +1930,77 @@ class TitleDemo:
                      keys="Up/Down choose   Left/Right change   Enter drive   ? help   Esc quit",
                      help_lines=HELP, show_help=help_, dim=0.35)
         return cv
+
+
+class AutoRun:
+    """Auto mode: the real race (HUD, rules, clock, traffic, sound) from the chosen stage with the chosen
+    throttle, driven by a human-like Driver. Each run the driver has a different "form" - from steady to
+    jittery and distracted - so it usually gets far and sometimes runs out of time. Nothing is recorded."""
+    STEP = 1 / 30
+    END_SHOW = 3.0                                    # real seconds the result box stays up
+
+    def __init__(self, start=0, throttle_auto=True, seed=None, speed=1.0):
+        self.ctl = AutoMode(speed)
+        self.start, self.throttle_auto = start, throttle_auto
+        self.rnd = random.Random(seed)
+        self.rounds = 0
+        self.results = []                             # (state, stage reached, score) of finished runs
+        self.new_round()
+
+    def new_round(self):
+        u = self.rnd.random()
+        form = (4 + int(round(3 * u)), 0.16 + 0.19 * u, 25.0 - 21.0 * u, 0.75)
+        self.r = Race(self.start, auto=self.throttle_auto, seed=self.rnd.randrange(1 << 30))
+        self.d = Driver(human=True, seed=self.rnd.randrange(1 << 30), form=form)
+        self.end_t = 0.0
+        self.logged = False
+        self.rounds += 1
+
+    def tick(self, dt):
+        """Advance by one real frame of dt seconds (scaled by the auto-mode speed, nothing while paused)."""
+        r = self.r
+        for _ in range(self.ctl.steps(dt, self.STEP)):
+            self.d.act(r, self.STEP)
+            r.update(self.STEP)
+        if r.state in ("timeup", "finish") and not (self.ctl.paused or self.ctl.help):
+            if not self.logged:
+                self.logged = True
+                self.results.append((r.state, r.stage_index + 1, int(r.score)))
+            self.end_t += dt
+            if self.end_t > self.END_SHOW + 0.8:
+                self.new_round()
+
+    def frame(self, cols, rows):
+        r = self.r
+        cv = render(r, cols, rows)
+        if r.state in ("timeup", "finish") and self.end_t > 0.8:
+            render_end(cv, r, None, auto=True)
+        self.ctl.banner(cv, extra="run %d" % self.rounds)
+        return cv
+
+
+def run_auto(term, start, throttle_auto):
+    """Auto mode until the viewer presses Esc / Q."""
+    a = AutoRun(start, throttle_auto)
+    last = time.time()
+    while True:
+        now = time.time()
+        for k in term.keys(0):
+            res = a.ctl.key(k)
+            if res == "stop":
+                return
+            if res == "sound" and SND.toggle():
+                SND.play("select")
+        a.tick(min(0.1, now - last))
+        last = now
+        cols, rows = term.size()
+        if cols < 70 or rows < 22:
+            small(term)
+            time.sleep(0.2)
+            last = time.time()
+            continue
+        term.write(a.frame(cols, rows).emit())
+        time.sleep(max(0.0, 1 / 32 - (time.time() - now)))
 
 
 def small(term):
@@ -1939,10 +2036,10 @@ def main():
                     elif k in ("q", "esc"):
                         return
                     elif k in ("up", "w"):
-                        sel = (sel - 1) % 3
+                        sel = (sel - 1) % 4
                         SND.play("select")
                     elif k in ("down", "s"):
-                        sel = (sel + 1) % 3
+                        sel = (sel + 1) % 4
                         SND.play("select")
                     elif k in ("left", "right", "a", "d"):
                         d = -1 if k in ("left", "a") else 1
@@ -1952,8 +2049,12 @@ def main():
                             auto = not auto
                         SND.play("select")
                     elif k in ("enter", " "):
-                        go = True
                         SND.play("start")
+                        if sel == 3:
+                            run_auto(term, start, auto)
+                            last = time.time()
+                        else:
+                            go = True
             while True:                                  # one race; Enter on the end screen starts another
                 r = Race(start, auto=auto)
                 last = time.time()
@@ -2111,12 +2212,44 @@ def selftest():
             cv.emit(False)
         r.state = "timeup"
         render_end(render(r, 70, 22), r, True)
-        demo.frame(70, 22, 0.05, s % 2 == 0, s % 3, 0, s % 2 == 0, 2)
+        demo.frame(70, 22, 0.05, s % 2 == 0, s % 4, 0, s % 2 == 0, 2)
         demo.frame(160, 45, 0.05, False, 1)
+    # 6. auto mode: the real race at x8, headless, never records a score; pause freezes it; a run that ends
+    #    shows the result box and is followed by a new run
+    global submit
+    real_submit, calls = submit, []
+    submit = lambda *a, **k: calls.append(a)
+    try:
+        a = AutoRun(2, False, seed=11, speed=8.0)
+        assert a.ctl.speed == 8.0 and not a.r.demo and a.r.start == 2 and not a.r.auto
+        for i in range(32 * 25):                      # 25 s at x8 = 200 s of racing
+            a.tick(1 / 32)
+            if i % 97 == 0:
+                a.frame(70 + i % 50, 22 + i % 13)
+        auto_dist = a.r.dist
+        assert a.r.stage_index >= 2 and auto_dist > 5000, "auto mode did not get going (%.0f m)" % auto_dist
+        a.ctl.key(" ")
+        t_paused = a.r.t
+        for _ in range(20):
+            a.tick(1 / 32)
+        assert a.r.t == t_paused and a.ctl.paused, "pause does not stop auto mode"
+        a.ctl.key(" ")
+        a.ctl.key("-")
+        assert a.ctl.speed == 4.0
+        a.r.time_left = 0.5                           # let this run end: result box, then the next run
+        for _ in range(32 * 6):
+            a.tick(1 / 32)
+            a.frame(70, 22)
+        assert a.rounds == 2 and a.results and a.results[0][0] == "timeup", "auto mode did not start a new run"
+        assert a.ctl.key("esc") == "stop"
+    finally:
+        submit = real_submit
+    assert not calls, "auto mode submitted a score"
     print("Self-test ok: %d stages sane; autopilot time left per stage %s; nobody at the wheel runs out of time "
           "everywhere; full run with manual throttle finished with %.0f s left; tap %.2f vs held %.2f road widths; "
-          "frames render at 70x22, 111x31, 160x45 (%.1fs)" % (len(STAGES), " ".join(report), full_left, tap / 2,
-                                                            held / 2, time.time() - t0))
+          "frames render at 70x22, 111x31, 160x45; auto mode ran 200 s at x8 (%.1f km), paused, restarted after "
+          "time up, recorded nothing (%.1fs)" % (len(STAGES), " ".join(report), full_left, tap / 2, held / 2,
+                                                 auto_dist / 1000, time.time() - t0))
 
 
 def bench():

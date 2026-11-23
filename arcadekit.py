@@ -581,6 +581,84 @@ def overlay(cv, lines, fg=(240, 240, 246), bg=(22, 22, 42)):
 
 
 # =============================================================================================
+# Auto mode: the game plays itself (every game has it on its title screen); the viewer can pause, change the
+# speed or stop. High scores are never recorded in auto mode.
+# =============================================================================================
+AUTO_LABEL = "Auto mode"          # the title-menu entry, the same wording in every game
+AUTO_BG = (236, 180, 70)
+AUTO_HELP = ["AUTO MODE - the game plays itself", "", "Space            pause / continue", "+ / -            faster / slower",
+             "M                sound on / off", "Esc / Q          stop (back to the title)", "?                this help"]
+
+
+class AutoMode:
+    """Speed, pause and stop for auto mode.
+
+        auto = AutoMode()
+        for k in term.keys():
+            a = auto.key(k)        # 'stop', 'sound', 'help', True (used) or None (not an auto-mode key)
+        sim_dt = auto.scale(dt)    # 0 while paused, dt * speed otherwise (step the game with it)
+        auto.banner(cv)            # the amber AUTO bar (default: on the last row)
+    """
+    SPEEDS = (0.25, 0.5, 1.0, 2.0, 4.0, 8.0)
+
+    def __init__(self, speed=1.0):
+        self.i = self.SPEEDS.index(speed) if speed in self.SPEEDS else 2
+        self.paused = False
+        self.help = False
+
+    @property
+    def speed(self):
+        return self.SPEEDS[self.i]
+
+    def key(self, k):
+        if self.help:                       # any key closes the help
+            self.help = False
+            return True
+        if k in ("esc", "q"):
+            return "stop"
+        if k in (" ", "p", "enter"):
+            self.paused = not self.paused
+            return True
+        if k in ("+", "=", "right", "up"):
+            self.i = min(len(self.SPEEDS) - 1, self.i + 1)
+            return True
+        if k in ("-", "_", "left", "down"):
+            self.i = max(0, self.i - 1)
+            return True
+        if k == "m":
+            return "sound"
+        if k == "?":
+            self.help = True
+            return "help"
+        return None
+
+    def scale(self, dt):
+        return 0.0 if self.paused or self.help else dt * self.speed
+
+    def steps(self, dt, step):
+        """How many fixed simulation steps of length step to run for a real frame of dt (keeps a remainder)."""
+        self._acc = getattr(self, "_acc", 0.0) + self.scale(dt)
+        n = int(self._acc / step)
+        self._acc -= n * step
+        return min(n, int(8 * self.speed) + 1)
+
+    def text(self, extra=""):
+        sp = ("x%g" % self.speed).replace("x0.", "x.")
+        state = "PAUSED" if self.paused else sp
+        return " AUTO %s %s  Space pause   +/- speed   Esc stop " % (state, (" " + extra) if extra else "")
+
+    def banner(self, cv, row=None, extra=""):
+        row = cv.rows - 1 if row is None else row
+        t = self.text(extra)
+        if len(t) > cv.cols:
+            t = (" AUTO %s  Esc stop " % ("PAUSED" if self.paused else ("x%g" % self.speed)))[:cv.cols]
+        cv.put(0, row, " " * cv.cols, (24, 16, 6), shade(AUTO_BG, 0.55))
+        cv.put(max(0, (cv.cols - len(t)) // 2), row, t, (20, 14, 4), AUTO_BG)
+        if self.help:
+            overlay(cv, AUTO_HELP)
+
+
+# =============================================================================================
 # The shared title screen: every game puts its own live scene behind the same layout
 # =============================================================================================
 TITLE_DIM = (6, 6, 14)

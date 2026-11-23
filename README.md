@@ -54,6 +54,10 @@ Homebrew brings its own Python (3.14); the games need nothing else.
 | Enter / Space | confirm |
 | Arrows / WASD | move, choose |
 
+Every game has an **Auto mode** entry on its title screen: the real game plays itself (EMBERFALL: `--auto`,
+or `A` in a run; SKYSHOT: CPU against CPU). Space pauses, `+` / `-` change the speed (x0.25 to x8), Esc stops.
+Auto runs never enter the high-score list.
+
 The pause menu always reads: Esc / P / Enter continue, ? help, M sound on / off, Q quit. No game ends on a single stray key.
 
 ## Pixels: fine, smart or solid
@@ -100,7 +104,7 @@ No dependencies: Python 3 on macOS or Linux (on Windows use WSL). Best in WezTer
 | **NIGHTDRIVE** | Race through the night against the clock: winding hilly roads, headlights and street lamps, traffic and oncoming cars, six stages from neon city to a rainstorm. | 70x22+ |
 | **ORBITAL** | A calm gravity puzzle: launch a probe past planets, moons, asteroid belts and wormholes to the dock ring. Fewer launches, more stars. | 70x22+ |
 | **LEAFLING** | A jump'n'run with a leaf for a hat: run, jump, glide and wall-jump through twelve levels in four worlds (sunlit forest canopy, crystal caves, wind-swept sky ruins, an autumn storm at night), with light motes, hidden seeds, lanterns, beetles, bats, spitting plants, two chases and two bosses. | 70x22+ |
-| **STACKFALL** | Falling blocks in a well ten wide and twenty deep. Modes: Marathon, Sprint (40 rows), Rising (rubble pushes up from below). | 40x20+ |
+| **STACKFALL** | Falling blocks in a well ten wide and twenty deep. Modes: Marathon, Sprint (40 rows), Rising (rubble pushes up from below, every 45 seconds). | 40x20+ |
 | **DEPTHWELL** | Falling blocks in three dimensions: look down into a well, turn cube pieces about all three axes, fill whole layers. Four well sizes, three piece sets. | 70x22+ |
 | **GLIMMER** | A will-o'-wisp in a hedge maze at night: gather the light motes, catch the four shadow spirits while a sun blossom turns them pale. Eight hand-made mazes, some with one-way hedge gates, drifting fog or no light but your own, night treats and an interlude every third maze. | 60x22+ |
 | **SPOREFIELD** | Stop the sporeworm before it reaches the roots: a fixed shooter on a glowing night meadow. Every hit splits the worm and leaves a toadstool; jitterlegs, plumbugs, gloam moths, puffballs and burrowgrubs get in the way, glowing seeds give double sap, piercing sap, slow time, bombs or a shell. Eight palettes, three difficulties. | 60x22+ |
@@ -189,7 +193,7 @@ you reach them) and the throttle: auto (the default, you only steer and brake) o
 
 Every planet pulls on the probe according to its mass; the dotted line shows only the first part of the flight,
 and your last three paths stay on screen as faint lines. Reach the gold dock ring (passing numbered beacons in
-order first): one launch earns three stars, two or three launches two stars. Eight lessons come first, then
+order first): one launch earns three stars, two to four launches two stars. Eight lessons come first, then
 generated levels add moving moons, asteroid belts, wormholes, a fuel nudge and waypoints.
 
 ## LEAFLING keys
@@ -293,7 +297,7 @@ extra beetle every 12000 points.
 | `?` | help |
 
 Reach the kill switch at the top of each stage; on the fifth, pull all six breakers. Jump drums, crates and
-sparks for 100 / 300 / 800 points, or grab a hanging wrench and smash them for 8 seconds (no climbing while you
+sparks for 200 / 400 / 800 points, or grab a hanging wrench and smash them for 8 seconds (no climbing while you
 hold it). Falls further than your jump are fatal. The bonus counts down and is yours when you reach the goal;
 at zero you lose a rigger. Bonus items lie around, an extra rigger comes at 10000 points, and every night (L)
 the Wrecker throws faster. `python3 scaffold.py --selftest` proves every stage can be finished with the game's

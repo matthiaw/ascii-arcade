@@ -18,7 +18,8 @@ import random
 import sys
 import time
 
-from arcadekit import Canvas, Terminal, clamp, load_scores, mix, overlay, shade, shared_key, submit, title_screen
+from arcadekit import (AUTO_LABEL, AutoMode, Canvas, Terminal, clamp, load_scores, mix, overlay, shade, shared_key, submit,
+                       title_screen)
 from arcadesound import Sound
 
 GAME = "orbital"
@@ -273,7 +274,8 @@ INTRO = [  # each teaches one idea; all checked solvable by the self-test
          moons=[(0.8, 0.5, 0.17, 1.2, TAU / 8, 0.022, 0.0015)], preview=1.8, aim=(0.0, 50.0)),
     dict(name="The Belt", hint="Asteroids do not pull, but they are solid. Find the gap in the belt.",
          launch=(0.12, 0.75), planets=[(0.6, 0.4, 0.055, None, "teal", False)], beacons=[(1.34, 0.26)],
-         rocks=_wall(1.0, 0.05, 0.95, (0.47, 0.6)), preview=1.8, aim=(30.0, 50.0)),
+         rocks=_wall(1.0, 0.05, 0.95, (0.44, 0.64)), preview=1.8, aim=(30.0, 50.0)),   # gap was 0.47-0.6: the
+    # narrowest lesson by far (74 docking launches on a 1 deg x 1 % grid against 190-380 around it), now 132
     dict(name="Wormhole", hint="Fly into one mouth, come out of the other one at the same speed.",
          launch=(0.12, 0.8), planets=[(0.8, 0.55, 0.09, None, "violet", True)], beacons=[(1.445, 0.18)],
          rocks=_arc(1.6, 0.0, 0.45, math.pi / 2, math.pi), holes=[((0.45, 0.3), (1.3, 0.25))], preview=1.6,
@@ -331,12 +333,26 @@ def neighbours_hit(L, a, p):
     return n
 
 
+def direct_shot(L):
+    """True when aiming straight at the first beacon docks at some power: the first thing a player tries,
+    so such a level is no puzzle (it happened in about one generated level in ten)."""
+    lx, ly = L.launch
+    tx, ty = L.beacons[0]
+    a = snap(math.degrees(math.atan2(-(ty - ly), tx - lx)) % 360, ANGLE_STEP) % 360
+    p = POWER_MIN
+    while p <= POWER_MAX:
+        if fly(L, a, p).outcome == "dock":
+            return True
+        p += 2 * POWER_STEP
+    return False
+
+
 def generate(g, num):
     """Generated level number g (1, 2, ...). Re-rolls the seed deterministically until the level is fair."""
     for attempt in range(400):
         rnd = random.Random(g * 7919 + attempt * 104729 + 17)
         L = build(rnd, g, num)
-        if L is not None:
+        if L is not None and not direct_shot(L):
             return L
     raise RuntimeError("could not build generated level %d" % g)
 
@@ -558,6 +574,212 @@ def search(L, astep=1.0, pstep=2.0, limit=None):
             if limit and tries >= limit:
                 return None
     return None
+
+
+# =============================================================================================
+# Auto mode: a pilot that studies the map (it searches angle and power with the game's own physics, like the
+# self-test), then sets the aim with the arrow keys and launches like a player: the first launch carries an aiming
+# error that shrinks with every miss, so narrow docking windows take a few tries and wide ones are hit at once.
+# =============================================================================================
+def search_steps(L, astep=1.0, pstep=2.0):
+    """search() in small pieces: yields None while it works, then (angle, power, tries) or False."""
+    lx, ly = L.launch
+    tx, ty = L.beacons[0]
+    direct = math.degrees(math.atan2(-(ty - ly), tx - lx))
+    n = int(round(360 / astep))
+    angles = sorted((i * astep for i in range(n)), key=lambda a: abs((a - direct + 180) % 360 - 180))
+    powers = [POWER_MIN + i * pstep for i in range(int((POWER_MAX - POWER_MIN) / pstep) + 1)]
+    tries = 0
+    for a in angles:
+        for p in powers:
+            tries += 1
+            if fly(L, a, p).outcome == "dock":
+                yield (a, p, tries)
+                return
+            yield None
+    yield False
+
+
+def miss(L, a, p):
+    """How far a launch stays from the next beacon it has to pass (0 = it docks); beacons left count extra."""
+    f = fly(L, a, p)
+    if f.outcome == "dock":
+        return 0.0
+    bx, by = L.beacons[f.nb]
+    d = min((q[0] - bx) ** 2 + (q[1] - by) ** 2 for q in f.path if q is not None)
+    return math.sqrt(d) + 0.4 * (len(L.beacons) - 1 - f.nb)
+
+
+def guided_steps(L):
+    """A quicker search than search(): a coarse sweep (5 degrees x 15 % power) that remembers how close each
+    launch came, then a pattern search (halving steps down to the arrow-key grid) from the eight best
+    distinct ones. Yields None per flight, then (angle, power, flights); falls back to the full fine search."""
+    lx, ly = L.launch
+    tx, ty = L.beacons[0]
+    direct = math.degrees(math.atan2(-(ty - ly), tx - lx))
+    n = 0
+    cand = []
+    for a in sorted(range(0, 360, 5), key=lambda a: abs((a - direct + 180) % 360 - 180)):
+        for p in (20, 35, 50, 65, 80, 95):
+            n += 1
+            m = miss(L, float(a), float(p))
+            if m == 0:
+                yield (float(a), float(p), n)
+                return
+            cand.append((m, float(a), float(p)))
+            yield None
+    cand.sort()
+    starts = []
+    for c in cand:
+        if all(abs((c[1] - b + 180) % 360 - 180) > 6 or abs(c[2] - q) > 10 for _, b, q in starts):
+            starts.append(c)
+        if len(starts) >= 8:
+            break
+    for m, a, p in starts:
+        sa, sp = 2.5, 7.5
+        while sa >= ANGLE_STEP - 1e-9:
+            best = None
+            for da, dp in ((sa, 0), (-sa, 0), (0, sp), (0, -sp), (sa, sp), (-sa, -sp), (sa, -sp), (-sa, sp)):
+                aa = snap((a + da) % 360, ANGLE_STEP) % 360
+                pp = clamp(snap(p + dp, POWER_STEP), POWER_MIN, POWER_MAX)
+                n += 1
+                mm = miss(L, aa, pp)
+                if mm == 0:
+                    yield (aa, pp, n)
+                    return
+                if mm < m and (best is None or mm < best[0]):
+                    best = (mm, aa, pp)
+                yield None
+            if best:
+                m, a, p = best
+            else:
+                sa, sp = sa / 2, max(POWER_STEP, sp / 2)
+    for r in search_steps(L, ANGLE_STEP, POWER_STEP):
+        n += 1
+        yield None if r is None else r if r is False else (r[0], r[1], n)
+
+
+def window_centre(L, a, p, reach=12):
+    """The middle of the docking window around a known hit, on the arrow-key grid: first along the angle,
+    then along the power. Returns (angle, power, width in angle steps, width in power steps)."""
+    def docks(aa, pp):
+        return POWER_MIN <= pp <= POWER_MAX and fly(L, aa % 360, pp).outcome == "dock"
+    lo = hi = 0
+    while lo > -reach and docks(a + (lo - 1) * ANGLE_STEP, p):
+        lo -= 1
+    while hi < reach and docks(a + (hi + 1) * ANGLE_STEP, p):
+        hi += 1
+    a = snap((a + (lo + hi) / 2 * ANGLE_STEP) % 360, ANGLE_STEP) % 360
+    plo = phi = 0
+    while plo > -reach and docks(a, p + (plo - 1) * POWER_STEP):
+        plo -= 1
+    while phi < reach and docks(a, p + (phi + 1) * POWER_STEP):
+        phi += 1
+    p = clamp(snap(p + (plo + phi) / 2 * POWER_STEP, POWER_STEP), POWER_MIN, POWER_MAX)
+    return a, p, hi - lo + 1, phi - plo + 1
+
+
+class Pilot:
+    """Plays ORBITAL through Game.key. think(seconds) does the searching (call it once per frame with a time
+    budget); update(dt) presses the keys in game time."""
+    AIM_ERR = (2.2, 5.0)         # first-launch aiming error (degrees, percent power), shrinking per miss
+    SHRINK = 0.4
+
+    def __init__(self, rnd=None):
+        self.rnd = rnd or random.Random()
+        self.num = None
+        self.wait = 0.0
+        self.searching = None
+        self.target = None       # the centre of the docking window
+        self.aim = None          # where this launch goes
+        self.err = (0.0, 0.0)
+        self.study = 0.0
+        self.attempt_seen = -1
+        self.flights = 0         # simulated flights for the current level (the "how hard is it to find" number)
+
+    def new_level(self, g):
+        self.num = g.num
+        self.target = self.aim = None
+        self.searching = guided_steps(g.L)
+        self.study = 1.2 + self.rnd.random() * 0.8            # look at the map for a moment first
+        self.attempt_seen = -1
+        self.flights = 0
+        ang = self.rnd.uniform(0, TAU)
+        k = self.rnd.uniform(0.5, 1.0)
+        self.err = (math.cos(ang) * self.AIM_ERR[0] * k, math.sin(ang) * self.AIM_ERR[1] * k)
+
+    def think(self, budget):
+        """Search for a launch that docks, for at most `budget` seconds of real time."""
+        if self.searching is None:
+            return
+        end = time.time() + budget
+        while time.time() < end:
+            r = next(self.searching)
+            self.flights += 1
+            if r is None:
+                continue
+            if r is False:                    # cannot happen (the self-test solves every level); aim somewhere
+                self.searching = None
+                self.target = self.L_aim
+                return
+            a, p, _ = r
+            a, p, _, _ = window_centre(self.L, a, p)
+            if fly(self.L, a, p).outcome != "dock":
+                a, p = r[0], r[1]
+            self.target = (a, p)
+            self.searching = None
+            return
+
+    def plan_launch(self, g):
+        """The aim for the next launch: the window centre plus an error that shrinks with each miss."""
+        n = g.attempts                         # launches already made on this level
+        if n >= 4:
+            k = 0.0
+        else:
+            k = self.SHRINK ** n
+        a = snap((self.target[0] + self.err[0] * k) % 360, ANGLE_STEP) % 360
+        p = clamp(snap(self.target[1] + self.err[1] * k, POWER_STEP), POWER_MIN, POWER_MAX)
+        self.aim = (a, p)
+
+    def update(self, g, dt):
+        if g.paused:
+            return
+        if g.num != self.num:
+            self.L = g.L
+            self.L_aim = g.L.aim
+            self.new_level(g)
+        self.wait -= dt
+        self.study -= dt
+        if self.wait > 0:
+            return
+        if g.state == "done":
+            self.wait = 2.8                    # enjoy the stars, then on to the next level
+            if getattr(self, "done_seen", None) == (g.num, g.attempts):
+                g.key("enter", g.t)
+                return
+            self.done_seen = (g.num, g.attempts)
+            return
+        if g.state != "aim" or self.target is None or self.study > 0:
+            return
+        if self.attempt_seen != g.attempts:    # a fresh aim for this launch
+            self.attempt_seen = g.attempts
+            self.plan_launch(g)
+            self.wait = 0.35 + self.rnd.random() * 0.4
+            return
+        a, p = self.aim
+        da = (a - g.angle + 180) % 360 - 180
+        dp = p - g.power
+        if abs(da) > 1e-9:
+            k, far = ("left" if da > 0 else "right"), abs(da) > 6
+        elif abs(dp) > 1e-9:
+            k, far = ("up" if dp > 0 else "down"), abs(dp) > 6
+        else:
+            g.key("enter", g.t)                # launch
+            self.wait = 0.2
+            return
+        # far away: hold the key (fast repeat); close by: single taps
+        g.key(k, g.t)
+        self.wait = 0.03 if far else 0.13
 
 
 # =============================================================================================
@@ -919,7 +1141,9 @@ def draw_star(px, x, y, col):
 # The game
 # =============================================================================================
 def stars_for(attempts):
-    return 3 if attempts <= 1 else 2 if attempts <= 3 else 1
+    # 2 stars up to 4 launches (was 3): later levels have docking windows only one or two arrow taps wide,
+    # and even a pilot that knows the answer and only mis-aims a little needed 4 launches on them now and then
+    return 3 if attempts <= 1 else 2 if attempts <= 4 else 1
 
 
 def load_progress():
@@ -940,7 +1164,8 @@ SPEED = 1.0
 
 
 class Game:
-    def __init__(self, num=1, progress=None):
+    def __init__(self, num=1, progress=None, auto=False):
+        self.auto = auto                    # auto mode: stars are shown but never saved
         self.progress = load_progress() if progress is None else progress
         self.paused = self.help = False
         self.t = 0.0
@@ -1091,10 +1316,11 @@ class Game:
             stars = stars_for(self.attempts)
             old = self.progress.get(self.num, 0)
             self.progress[self.num] = max(old, stars)
-            submit(LEVELS_KEY, str(self.num), stars)
             total = sum(self.progress.values())
-            submit(GAME, "stars", total)
-            submit(GAME, "levels", max(self.progress))
+            if not self.auto:
+                submit(LEVELS_KEY, str(self.num), stars)
+                submit(GAME, "stars", total)
+                submit(GAME, "levels", max(self.progress))
             self.banner = (stars, self.attempts, stars > old and old > 0, total)
             self.banner_t = self.t
             self.state = "done"
@@ -1297,10 +1523,12 @@ HELP = [
     "",
     "Gravity bends the path; the dots show only its first part.",
     "Reach the gold dock ring (pass numbered beacons first).",
-    "1 launch = 3 stars, 2-3 launches = 2 stars, more = 1 star.",
+    "1 launch = 3 stars, 2-4 launches = 2 stars, more = 1 star.",
     "",
     "Esc / P             pause menu (Q there: quit, M: sound on / off)",
     "?                   this help",
+    "",
+    "Auto mode: the game plays itself (Space pause, +/- speed, Esc stop).",
 ]
 PAUSE = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "M                 sound on / off",
          "Q                 quit to the menu"]
@@ -1358,7 +1586,8 @@ class TitleDemo:
         got = self.progress.get(pick, 0) if self.progress else 0
         sel_txt = "%s %2d %s" % ("<" if pick > 1 else " ", pick, ">" if pick < unlocked else " ")
         items = ["Continue        level %d" % unlocked,
-                 "Level select   %s  %s" % (sel_txt, "★" * got + "·" * (3 - got) if got else "new"), "From level 1"]
+                 "Level select   %s  %s" % (sel_txt, "★" * got + "·" * (3 - got) if got else "new"), "From level 1",
+                 "%-14s from level %d" % (AUTO_LABEL, pick)]
         best = "best: %d levels solved, %d stars" % (solved, stars) if solved else None
         extra = ["", "Set angle and power, launch, and let", "gravity carry the probe to the dock."]
         title_screen(cv, "ORBITAL", "a calm gravity puzzle among the planets", items, sel, best, extra=extra,
@@ -1372,6 +1601,45 @@ class TitleDemo:
 # =============================================================================================
 def too_small(term):
     term.write("\x1b[0m\x1b[2J\x1b[HPlease make the window larger (70x22).")
+
+
+AUTO_STEP = 1 / 40          # auto mode steps the game in fixed slices (more of them when sped up)
+
+
+def run_auto(term, start, progress):
+    """Auto mode: the pilot plays from level `start` onwards until the viewer stops it. Nothing is saved.
+    Returns the level it reached (the title's level select stays within the unlocked ones)."""
+    auto = AutoMode()
+    g = Game(start, dict(progress), auto=True)
+    painter = Painter()
+    pilot = Pilot()
+    last = time.time()
+    while True:
+        now = time.time()
+        dt = min(0.1, now - last)
+        last = now
+        for k in term.keys(0):
+            a = auto.key(k)
+            if a == "stop":
+                return g.num
+            if a == "sound" and SND.toggle():
+                SND.play("sound_on")
+        if not auto.paused and not auto.help:
+            pilot.think(0.012)                       # the search shares the frame with drawing
+        for _ in range(auto.steps(dt, AUTO_STEP)):
+            pilot.update(g, AUTO_STEP)
+            g.update(AUTO_STEP)
+        cols, rows = term.size()
+        if cols < 70 or rows < 22:
+            too_small(term)
+            time.sleep(0.2)
+            continue
+        cv = render(g, painter, cols, rows)
+        status = ("studying the map" if pilot.target is None else "docked" if g.state == "done" else
+                  "launch %d" % (g.attempts + (g.state == "aim")))
+        auto.banner(cv, row=0, extra="level %d  %s" % (g.num, status))
+        term.write(cv.emit())
+        time.sleep(max(0.0, 1 / 40 - (time.time() - now)))
 
 
 def main():
@@ -1405,16 +1673,19 @@ def main():
                     elif k in ("q", "esc"):
                         return
                     elif k in ("up", "w"):
-                        sel = (sel - 1) % 3
+                        sel = (sel - 1) % 4
                     elif k in ("down", "s"):
-                        sel = (sel + 1) % 3
-                    elif k in ("left", "a", "right", "d") and sel == 1:
+                        sel = (sel + 1) % 4
+                    elif k in ("left", "a", "right", "d") and sel in (1, 3):   # auto mode starts at the picked level
                         pick = clamp(pick + (1 if k in ("right", "d") else -1), 1, unlocked)
                     elif k in ("left", "a", "right", "d"):
                         sel = 1
                         pick = clamp(pick + (1 if k in ("right", "d") else -1), 1, unlocked)
                     elif k in ("enter", " "):
-                        start = (unlocked, pick, 1)[sel]
+                        start = (unlocked, pick, 1, pick)[sel]
+            if sel == 3:
+                pick = run_auto(term, start, progress)
+                continue
             g = Game(start, progress)
             painter = Painter()
             last = time.time()
@@ -1471,6 +1742,28 @@ def keys_to(g, angle, power, held=False):
     return False
 
 
+class FakeTerm:
+    """Stands in for the terminal: scripted keys by time, a fixed size, output thrown away."""
+
+    def __init__(self, script, size=(100, 32)):
+        self.script = sorted(script)                 # [(seconds after start, key)]
+        self.t0 = time.time()
+        self.cols_rows = size
+        self.frames = 0
+
+    def keys(self, timeout=0.0):
+        now = time.time() - self.t0
+        out = [k for t, k in self.script if t <= now]
+        self.script = [(t, k) for t, k in self.script if t > now]
+        return out
+
+    def size(self):
+        return self.cols_rows
+
+    def write(self, s):
+        self.frames += 1
+
+
 def selftest():
     import arcadekit
     import os
@@ -1495,6 +1788,8 @@ def selftest():
         assert fly(L, a, p).outcome == "dock"
         if num > 3:
             assert fly(L, *L.aim).outcome != "dock", "level %d is solved by the default aim" % num
+        if num > len(INTRO):
+            assert not direct_shot(L), "level %d is solved by aiming straight at the dock" % num
         if L.solution:
             assert fly(L, *L.solution).outcome == "dock", "level %d: its generated solution fails" % num
         # the arrow keys reach the solution exactly, and launching it from the game docks
@@ -1551,7 +1846,7 @@ def selftest():
     assert g.state == "after" and g.attempts == 1 and len(g.history) == 1
     g.key("n", 0)
     assert g.num == 1, "a locked level opened"
-    assert stars_for(1) == 3 and stars_for(3) == 2 and stars_for(4) == 1
+    assert stars_for(1) == 3 and stars_for(4) == 2 and stars_for(5) == 1
     assert load_progress().get(1) == 3 and load_scores()[GAME]["stars"] >= 3
     # key repeat: taps are fine, holding speeds up, the aim stays on the grid
     g = Game(1, {})
@@ -1565,12 +1860,46 @@ def selftest():
     for i in range(40):
         g.key("right", 9.0 + i * 0.03)
     assert abs(g.angle / ANGLE_STEP - round(g.angle / ANGLE_STEP)) < 1e-9
+    # auto mode: the pilot docks level after level at x8, in a few launches, and saves nothing
+    before = load_scores()
+    auto = AutoMode()
+    for _ in range(5):
+        auto.key("+")
+    assert auto.speed == 8.0
+    g = Game(1, dict(load_progress()), auto=True)
+    pilot = Pilot(random.Random(3))
+    docked = []
+    for frame in range(40 * 120):                   # up to 120 s of watching at x8
+        pilot.think(1.0)
+        for _ in range(auto.steps(1 / 40, AUTO_STEP)):
+            n, st = g.num, g.state
+            pilot.update(g, AUTO_STEP)
+            g.update(AUTO_STEP)
+            if g.state == "done" and st != "done":
+                docked.append((n, g.attempts))
+        if g.num > 4:
+            break
+    assert [n for n, _ in docked] == [1, 2, 3, 4], "the pilot did not get through levels 1-4: %s" % docked
+    assert all(1 <= a <= 5 for _, a in docked)
+    assert load_scores() == before, "auto mode saved progress"
+    # the pilot's quick search finds a docking launch on every level the self-test checks
+    for num in (2, 6, 9, len(INTRO) + 31, len(INTRO) + 51):
+        r = None
+        for r in guided_steps(get_level(num)):
+            if r is not None:
+                break
+        assert r and fly(get_level(num), r[0], r[1]).outcome == "dock", "guided search failed on level %d" % num
+    # the real auto-mode loop with scripted keys: speed up, pause, help, stop
+    term = FakeTerm([(0.05, "+"), (0.1, "+"), (0.15, "+"), (0.8, " "), (1.0, "?"), (1.1, "x"), (1.2, " "), (2.0, "esc")])
+    assert run_auto(term, 2, {1: 3}) >= 2 and term.frames > 10 and not term.script
+    assert load_scores() == before, "auto mode saved progress"
     # every screen draws at the smallest and a large window
     painter = Painter()
     for cols, rows in ((70, 22), (160, 45), (101, 37)):
         demo = TitleDemo()
         for i in range(3):
             demo.frame(cols, rows, 0.05, i == 1, i, 5, 3, 12, 4).emit(True)
+        demo.frame(cols, rows, 0.05, False, 3, 5, 3, 12, 4).emit(True)      # the auto-mode entry
         for num in (1, 5, 6, 8, len(INTRO) + 33):
             g = Game(num, {1: 3})
             render(g, painter, cols, rows).emit(True)
@@ -1591,7 +1920,8 @@ def selftest():
     os.path.exists(tmp.name) and os.unlink(tmp.name)
     print("Self-test ok: %d hand-made + 60 generated levels all solvable with the arrow keys "
           "(search tried %d launches, worst %d on level %d), no default aim solves a level past 3, "
-          "deterministic flights, preview = flight, wormhole, nudge, stars, saving, rendering at 70x22 / 160x45 "
+          "no generated level solved by a straight shot, deterministic flights, preview = flight, wormhole, nudge, "
+          "stars, saving, auto mode (pilot docks levels 1-4 at x8, nothing saved), rendering at 70x22 / 160x45 "
           "(%.1fs)" % (len(INTRO), tries_total, worst[0], worst[1], time.time() - t0))
 
 

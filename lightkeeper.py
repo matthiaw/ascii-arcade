@@ -22,7 +22,8 @@ import sys
 import time
 from collections import deque
 
-from arcadekit import Canvas, Terminal, clamp, load_scores, mix, overlay, shade, shared_key, submit, title_screen
+from arcadekit import (AUTO_LABEL, AutoMode, Canvas, Terminal, clamp, load_scores, mix, overlay, shade, shared_key,
+                       submit, title_screen)
 from arcadesound import Sound
 
 GAME = "lightkeeper"
@@ -907,6 +908,8 @@ HELP_SOLO = [
     "",
     "Esc / P                  pause menu (Q there: quit, M: sound on / off)",
     "?                        this help",
+    "",
+    "Auto mode: the game plays itself (Space pause, +/- speed, Esc stop)",
 ]
 HELP_COOP = [
     "LIGHTKEEPER - keys (two keepers)",
@@ -920,6 +923,8 @@ HELP_COOP = [
     "",
     "Esc / P            pause menu (Q there: quit, M: sound on / off)",
     "?                  this help",
+    "",
+    "Auto mode: the game plays itself (Space pause, +/- speed, Esc stop)",
 ]
 PAUSE = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "M                 sound on / off",
          "Q                 quit to the menu"]
@@ -991,14 +996,14 @@ def render_dawn(cv, camp):
     cv.put(x0 + 4, y + 1, "Up / Down choose   Enter take it", (150, 140, 136), bg)
 
 
-def render_over(cv, camp, record):
+def render_over(cv, camp, record, auto=False):
     n = camp.n
     lines = ["T H E   L I G H T   G O E S   O U T", "", "You kept the light for %d night%s." % (
         n.night - 1, "" if n.night == 2 else "s") if n.night > 1 else "The first night was too much.", "",
         "final score  %d" % n.score]
     if record:
         lines += ["", "** NEW RECORD **"]
-    lines += ["", "Enter: a new watch   Esc / Q: menu"]
+    lines += ["", "a new watch begins in a moment   Esc: menu" if auto else "Enter: a new watch   Esc / Q: menu"]
     w = max(len(l) for l in lines) + 4
     cv.box(max(0, (cv.cols - w) // 2), max(0, cv.rows // 2 - len(lines) // 2 - 1), [l.center(w - 4) for l in lines],
            (240, 240, 246), (30, 16, 24))
@@ -1036,10 +1041,114 @@ class TitleDemo:
         best = load_scores().get(GAME, {})
         rec = " / ".join("%s %d" % (m, v) for m, v in sorted(best.items()))
         title_screen(cv, "LIGHTKEEPER", "one beam, many ships, a long night",
-                     ["One keeper (solo)", "Two keepers (co-op: the second steers the rescue boat)"], sel,
+                     ["One keeper (solo)", "Two keepers (co-op: the second steers the rescue boat)", AUTO_LABEL], sel,
                      "best: " + rec if rec else None, help_lines=HELP_COOP if sel == 1 else HELP_SOLO,
                      show_help=help_, dim=0.4)
         return cv
+
+
+# =============================================================================================
+# Auto mode: a keeper bot runs the light, the horn, the oil and the rescue boat, night after night
+# =============================================================================================
+STEP = 1 / 40          # the fixed simulation step of auto mode (and of the balance runs)
+THINK = 6              # the bot decides every 6 steps (0.15 s) - quick, but not superhuman
+UPGRADE_ORDER = ["boat", "buoy", "lens", "pier", "horn", "tank", "gear"]   # the bot's taste (from the balance runs)
+
+
+def bot_upgrade(camp):
+    """The bot's pick at dawn: a lifebuoy when it is down to its last one, otherwise its favourite."""
+    keys = [o[0] for o in camp.offer]
+    if "buoy" in keys and camp.n.lives <= 1:
+        return keys.index("buoy")
+    return min(range(len(keys)), key=lambda i: UPGRADE_ORDER.index(keys[i]))
+
+
+class AutoKeeper:
+    """One auto-mode watch: the real campaign (real nights, HUD, sound) with the keeper bot at the controls."""
+
+    def __init__(self, W, H, seed=None, quiet=False):
+        self.camp = Campaign(1, W, H, seed)
+        self.quiet = quiet
+        self.camp.n.quiet = quiet
+        self.steps = 0
+        self.wait = 0.0        # game seconds on the dawn / end screen
+
+    def step(self):
+        """One fixed step. Returns 'over' once the end box has been shown for ~3 s (then start a new watch)."""
+        camp = self.camp
+        n = camp.n
+        if n.over:
+            self.wait += STEP
+            return "over" if self.wait > 3.0 else None
+        if n.dawn:
+            if self.wait == 0.0:
+                camp.pick = bot_upgrade(camp)
+            self.wait += STEP
+            if self.wait > 3.0:
+                if not self.quiet:
+                    SND.play("upgrade")
+                camp.take_upgrade()
+                camp.n.quiet = self.quiet
+                self.wait = 0.0
+            return None
+        if self.steps % THINK == 0:
+            keeper(n)
+        self.steps += 1
+        n.update(STEP)
+        return None
+
+
+def run_auto(term, seconds=None, headless=None):
+    """Auto mode until Esc. headless=(cols, rows) runs without a terminal at x8 for `seconds` (self-test).
+    Never records a score."""
+    auto = AutoMode(8.0 if headless else 1.0)
+    t_end = time.time() + seconds if seconds else None
+    watches, nights = 0, 0
+    while True:
+        cols, rows = headless or term.size()
+        ak = AutoKeeper(*map_size(cols, rows - 1), quiet=bool(headless))
+        last = time.time()
+        done = False
+        while not done:
+            now = time.time()
+            if t_end and now > t_end:
+                return watches, nights + ak.camp.night_no
+            if not headless:
+                for k in term.keys(0):
+                    a = auto.key(k)
+                    if a == "stop":
+                        return watches, nights + ak.camp.night_no
+                    if a == "sound":
+                        if SND.toggle():
+                            SND.play("sound_on")
+            for _ in range(auto.steps(1 / 30 if headless else min(0.1, now - last), STEP)):
+                if ak.step() == "over":
+                    done = True
+                    break
+            last = now
+            if headless:
+                continue
+            cols, rows = term.size()
+            if cols < 70 or rows < 22:
+                term.write("\x1b[0m\x1b[2J\x1b[HPlease make the window larger (70x22).")
+                time.sleep(0.2)
+                continue
+            term.write(auto_frame(ak, auto, cols, rows).emit())
+            time.sleep(max(0.0, 1 / 30 - (time.time() - now)))
+        watches += 1
+        nights += ak.camp.night_no
+
+
+def auto_frame(ak, auto, cols, rows):
+    camp = ak.camp
+    n = camp.n
+    cv = render(n, camp.p, cols, rows)
+    if n.dawn:
+        render_dawn(cv, camp)
+    if n.over:
+        render_over(cv, camp, None, auto=True)
+    auto.banner(cv, row=rows - 2, extra=("night %d" % n.night) if cols >= 100 else "")
+    return cv
 
 
 def main():
@@ -1066,12 +1175,17 @@ def main():
                         help_ = True
                     elif k in ("q", "esc"):
                         return
-                    elif k in ("up", "w", "down", "s"):
-                        sel = 1 - sel
-                    elif k in ("1", "2"):
+                    elif k in ("up", "w"):
+                        sel = (sel - 1) % 3
+                    elif k in ("down", "s"):
+                        sel = (sel + 1) % 3
+                    elif k in ("1", "2", "3"):
                         sel = int(k) - 1
                     elif k in ("enter", " "):
                         go = True
+            if sel == 2:
+                run_auto(term)
+                continue
             keepers = sel + 1
             mode = "solo" if keepers == 1 else "co-op"
             while True:                                    # one watch; Enter on the end screen starts another
@@ -1173,8 +1287,10 @@ def keeper(n, asleep=False):
     d = wrap(want - n.beam)
     dist = math.hypot(target.x - lx, target.y - ly)
     if abs(d) > 0.05:
-        if (d > 0 and n.spin < min(3.0, abs(d) * 6)) or (d < 0 and n.spin > -min(3.0, abs(d) * 6)):
-            n.key("right" if d > 0 else "left")
+        top = min(3.0 * (1.3 ** n.up.get("gear", 0)), abs(d) * 6)     # the geared mechanism turns faster
+        for _ in range(1 + (abs(d) > 0.6) + (abs(d) > 1.2)):    # far off: hold the key (auto-repeat)
+            if (d > 0 and n.spin < top) or (d < 0 and n.spin > -top):
+                n.key("right" if d > 0 else "left")
     else:
         n.spin *= 0.3
     # focus: narrow for far targets, wide for near ones
@@ -1243,8 +1359,34 @@ def selftest():
     assert n.boat.x != x0, "the second player cannot steer the rescue boat"
     p = Painter(n)
     render(n, p, 120, 36)
+    # auto mode: the real campaign at x8 for a few seconds headless, no score is ever submitted
+    global submit
+    real_submit, sent = submit, []
+    submit = lambda *a, **k: sent.append(a)
+    try:
+        watches, nights = run_auto(None, seconds=6, headless=(120, 36))
+    finally:
+        submit = real_submit
+    assert not sent, "auto mode submitted a score"
+    assert nights >= 2, "auto mode did not get past the first night in 6 s at x8 (%d)" % nights
+    auto = AutoMode()
+    for _ in range(6):
+        auto.key("+")
+    assert auto.speed == 8.0 and auto.steps(1 / 30, STEP) >= 10, "x8 does not speed up the game"
+    auto.key(" ")
+    assert auto.steps(1 / 30, STEP) == 0, "auto mode keeps running while paused"
+    ak = AutoKeeper(120, 70, seed=4, quiet=True)
+    while not ak.camp.n.dawn and not ak.camp.n.over:
+        ak.step()
+    ak.camp.n.lives = 1
+    assert ak.camp.offer[bot_upgrade(ak.camp)][0] == "buoy" or "buoy" not in [o[0] for o in ak.camp.offer]
+    auto_frame(ak, auto, 120, 36).emit(True)
+    ak.camp.n.over = True
+    auto.key("?")
+    auto_frame(ak, auto, 70, 22).emit(True)
     print("Self-test ok: 60 coasts navigable, the attentive keeper got through 3 nights %d of 8 times,"
-          " a sleeping keeper did worse %d of 8 times, co-op boat steers (%.1fs)" % (wins, sleepy_losses, time.time() - t0))
+          " a sleeping keeper did worse %d of 8 times, co-op boat steers, auto mode ran 6 s at x8 (%d nights,"
+          " %d watches over), no score submitted (%.1fs)" % (wins, sleepy_losses, nights, watches, time.time() - t0))
 
 
 def bench():

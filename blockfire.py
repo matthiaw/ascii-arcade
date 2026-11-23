@@ -87,6 +87,7 @@ PLAYER_R = 0.22
 BOT_R = 0.25
 BEST_FILE = os.path.expanduser("~/.blockfire_best")
 FIRE_CD, PULSE_CD = 0.28, 0.6   # seconds between shots (bullets / pulse mode when out of ammo)
+AMMO_PICK, AMMO_CLEAR = 15, 10    # ammo from a pickup / for clearing a wave (was 20 / 15: ammo never ran low)
 
 # --- Sound effects (short and soft; the gunshot's gap is the fire interval) --------------------------------
 SND = Sound("blockfire", {
@@ -225,6 +226,7 @@ class Game:
             self.grid.append(out)
         self.start = start
         self.best = self.load_best()
+        self.auto = False          # auto mode: never records a best score
         self.reset()
 
     def reset(self):
@@ -277,6 +279,8 @@ class Game:
             return 0
 
     def save_best(self):
+        if self.auto:
+            return
         if self.score > self.best:
             self.best = self.score
             self.new_best = True
@@ -528,11 +532,14 @@ class Game:
                 self.wave += 1
                 n = 2 + self.wave
                 kinds = []
+                # brutes grow from 21% (wave 3) to at most 40% (wave 10+); sentinels keep a steady 30% share
+                # (before, the brute share grew without limit and pushed sentinels out entirely from wave 11)
+                brute = min(0.40, 0.12 + 0.03 * self.wave) if self.wave >= 3 else 0.0
                 for i in range(n):
                     r = self.rnd.random()
-                    if self.wave >= 3 and r < 0.12 + 0.03 * self.wave:
+                    if r < brute:
                         kinds.append("brute")
-                    elif self.wave >= 2 and r < 0.45:
+                    elif self.wave >= 2 and r < brute + 0.30:
                         kinds.append("sentinel")
                     else:
                         kinds.append("drone")
@@ -550,9 +557,9 @@ class Game:
                 self.spawn_t = 1.3
         if not self.spawn_queue and alive == 0:
             self.hp = min(100.0, self.hp + 25)
-            self.ammo = min(self.max_ammo, self.ammo + 15)
+            self.ammo = min(self.max_ammo, self.ammo + AMMO_CLEAR)
             self.clear_t = self.t
-            self.msg("WAVE %d CLEARED  +25 HP  +15 ammo" % self.wave, 4.0)
+            self.msg("WAVE %d CLEARED  +25 HP  +%d ammo" % (self.wave, AMMO_CLEAR), 4.0)
             SND.play("cleared")
             self.inter = 4.0
 
@@ -691,14 +698,183 @@ class Game:
                     self.msg("+30 health", 2.0)
                     SND.play("health", 0.8)
                 elif p["kind"] == "a" and self.ammo < self.max_ammo:
-                    self.ammo = min(self.max_ammo, self.ammo + 20)
-                    self.msg("+20 ammo", 2.0)
+                    self.ammo = min(self.max_ammo, self.ammo + AMMO_PICK)
+                    self.msg("+%d ammo" % AMMO_PICK, 2.0)
                     SND.play("ammo", 0.8)
                 else:
                     continue
                 p["active"] = False
                 p["t"] = 25.0
         self.pickups = [p for p in self.pickups if p["active"] or not p["temp"]]
+
+
+# =============================================================================
+# Auto mode: a bot that plays with the same controls as a person (held keys, turn speed, reaction time)
+# =============================================================================
+def angdiff(a, b):
+    return (a - b + math.pi) % (2 * math.pi) - math.pi
+
+
+class AutoPilot:
+    """Plays BLOCKFIRE like a decent human with a kitty-protocol keyboard (keys held and released):
+    it sees what the minimap shows, walks the arena by BFS paths, turns at the normal turn speed, needs a
+    moment to react to a new target, aims with a little wobble, strafes while fighting and goes for
+    health and ammo when low. No cheats: it only holds keys and presses fire."""
+    MOVES = ("f", "b", "l", "r")
+
+    def __init__(self, g, seed=None, skill=1.0):
+        self.g = g
+        self.rnd = random.Random(seed)
+        self.skill = skill                      # 1.0 = decent player; lower = slower and sloppier
+        self.target = None
+        self.react = 0.0
+        self.err, self.err_t = 0.0, 0.0
+        self.strafe, self.strafe_t = 1, 0.0
+        self.goal, self.path, self.repath = None, [], 0.0
+        self.stuck_t, self.last_pos, self.unstick = 0.0, (g.px, g.py), 0.0
+        self.unstick_dir = 0.0
+
+    # --- perception -------------------------------------------------------------------------------------
+    def visible(self):
+        g = self.g
+        best, best_d = None, 1e9
+        for b in g.bots:
+            if not b.alive:
+                continue
+            d = math.hypot(b.x - g.px, b.y - g.py)
+            if d < 16 and g.los(g.px, g.py, b.x, b.y):
+                # prefer what is in front (turning costs time) and near
+                cost = d + abs(angdiff(math.atan2(b.y - g.py, b.x - g.px), g.a)) * 3
+                if b is self.target:
+                    cost -= 2.5                 # stick with the current target
+                if cost < best_d:
+                    best, best_d = b, cost
+        return best
+
+    def pickup_goal(self, kind, need):
+        g = self.g
+        if not need:
+            return None
+        best, best_d = None, 1e9
+        for p in g.pickups:
+            if p["active"] and p["kind"] == kind:
+                d = math.hypot(p["x"] - g.px, p["y"] - g.py)
+                if d < best_d:
+                    best, best_d = p, d
+        return (best["x"], best["y"]) if best else None
+
+    def choose_goal(self, fighting):
+        g = self.g
+        calm = g.inter > 0 or (not g.spawn_queue and not any(b.alive for b in g.bots))
+        goal = (self.pickup_goal("h", g.hp < (45 if fighting else 60) or (calm and g.hp < 85))
+                or self.pickup_goal("a", g.ammo < 15 or (calm and g.ammo < g.max_ammo - 30)))
+        if goal or fighting:
+            return goal
+        alive = [b for b in g.bots if b.alive]
+        if alive:                               # hunt the nearest bot shown on the minimap
+            b = min(alive, key=lambda b: math.hypot(b.x - g.px, b.y - g.py))
+            return (b.x, b.y)
+        return None
+
+    # --- one decision step --------------------------------------------------------------------------------
+    def step(self, dt):
+        g = self.g
+        if g.over:
+            return
+        want = set()
+        tgt = self.visible()
+        if tgt is not self.target:
+            if tgt is not None and (self.target is None or not self.target.alive):
+                self.react = self.rnd.uniform(0.22, 0.4) / self.skill
+            elif tgt is not None:
+                self.react = max(self.react, 0.12 / self.skill)
+            self.target = tgt
+        self.react -= dt
+        self.err_t -= dt
+        if self.err_t <= 0:                     # hand wobble, re-rolled a few times a second
+            self.err_t = self.rnd.uniform(0.25, 0.5)
+            self.err = self.rnd.gauss(0, 0.035 / self.skill)
+
+        self.repath -= dt
+        goal = self.choose_goal(tgt is not None)
+        if goal is not None:
+            cell = (int(goal[0]), int(goal[1]))
+            if cell != self.goal or self.repath <= 0 or not self.path:
+                self.goal, self.repath = cell, 0.5
+                self.path = g.path(g.px, g.py, goal[0], goal[1])
+        else:
+            self.goal, self.path = None, []
+        while self.path and math.hypot(self.path[0][0] + 0.5 - g.px, self.path[0][1] + 0.5 - g.py) < 0.3:
+            self.path.pop(0)
+
+        move = None                             # world direction to walk in (radians) or None
+        if self.path:
+            wx, wy = self.path[0][0] + 0.5, self.path[0][1] + 0.5
+            move = math.atan2(wy - g.py, wx - g.px)
+        elif goal is not None and math.hypot(goal[0] - g.px, goal[1] - g.py) > 0.2:
+            move = math.atan2(goal[1] - g.py, goal[0] - g.px)
+
+        if tgt is not None:
+            dx, dy = tgt.x - g.px, tgt.y - g.py
+            d = math.hypot(dx, dy)
+            ta = math.atan2(dy, dx)
+            face = ta + self.err
+            if move is None:                    # fight: strafe to dodge, keep a medium range
+                self.strafe_t -= dt
+                if self.strafe_t <= 0:
+                    self.strafe = self.rnd.choice((-1, 1, 1, -1, 0))
+                    self.strafe_t = self.rnd.uniform(0.5, 1.3)
+                rng = 1 if d > 7 else (-1 if d < 3.5 else 0)
+                vx = math.cos(ta) * rng - math.sin(ta) * self.strafe
+                vy = math.sin(ta) * rng + math.cos(ta) * self.strafe
+                if vx or vy:
+                    move = math.atan2(vy, vx)
+            tol = math.atan2(0.3 * tgt.k["size"] + 0.05, max(d, 0.5)) * 0.85
+            if self.react <= 0 and abs(angdiff(g.a, face)) < tol and g.fire_cd <= 0:
+                if g.ammo > 0 or d < 9:         # pulse shots only when close
+                    g.press("fire")
+        elif move is not None:
+            face = move
+        else:
+            face = g.a + 0.6                    # nothing to do: look around
+
+        # unstick: walked into a corner or a bot for a while -> sidestep
+        if self.unstick > 0:
+            self.unstick -= dt
+            move = self.unstick_dir
+        elif move is not None:
+            moved = math.hypot(g.px - self.last_pos[0], g.py - self.last_pos[1])
+            self.stuck_t = self.stuck_t + dt if moved < 0.4 * MOVE_SPEED * dt else 0.0
+            if self.stuck_t > 0.5:
+                self.stuck_t, self.unstick, self.repath = 0.0, 0.35, 0.0
+                self.unstick_dir = move + self.rnd.choice((-1.6, 1.6, math.pi))
+                self.strafe = -self.strafe
+        self.last_pos = (g.px, g.py)
+
+        # turning: hold the turn key, let go early enough that the eased turn stops on target
+        diff = angdiff(face, g.a)
+        brake = abs(g.str) * TURN_SPEED / EASE + 0.02
+        if diff > brake:
+            want.add("tr")
+        elif diff < -brake:
+            want.add("tl")
+        if move is not None:
+            rel = angdiff(move, g.a)
+            c, s = math.cos(rel), math.sin(rel)
+            if c > 0.38:
+                want.add("f")
+            elif c < -0.38:
+                want.add("b")
+            if s > 0.38:
+                want.add("r")
+            elif s < -0.38:
+                want.add("l")
+        for a in g.hold:                        # like held keys with key-release events
+            if a in want:
+                g.hold[a] = max(g.hold[a], 0.25)
+            else:
+                g.hold[a] = 0.0
+            g.bridge[a] = 0.0
 
 
 # =============================================================================
@@ -1081,6 +1257,59 @@ KEYS = {"\x1b[A": "up", "\x1b[B": "down", "\x1b[C": "right", "\x1b[D": "left",
 KITTY_RE = re.compile(r"\x1b\[([0-9:;]*)([uABCDHF~])")
 KITTY_NAMES = {13: "enter", 27: "esc", 32: " ", 9: "tab", 127: "backspace"}
 ARROWS = {"A": "up", "B": "down", "C": "right", "D": "left"}
+
+
+try:   # auto mode's speed / pause / stop handling is shared with the collection
+    from arcadekit import AUTO_BG, AUTO_HELP, AUTO_LABEL, AutoMode
+except ImportError:   # BLOCKFIRE on its own: a small copy of arcadekit.AutoMode
+    AUTO_LABEL, AUTO_BG = "Auto mode", (236, 180, 70)
+    AUTO_HELP = ["AUTO MODE - the game plays itself", "", "Space            pause / continue",
+                 "+ / -            faster / slower", "M                sound on / off",
+                 "Esc / Q          stop (back to the title)", "?                this help"]
+
+    class AutoMode:
+        SPEEDS = (0.25, 0.5, 1.0, 2.0, 4.0, 8.0)
+
+        def __init__(self, speed=1.0):
+            self.i, self.paused, self.help, self._acc = self.SPEEDS.index(speed), False, False, 0.0
+
+        @property
+        def speed(self):
+            return self.SPEEDS[self.i]
+
+        def key(self, k):
+            if self.help:
+                self.help = False
+                return True
+            if k in ("esc", "q"):
+                return "stop"
+            if k in (" ", "p", "enter"):
+                self.paused = not self.paused
+            elif k in ("+", "=", "right", "up"):
+                self.i = min(len(self.SPEEDS) - 1, self.i + 1)
+            elif k in ("-", "_", "left", "down"):
+                self.i = max(0, self.i - 1)
+            elif k == "m":
+                return "sound"
+            elif k == "?":
+                self.help = True
+                return "help"
+            else:
+                return None
+            return True
+
+        def scale(self, dt):
+            return 0.0 if self.paused or self.help else dt * self.speed
+
+        def steps(self, dt, step):
+            self._acc += self.scale(dt)
+            n = int(self._acc / step)
+            self._acc -= n * step
+            return min(n, int(8 * self.speed) + 1)
+
+        def text(self, extra=""):
+            state = "PAUSED" if self.paused else ("x%g" % self.speed).replace("x0.", "x.")
+            return " AUTO %s %s  Space pause   +/- speed   Esc stop " % (state, (" " + extra) if extra else "")
 
 
 class Terminal:
@@ -1706,7 +1935,12 @@ class Renderer:
                     for j, ch in enumerate(" +100 "):
                         if 0 <= c + j < cols and 0 <= r < prow:
                             text[(c + j, r)] = (ch, fgc, POP_BG)
-        if g.over:
+        auto = getattr(self, "auto", None)
+        if g.over and auto:
+            self.box(text, cols, prow, ["", "Y O U   W E R E   S C R A P P E D", "",
+                                        "Wave %d   Kills %d   Score %d" % (g.wave, g.kills, g.score), "",
+                                        "Auto mode: a new round starts in a moment", ""], (255, 255, 255), (110, 20, 20))
+        elif g.over:
             lines = ["", "Y O U   W E R E   S C R A P P E D", "",
                      "Wave %d   Kills %d   Score %d" % (g.wave, g.kills, g.score),
                      "NEW BEST SCORE!" if g.new_best else "Best %d" % g.best, "",
@@ -1725,12 +1959,20 @@ class Renderer:
                                              ("%d bots incoming" % n, (235, 235, 245))], g.t - g.wave_t)
         elif g.wave and g.inter > 0 and 0 <= g.t - g.clear_t < 2.0:
             self.banner(buf, text, PW, prow, [("W A V E   %d   C L E A R E D" % g.wave, (120, 240, 140)),
-                                             ("+25 HP    +15 ammo", (235, 235, 245))], g.t - g.clear_t)
+                                             ("+25 HP    +%d ammo" % AMMO_CLEAR, (235, 235, 245))], g.t - g.clear_t)
         elif g.inter > 0 and not any(b.alive for b in g.bots):
             self.banner(buf, text, PW, prow, [("W A V E   %d" % (g.wave + 1), (255, 214, 90)),
                                              ("starts in %d" % (int(g.inter) + 1), (235, 235, 245))], 1.0)
         if g.show_map and not g.over and cols >= 80 and PH >= 44:
             self.minimap(buf, PW, PH)
+        if auto:   # the amber AUTO bar on the top row of the view (the HUD keeps the bottom rows)
+            t = auto.text()
+            if len(t) > cols:
+                t = (" AUTO %s  Esc stop " % ("PAUSED" if auto.paused else "x%g" % auto.speed))[:cols]
+            text_put(text, cols, prow, 0, 0, " " * cols, (24, 16, 6), shade(AUTO_BG, 0.55))
+            text_put(text, cols, prow, max(0, (cols - len(t)) // 2), 0, t, (20, 14, 4), AUTO_BG)
+            if auto.help:
+                text_box(text, cols, prow, AUTO_HELP)
         out = self.emit(buf, cols, prow, text)
         out.append(self.hud(cols))
         out.append("\x1b[?2026l")
@@ -1770,6 +2012,8 @@ HELP = [
     "",
     "Esc / P                  pause menu (Q there: quit, M: sound on / off)",
     "?                        this help",
+    "",
+    "Auto mode: the game plays itself (Space pause, +/- speed, Esc stop)",
 ]
 PAUSE = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "M                 sound on / off",
          "Q                 quit"]
@@ -1796,12 +2040,15 @@ def text_box(text, cols, rows, lines):
         text_put(text, cols, rows, x0, y0 + j, ("  " + l).ljust(w), BOX_FG, BOX_BG)
 
 
-def title_frame(r, cols, rows, t, help_=False):
+TITLE_ITEMS = ["Start the fight", AUTO_LABEL]
+
+
+def title_frame(r, cols, rows, t, help_=False, sel=0):
     PH = rows * 2
     buf = r.scene(cols, PH, cam=(8.0 - math.cos(t * 0.06) * 6, 19.5, math.sin(t * 0.2) * 0.16))   # down the open hall
     for y in range(PH):
         buf[y] = [mix(c, TITLE_DIM, 0.55) for c in buf[y]]
-    items = ["Start the fight"]
+    items = TITLE_ITEMS
     extra = ["", "The arena is sealed. The bots keep coming.", "How many waves can you last?"]
     # the same letter size as every ASCII ARCADE title (it fits the longest name, 11 letters)
     k = 2 if cols >= 11 * 12 - 2 + 4 and 8 + len(items) * 2 + len(extra) + 9 <= rows else 1
@@ -1840,14 +2087,17 @@ def title_frame(r, cols, rows, t, help_=False):
     sel_bg = mix(ACCENT[0], ACCENT[1], 0.3)
     for i, s in enumerate(items):
         y = r0 + 1 + i * gap if gap == 2 else r0 + i
-        text_put(text, cols, rows, px0 + 2, y, (" > " + s).ljust(w - 4), (14, 14, 20), sel_bg)
+        if i == sel:
+            text_put(text, cols, rows, px0 + 2, y, (" > " + s).ljust(w - 4), (14, 14, 20), sel_bg)
+        else:
+            text_put(text, cols, rows, px0 + 2, y, ("   " + s).ljust(w - 4), PANEL_FG, PANEL_BG)
     ey = r0 + (1 + len(items) * gap if gap == 2 else len(items))
     for j, s in enumerate(extra):
         text_put(text, cols, rows, px0 + 2, ey + j, ("   " + s).ljust(w - 4), FOOTER_FG, PANEL_BG)
     if r.g.best:
         b = "best score: %d" % r.g.best
         text_put(text, cols, rows, (cols - len(b)) // 2, r0 + height + 1, b, GOLD_TEXT)
-    label, keys = " ASCII ARCADE ", " Enter start   ? help   Esc back "
+    label, keys = " ASCII ARCADE ", " Up/Down choose   Enter start   ? help   Esc back "
     text_put(text, cols, rows, 0, rows - 1, " " * cols, FOOTER_FG, FOOTER_BG)
     text_put(text, cols, rows, 0, rows - 1, label, (14, 14, 20), (200, 200, 215))
     text_put(text, cols, rows, max(len(label) + 1, cols - len(keys)), rows - 1, keys, FOOTER_FG, FOOTER_BG)
@@ -1864,18 +2114,72 @@ KEYMAP = {"w": "f", "up": "f", "s": "b", "down": "b", "a": "l", "d": "r",
           " ": "fire", "f": "fire", "enter": "fire"}
 
 
+STEP = 1.0 / 60       # auto mode's fixed simulation step (the speed setting runs more or fewer of them)
+AUTO_OVER = 3.0       # seconds the result box stays up before auto mode starts a new round
+
+
+def auto_play(term, r):
+    """Auto mode: the real game, driven by the AutoPilot, round after round until Esc / Q."""
+    auto = r.auto = AutoMode()
+
+    def new_round():
+        g = r.g = Game()
+        g.auto = True
+        r.parts, r.tracers, r.pops = [], [], []
+        SND.play("start")
+        return g, AutoPilot(g)
+    g, bot = new_round()
+    last, over_t = time.perf_counter(), 0.0
+    try:
+        while True:
+            now = time.perf_counter()
+            dt, last = min(now - last, 0.25), now
+            for k in term.keys(0):
+                a = auto.key(k)
+                if a == "stop":
+                    return
+                if a == "sound" and SND.toggle():
+                    SND.play("select")
+            term.releases.clear()
+            if g.over:
+                over_t += 0.0 if auto.paused or auto.help else dt
+                r.events(0.0 if auto.paused else dt)
+                if over_t >= AUTO_OVER:
+                    g, bot = new_round()
+                    over_t = 0.0
+            else:
+                for _ in range(auto.steps(dt, STEP)):
+                    bot.step(STEP)
+                    g.update(STEP)
+                    r.events(STEP)
+                    if g.over:
+                        break
+            cols, rows = os.get_terminal_size()
+            if cols < 60 or rows < 18:
+                term.write("\x1b[0m\x1b[2J\x1b[HPlease make the window larger (60x18).")
+                time.sleep(0.2)
+                continue
+            term.write(r.frame(cols, rows))
+            rest = 1.0 / FPS - (time.perf_counter() - now)
+            if rest > 0:
+                time.sleep(rest)
+    finally:
+        r.auto = None
+
+
 def run(term):
     g = Game()
     r = Renderer(g)
     t0 = time.time()
     help_ = False
+    sel = 0
     while True:  # title
         cols, rows = os.get_terminal_size()
         if cols < 60 or rows < 18:
             term.write("\x1b[0m\x1b[2J\x1b[HPlease make the window larger (60x18).")
             term.keys(0.3)
             continue
-        term.write(title_frame(r, cols, rows, time.time() - t0, help_))
+        term.write(title_frame(r, cols, rows, time.time() - t0, help_, sel))
         start = False
         for k in term.keys(1 / 20):
             if help_:              # any key closes the help
@@ -1884,8 +2188,20 @@ def run(term):
                 help_ = True
             elif k in ("q", "esc"):
                 return g
+            elif k in ("up", "w", "k"):
+                sel = (sel - 1) % len(TITLE_ITEMS)
+                SND.play("select")
+            elif k in ("down", "s", "j", "tab"):
+                sel = (sel + 1) % len(TITLE_ITEMS)
+                SND.play("select")
             elif k in (" ", "enter"):
                 start = True
+        term.releases.clear()
+        if start and TITLE_ITEMS[sel] == AUTO_LABEL:
+            auto_play(term, r)
+            g = r.g = Game()       # back on the title with a fresh (normal) game
+            r.parts, r.tracers, r.pops = [], [], []
+            continue
         if start:
             SND.play("start")
             break
@@ -2009,6 +2325,49 @@ def selftest(ticks=20000):
     print("Self-test ok: %d ticks in %.1fs (%.2f ms/tick), reached wave %d, deaths %d, last kills %d"
           % (ticks, dur, dur * 1000 / ticks, max_wave, deaths, g.kills))
     assert max_wave >= 3, "waves do not progress"
+    selftest_auto()
+
+
+def selftest_auto(seconds=100, frame_dt=1 / 30):
+    """Auto mode headless at x8: the AutoPilot plays the real game through AutoMode's fixed steps for
+    `seconds` of real time (8x that in game time), rounds restart, frames render, and no best score is saved."""
+    global BEST_FILE
+    import tempfile
+    BEST_FILE = os.path.join(tempfile.mkdtemp(), "best")
+    auto = AutoMode()
+    auto.i = auto.SPEEDS.index(8.0)
+    g = Game(seed=2)
+    g.auto = True
+    bot = AutoPilot(g, seed=2)
+    r = Renderer(g)
+    r.auto = auto
+    t0 = time.time()
+    rounds, waves, game_t, over_t = 1, [], 0.0, 0.0
+    for i in range(int(seconds / frame_dt)):
+        if g.over:
+            over_t += frame_dt
+            if over_t >= AUTO_OVER:
+                waves.append(g.wave)
+                g = r.g = Game(seed=2 + rounds)
+                g.auto = True
+                bot = AutoPilot(g, seed=2 + rounds)
+                rounds, over_t = rounds + 1, 0.0
+        else:
+            for _ in range(auto.steps(frame_dt, STEP)):
+                bot.step(STEP)
+                g.update(STEP)
+                r.events(STEP)
+                game_t += STEP
+                if g.over:
+                    break
+        if i % 40 == 0:
+            r.frame(120, 40)
+        assert not g.blocked(g.px, g.py, PLAYER_R * 0.9), "auto: player inside wall"
+    assert not os.path.exists(BEST_FILE) and not g.new_best, "auto mode saved a best score"
+    assert game_t > seconds * 7, "auto mode does not run at x8 (%.0fs of game time)" % game_t
+    waves.append(g.wave)
+    print("Auto mode ok: %ds at x8 = %.0fs game time in %.1fs, %d round(s), waves %s, no score saved"
+          % (seconds, game_t, time.time() - t0, rounds, waves))
 
 
 def bench(cols=160, rows=45, frames=40):

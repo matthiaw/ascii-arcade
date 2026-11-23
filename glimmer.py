@@ -17,8 +17,8 @@ import sys
 import time
 from collections import deque
 
-from arcadekit import (PAUSE_LINES, Canvas, Terminal, clamp, footer, load_scores, mix, overlay, shade, shared_key,
-                       submit, title_screen)
+from arcadekit import (AUTO_LABEL, PAUSE_LINES, AutoMode, Canvas, Terminal, clamp, footer, load_scores, mix, overlay,
+                       shade, shared_key, submit, title_screen)
 from arcadesound import Sound
 
 GAME = "glimmer"
@@ -58,7 +58,7 @@ MAZES = (
     )),
     ('Rose Arbour', (
         '##############',
-        '#o.....#.....#',
+        '#o.....#......',
         '#.##.#.#.###.#',
         '#.##.#.#.###.#',
         '#.............',
@@ -322,6 +322,9 @@ HELP = [
     "",
     "Esc / P                pause menu (Q quit, M sound)",
     "?                      this help",
+    "",
+    "Auto mode: the game plays itself (Space pause,",
+    "+/- speed, Esc stop)",
 ]
 
 
@@ -455,9 +458,12 @@ def params(level):
         sched = (7, 20, 7, 20, 5, 20, 5)
     elif level < 5:
         sched = (7, 20, 7, 20, 5, 40, 2)
+    elif level < 7:          # a step between: the long chases come in two mazes later
+        sched = (6, 20, 6, 20, 5, 50, 1)
     else:
         sched = (5, 20, 5, 20, 4, 60, 1)
-    return dict(pspeed=6.4 + 0.2 * k, gspeed=5.9 + 0.26 * k,
+    pspeed = 6.4 + 0.2 * k
+    return dict(pspeed=pspeed, gspeed=min(5.9 + 0.26 * k, 0.96 * pspeed),   # never faster than the wisp
                 fright=(6.0, 5.0, 4.5, 4.0, 3.5, 3.0, 2.6, 2.3, 2.0, 1.8, 1.5, 1.2, 1.0)[k],
                 sched=sched, release=(0.0, 1.0 * f, 4.0 * f, 7.5 * f), idle=max(2.5, 4.5 - 0.2 * k),
                 treat=TREATS[min(level - 1, len(TREATS) - 1)])
@@ -608,6 +614,7 @@ class Game:
     def __init__(self, start=0, auto=False, sound=True, seed=None):
         self.start_idx = start
         self.auto = auto
+        self.pilot = None            # auto mode: a Pilot (human eyes and reaction time); None: the title autopilot
         self.sound = sound
         self.rnd = random.Random(seed)
         self.score = 0
@@ -706,7 +713,7 @@ class Game:
         st = self.state
         if st == "ready":
             if self.auto:
-                self.wisp.want = bot_want(self)
+                self.wisp.want = self.pilot(self, dt) if self.pilot else bot_want(self)
             if self.state_t <= 0:
                 self.state = "play"
         elif st == "freeze":
@@ -758,7 +765,7 @@ class Game:
         m, P, w = self.maze, self.P, self.wisp
         self.play_t += dt
         if self.auto:
-            w.want = bot_want(self)
+            w.want = self.pilot(self, dt) if self.pilot else bot_want(self)
         # spirit moods: scatter / chase on a timer that stops while they are pale
         if self.fright_t > 0:
             self.fright_t -= dt
@@ -975,23 +982,39 @@ class Game:
                 s.look = s.d
 
 
-def bot_want(g):
-    """The autopilot (title screen and self-test): the nearest mote, blossom, treat or pale spirit by a
-    path that keeps away from the spirits; when cornered, the way that gains the most distance."""
+def bot_want(g, spirits=None, R=2, ahead=3, path=False, flee=False):
+    """The autopilot (title screen, self-test and auto mode): the nearest mote, blossom, treat or pale spirit by
+    a path that keeps away from the spirits; when cornered, the way that gains the most distance.
+    spirits: the spirits as the player sees them (auto mode's Pilot); None: all of them, exactly."""
     m, w = g.maze, g.wisp
     start = w.tile()
+    if spirits is None:
+        spirits = g.spirits
     danger = set()
     hunt = set()
-    for s in g.spirits:
+    for s in spirits:
         tx, ty = s.tile()
         if s.state == "roam" and s.fright and g.fright_t > 0.8:
             hunt.add((tx, ty))
         elif s.state in ("roam", "leave"):
-            for dy in range(-2, 3):
-                for dx in range(-2 + abs(dy), 3 - abs(dy)):
-                    danger.add(((tx + dx) % MW, ty + dy))
+            if path:        # every tile the spirit can reach within R steps (it can not turn round)
+                ring = [((tx, ty), s.d)]
+                danger.add((tx, ty))
+                for _ in range(R):
+                    nxt = []
+                    for (px, py), pd in ring:
+                        for d in range(4):
+                            if (pd is None or d != OPP[pd]) and m.can(px, py, d):
+                                n = m.step(px, py, d)
+                                danger.add(n)
+                                nxt.append((n, d))
+                    ring = nxt
+            else:
+                for dy in range(-R, R + 1):
+                    for dx in range(-R + abs(dy), R + 1 - abs(dy)):
+                        danger.add(((tx + dx) % MW, ty + dy))
             if s.d is not None:
-                for k in range(1, 4):
+                for k in range(1, ahead + 1):
                     danger.add(((tx + DIRS[s.d][0] * k) % MW, ty + DIRS[s.d][1] * k))
     danger.discard(start)
     goals = g.motes | g.power | hunt
@@ -1017,15 +1040,108 @@ def bot_want(g):
             p = prev[p][0]
         return prev[p][1]
     best = None
+    if flee:      # cornered: the way with the most room away from the spirits (not into a pocket)
+        for d in range(4):
+            if not m.can(start[0], start[1], d):
+                continue
+            n0 = m.step(start[0], start[1], d)
+            seen = {start, n0}
+            q = deque([n0])
+            room = 0 if n0 in danger else 1
+            while q and room < 80:
+                p = q.popleft()
+                for d2 in range(4):
+                    if m.can(p[0], p[1], d2):
+                        n = m.step(p[0], p[1], d2)
+                        if n not in seen and n not in danger:
+                            seen.add(n)
+                            q.append(n)
+                            room += 1
+            if n0 in danger:
+                room = -1 - min([min(abs(n0[0] - s.x), MW - abs(n0[0] - s.x)) + abs(n0[1] - s.y) for s in spirits
+                                 if s.state == "roam" and not s.fright] or [99]) * -1 - 100
+            if best is None or room > best[0]:
+                best = (room, d)
+        return best[1] if best else w.want
     for d in range(4):
         if not m.can(start[0], start[1], d):
             continue
         nx, ny = m.step(start[0], start[1], d)
-        far = min([min(abs(nx - s.x), MW - abs(nx - s.x)) + abs(ny - s.y) for s in g.spirits
+        far = min([min(abs(nx - s.x), MW - abs(nx - s.x)) + abs(ny - s.y) for s in spirits
                    if s.state == "roam" and not s.fright] or [99])
         if best is None or far > best[0]:
             best = (far, d)
     return best[1] if best else w.want
+
+
+def fog_at(g, x, y):
+    """How thick the drifting fog is on a tile (0..0.9), as draw_fog paints it (without the clearing round the wisp)."""
+    a = 0.0
+    for f in g.fog:
+        d = math.hypot(x - f[0], y - f[1] - 0.8 * math.sin(f[4] * 0.6)) / f[2]
+        if d < 1:
+            b = 1 - d
+            a = max(a, b * b * (3 - 2 * b) * 0.9)
+    return a
+
+
+class Seen:
+    """A spirit as the auto-mode player saw it at one moment."""
+    __slots__ = ("x", "y", "d", "state", "fright")
+
+    def __init__(self, s):
+        self.x, self.y, self.d, self.state, self.fright = s.x, s.y, s.d, s.state, s.fright
+
+    def tile(self):
+        return int(round(self.x)) % MW, int(round(self.y))
+
+
+class Pilot:
+    """Auto mode's player: the autopilot's route finding with a human's limits. It reacts to what it saw
+    REACT seconds ago, thinks again only every THINK seconds (now and then it hesitates a little longer), and
+    sees only what is visible: in the dark mazes the spirits inside its own light, in the fog not the ones
+    hidden in a thick bank (a spirit it lost sight of is remembered where it was last seen for a moment)."""
+    REACT, THINK, HESITATE, MEMORY = 0.15, 0.08, 0.03, 1.2
+
+    def __init__(self, seed=None):
+        self.rnd = random.Random(seed)
+        self.t = 0.0
+        self.hist = deque()
+        self.next = 0.0
+        self.want = None
+        self.last = {}                 # spirit index -> (Seen, when) of the last sighting
+
+    def visible(self, g, i, s):
+        if s.state not in ("roam", "leave"):
+            return True
+        w = g.wisp
+        dx = abs(s.x - w.x)
+        dist = math.hypot(min(dx, MW - dx), s.y - w.y)
+        if "dark" in g.maze.feat and dist > 5.6 + (1.6 if g.fright_t > 0 else 0.0) - 0.6:
+            return False
+        if g.fog and dist > 2.6 and fog_at(g, s.x, s.y) > 0.55:
+            return False
+        return True
+
+    def __call__(self, g, dt):
+        self.t += dt
+        if g.state != "play":
+            self.hist.clear()
+            self.last.clear()
+        self.hist.append((self.t, [Seen(s) for s in g.spirits]))
+        while len(self.hist) > 1 and self.hist[1][0] <= self.t - self.REACT:
+            self.hist.popleft()
+        if self.t >= self.next or self.want is None:
+            self.next = self.t + (0.3 if self.rnd.random() < self.HESITATE else self.THINK)
+            seen = []
+            for i, s in enumerate(self.hist[0][1]):
+                if self.visible(g, i, s):
+                    self.last[i] = (s, self.t)
+                    seen.append(s)
+                elif i in self.last and self.t - self.last[i][1] < self.MEMORY:
+                    seen.append(self.last[i][0])
+            self.want = bot_want(g, seen, R=3, ahead=2, path=True, flee=True)
+        return self.want
 
 
 # =============================================================================================
@@ -1544,11 +1660,11 @@ def render_interlude(g, cols, rows):
     return cv
 
 
-def render_over(g, cv, record):
+def render_over(g, cv, record, auto=False):
     lines = ["GAME OVER", "", "score %d" % g.score, "level %d   (%s)" % (g.level, g.maze.name)]
     if record:
         lines += ["", "** NEW RECORD **"]
-    lines += ["", "Enter: again   Esc / Q: menu"]
+    lines += ["", "auto mode: a new round starts" if auto else "Enter: again   Esc / Q: menu"]
     w = max(len(l) for l in lines) + 4
     x, y = max(0, (cv.cols - w) // 2), max(0, cv.rows // 2 - len(lines) // 2 - 1)
     cv.frame(x - 1, y * 2 - 1, w + 2, (len(lines) + 2) * 2 + 2, SCORE_C if record else (200, 120, 90))
@@ -1576,7 +1692,55 @@ class TitleDemo:
         return render(self.g, cols, rows, hud=False)
 
 
-def render_menu(demo, cols, rows, dt, start, help_=False):
+class AutoRun:
+    """Auto mode: the real game (real levels, HUD, sound and lives) played by a Pilot. After a game over the
+    result stays for a few seconds, then a new round starts from the same maze. Scores are never recorded."""
+    STEP = 1 / 60
+    OVER_SHOW = 3.0
+
+    def __init__(self, start, sound=True, seed=None):
+        self.start, self.sound, self.seed = start, sound, seed
+        self.auto = AutoMode()
+        self.rounds = 0
+        self.new()
+
+    def new(self):
+        self.rounds += 1
+        seed = None if self.seed is None else self.seed + self.rounds
+        self.g = Game(self.start, auto=True, sound=self.sound, seed=seed)
+        self.g.pilot = Pilot(seed)
+        self.g.best = load_scores().get(GAME, {}).get("score") or 0     # shown, never written
+        self.over_t = 0.0
+
+    def key(self, k):
+        """'stop' when the viewer ends auto mode."""
+        a = self.auto.key(k)
+        if a == "sound" and SND.toggle():
+            SND.play("sound_on")
+        return a
+
+    def frame(self, dt, cols, rows, draw=True):
+        g = self.g
+        if g.state == "over":
+            self.over_t += self.auto.scale(dt) / max(1.0, self.auto.speed)     # real seconds, unless paused
+            if self.over_t >= self.OVER_SHOW:
+                self.new()
+                g = self.g
+        else:
+            for _ in range(self.auto.steps(dt, self.STEP)):
+                g.step(self.STEP)
+                if g.state == "over":
+                    break
+        if not draw:
+            return None
+        cv = render(g, cols, rows)
+        if g.state == "over":
+            render_over(g, cv, False, auto=True)
+        self.auto.banner(cv, extra="round %d" % self.rounds)
+        return cv
+
+
+def render_menu(demo, cols, rows, dt, start, help_=False, sel=0):
     cv = demo.scene(cols, rows, dt)
     rec = load_scores().get(GAME, {})
     best = None
@@ -1584,9 +1748,9 @@ def render_menu(demo, cols, rows, dt, start, help_=False):
         best = "best score %d   furthest level %d" % (rec.get("score", 0), rec.get("level", 1))
     name = MAZES[start][0]
     feat = ", ".join(FEAT_TEXT[f] for f in STYLE[name]["feat"]) or "a quiet lawn"
-    title_screen(cv, "GLIMMER", "a will-o'-wisp in a hedge maze at night", ["Play"], 0, best,
+    title_screen(cv, "GLIMMER", "a will-o'-wisp in a hedge maze at night", ["Play", AUTO_LABEL], sel, best,
                  extra=["", "start maze  < %d %s >" % (start + 1, name), "             %s" % feat],
-                 keys="Left/Right maze   Enter start   M %s   ? help   Esc back" % SND.label().lower(),
+                 keys="Up/Down choose   Left/Right maze   Enter start   M %s   ? help   Esc back" % SND.label().lower(),
                  help_lines=HELP, show_help=help_, dim=0.45)
     return cv
 
@@ -1598,6 +1762,7 @@ def main():
     with Terminal() as term:
         demo = TitleDemo()
         start = 0
+        sel = 0
         help_ = False
         while True:
             # title
@@ -1607,7 +1772,7 @@ def main():
                 now = time.time()
                 dt, last = min(0.1, now - last), now
                 cols, rows = term.size()
-                term.write(render_menu(demo, cols, rows, dt, start, help_).emit())
+                term.write(render_menu(demo, cols, rows, dt, start, help_, sel).emit())
                 for k in term.keys(1 / 30):
                     if help_:            # any key closes the help
                         help_ = False
@@ -1616,6 +1781,9 @@ def main():
                         help_ = True
                     elif k in ("q", "esc"):
                         return
+                    elif k in ("up", "w", "down", "s"):
+                        sel = 1 - sel
+                        SND.play("menu")
                     elif k in ("left", "a"):
                         start = (start - 1) % len(MAZES)
                         SND.play("menu")
@@ -1628,6 +1796,9 @@ def main():
                     elif k in ("enter", " "):
                         SND.play("go")
                         go = True
+            if sel == 1:
+                run_auto(term, start)
+                continue
             # play
             while True:
                 g = Game(start)
@@ -1680,6 +1851,25 @@ def main():
                     time.sleep(max(0, 1 / 30 - (time.time() - now)))
                 if back:
                     break
+
+
+def run_auto(term, start):
+    """Auto mode until the viewer stops it (Esc / Q)."""
+    run = AutoRun(start)
+    last = time.time()
+    while True:
+        now = time.time()
+        dt, last = min(0.1, now - last), now
+        for k in term.keys(0):
+            if run.key(k) == "stop":
+                return
+        cols, rows = term.size()
+        if cols < 60 or rows < 22:
+            term.write("\x1b[0m\x1b[2J\x1b[HPlease make the window larger (60x22).")
+            time.sleep(0.2)
+            continue
+        term.write(run.frame(dt, cols, rows).emit())
+        time.sleep(max(0, 1 / 30 - (time.time() - now)))
 
 
 # =============================================================================================
@@ -1830,13 +2020,45 @@ def selftest():
             g.update(1 / 30)
             render(g, cols, rows).emit(True)
         timing.append("%dx%d %.1f ms" % (cols, rows, (time.perf_counter() - t) / 15 * 1000))
+    # auto mode: the real game (3 wisps, no help) at x8 for a while; pause, speed and stop work; no score is kept
+    t3 = time.time()
+    submitted = []
+    real_submit = globals()["submit"]
+    globals()["submit"] = lambda *a, **k: submitted.append(a)
+    try:
+        run = AutoRun(0, sound=False, seed=11)
+        assert run.g.lives == 3 and run.g.pilot is not None
+        run.key(" ")
+        lv = (run.g.level, run.g.score, run.g.wisp.x)
+        for _ in range(30):
+            run.frame(1 / 30, 70, 22, draw=False)
+        assert (run.g.level, run.g.score, run.g.wisp.x) == lv, "auto mode ran on while paused"
+        run.key(" ")
+        for _ in range(5):
+            run.key("+")
+        assert run.auto.speed == 8.0
+        auto_secs, auto_levels, auto_scores = 40, [], []
+        for i in range(auto_secs * 30):
+            g0 = run.g
+            cv = run.frame(1 / 30, 70 + i % 3 * 25, 22 + i % 2 * 10, draw=i % 20 == 0)
+            if run.g is not g0:
+                auto_levels.append(g0.level)
+                auto_scores.append(g0.score)
+        auto_levels.append(run.g.level)
+        auto_scores.append(run.g.score)
+        assert run.key("esc") == "stop"
+        assert not submitted, "auto mode submitted a score"
+    finally:
+        globals()["submit"] = real_submit
+    auto_time = time.time() - t3
     print("Self-test ok: %d mazes valid (%s motes each, symmetric, no dead ends, every tile reachable both ways); "
           "buffered turns, reversing, tunnel wrap, gates, blossom, catching and dying work; the autopilot cleared "
           "%d mazes in %.0f s of play (%d motes, %d blossoms, %d spirits caught, %d treats, %d wisps lost) in %.1fs; "
-          "%d frames rendered in %.1fs; frame incl. update: %s (total %.1fs)"
+          "%d frames rendered in %.1fs; frame incl. update: %s; auto mode %d s at x8: %d round(s), levels %s, "
+          "scores %s, nothing recorded (%.1fs) (total %.1fs)"
           % (len(MAZES), "/".join(map(str, motes)), st["cleared"], steps / 30, st["motes"], st["blossoms"],
              st["spirits"], st["treats"], st["deaths"], bot_time, frames, render_time, ", ".join(timing),
-             time.time() - t0))
+             auto_secs, run.rounds, auto_levels, auto_scores, auto_time, time.time() - t0))
 
 
 def dump(idx=0, cols=70, rows=22, secs=3.0):

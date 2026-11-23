@@ -20,8 +20,8 @@ import random
 import sys
 import time
 
-from arcadekit import (PAUSE_LINES, Canvas, HeldKeys, KeyTerminal, clamp, load_scores, mix, overlay, shade, shared_key,
-                       submit, title_screen)
+from arcadekit import (AUTO_LABEL, PAUSE_LINES, AutoMode, Canvas, HeldKeys, KeyTerminal, clamp, load_scores, mix,
+                       overlay, shade, shared_key, submit, title_screen)
 from arcadesound import Sound
 
 GAME = "voidlance"
@@ -33,7 +33,7 @@ DIFFS = ["easy", "normal", "hard"]
 DIFF = {  # lives, bombs, enemy fire rate, bullet speed, enemy hp
     "easy": dict(lives=5, bombs=3, fire=0.6, bspeed=0.8, hp=0.8),
     "normal": dict(lives=3, bombs=2, fire=1.0, bspeed=1.0, hp=1.0),
-    "hard": dict(lives=3, bombs=1, fire=1.45, bspeed=1.2, hp=1.3),
+    "hard": dict(lives=3, bombs=1, fire=1.45, bspeed=1.2, hp=1.3, ramp=(0.8, 0.055)),
 }
 CHARGE_LV = (0.35, 0.85, 1.4, 2.3)       # seconds of charge for lance level 1, 2, 3 and the nova
 SPEEDS = (34.0, 44.0, 54.0, 64.0)
@@ -292,6 +292,8 @@ def help_lines(kitty):
             "Esc / P                pause menu (Q quit, M sound)",
             "?                      this help", ""] + mode + [
             "",
+            "Auto mode: the game plays itself (Space pause, +/- speed, Esc stop).",
+            "",
             "Lance: 1 bolt, 2 piercing bolt, 3 beam through the screen;",
             "keep charging past 3 for the NOVA. The pod docks at the nose",
             "or the tail - whichever side touches it - and soaks up small",
@@ -348,7 +350,7 @@ STAGES = [
          tcol=((210, 200, 210), (130, 116, 130), (70, 56, 70), (52, 40, 52)), speed=16.0, accent=(255, 90, 110),
          air=[("sentinel", "single", 2), ("rivet", "vee", 2), ("phantom", "single", 1), ("lancer", "single", 1),
               ("miner", "single", 1), ("drone", "swarm", 1)],
-         ground=[("cannon", 2), ("turret", 2), ("strider", 1)], extra=[("piston", 0.3), ("node", 0.2), ("plate", 0.12)],
+         ground=[("cannon", 1), ("turret", 2), ("strider", 1)], extra=[("piston", 0.3), ("node", 0.14), ("plate", 0.12)],
          midboss="gatekeeper", boss="voidengine"),
 ]
 LEN = 1500                      # stage length in field units, then the boss arena
@@ -577,14 +579,14 @@ ESPEC = {
     "strider": (4, 300, 8, 7, "a"), "spinner": (6, 500, 8, 7, ""), "polyp": (8, 600, 8, 5, "a"),
     "spore": (1, 50, 4, 4, ""), "tendril": (6, 800, 6, 6, ""), "tseg": (2, 100, 5, 5, ""),
     "blister": (3, 300, 7, 4, "a"), "leech": (2, 150, 7, 4, ""), "vent": (99, 0, 8, 4, "ai"),
-    "hook": (14, 700, 8, 7, "a"), "rivet": (1, 120, 6, 4, ""), "cannon": (10, 800, 11, 6, "a"),
+    "hook": (14, 700, 8, 7, "a"), "rivet": (1, 120, 6, 4, ""), "cannon": (8, 800, 11, 6, "a"),
     "eel": (5, 700, 7, 5, ""), "eseg": (2, 100, 5, 4, ""), "jelly": (4, 400, 8, 7, ""), "mine": (2, 200, 6, 6, ""),
     "angler": (8, 800, 11, 8, ""), "rockL": (12, 300, 13, 11, ""), "rockM": (5, 150, 8, 7, ""),
     "rockS": (2, 80, 5, 4, ""), "comet": (3, 300, 7, 4, ""), "miner": (6, 600, 8, 7, ""),
     "crawler": (3, 250, 8, 4, "a"), "drone": (1, 80, 5, 4, ""), "lancer": (3, 300, 10, 4, ""),
     "larva": (8, 600, 9, 5, "a"), "comb": (3, 50, 6, 6, "as"), "plate": (5, 60, 6, 6, "as"),
     "shard": (6, 500, 7, 7, ""), "phantom": (4, 500, 8, 7, ""), "clock": (10, 900, 9, 9, ""),
-    "prism": (99, 0, 7, 10, "ais"), "piston": (99, 0, 10, 10, "ais"), "node": (10, 700, 6, 4, "a"),
+    "prism": (99, 0, 7, 10, "ais"), "piston": (99, 0, 10, 10, "ais"), "node": (6, 700, 6, 4, "a"),
     "sentinel": (24, 1500, 13, 8, ""), "ferry": (4, 500, 11, 6, ""), "seeker": (2, 100, 4, 4, ""),
     "orbiter": (8, 200, 6, 6, ""),
 }
@@ -854,8 +856,8 @@ def b_rivet(g, e):
 
 def b_cannon(g, e):
     on_ground(g, e)
-    if fire_timer(g, e, 2.8):
-        g.aimed(e.x - 3, e.y + (2 if e.ceil else -2), 3, 16, 28, "orb")
+    if fire_timer(g, e, 3.2) and math.hypot(g.px - e.x, g.py - e.y) > 30:   # no point-blank orb fans
+        g.aimed(e.x - 3, e.y + (2 if e.ceil else -2), 3, 22, 28, "orb")
         g.sfx("eorb", 0.15)
 
 
@@ -1140,7 +1142,7 @@ class Game:
         self.score = 0
         self.lives = self.d["lives"]
         self.bombs = self.d["bombs"]
-        self.next_life = 50000
+        self.next_life, self.life_gap = 60000, 60000     # extra ships at 60k, 180k, 360k, 600k, ...
         self.has_pod, self.pod_color, self.pod_lv = False, None, 0
         self.missile = self.crawl = self.nbits = 0
         self.speed = 1
@@ -1169,7 +1171,8 @@ class Game:
         self.N = len(self.ceil)
         self.wob = self.st["terrain"] == "flesh"
         self.water = self.st.get("water")
-        self.fire_k = self.d["fire"] * (0.6 + 0.08 * si)          # enemies shoot more as the stages go on
+        base, step = self.d.get("ramp", (0.6, 0.08))
+        self.fire_k = self.d["fire"] * (base + step * si)          # enemies shoot more as the stages go on
         self.bspeed = self.d["bspeed"] * (0.86 + 0.04 * si)
         self.cam = 0.0
         self.scroll = self.st["speed"]
@@ -1437,7 +1440,8 @@ class Game:
     def add_score(self, n):
         self.score += int(n)
         while self.score >= self.next_life:
-            self.next_life += 100000
+            self.life_gap += 60000
+            self.next_life += self.life_gap
             self.lives += 1
             self.sfx("life")
             self.banner("EXTRA SHIP", 1.6, (255, 236, 120))
@@ -1906,6 +1910,8 @@ class Game:
             ty, tx = FH / 2 + 16 * math.sin(st * 1.2), b["home"] - 10 + 10 * math.cos(st * 0.6)
         else:
             ty, tx = FH / 2 + 3 * math.sin(st * 0.8), b["home"]
+        if any(sw["o"] is e for sw in self.sweeps):     # holds its height while it sweeps: the far side stays safe
+            ty = e.y
         e.y += clamp(ty - e.y, -20 * DT, 20 * DT) if style == "track" else (ty - e.y) * 2 * DT
         e.x += (tx - e.x) * 2 * DT
         e.y = clamp(e.y, lo, hi)
@@ -1957,12 +1963,10 @@ class Game:
             self.boss_spawn(e, p["kind"], p.get("n", 1))
         elif name == "laser":
             self.laser(e, fx, clamp(self.py, 4, FH - 4), 3.2)
-        elif name == "sweep":
-            a0 = math.pi + 0.75
-            self.sweeps.append(dict(o=e, a0=a0 if R.random() < 0.5 else math.pi - 0.75, t=0.0, warn=0.8, dur=2.2,
-                                    a=a0))
-            self.sweeps[-1]["a1"] = math.pi - 0.75 if self.sweeps[-1]["a0"] > math.pi else math.pi + 0.75
-            self.sweeps[-1]["a"] = self.sweeps[-1]["a0"]
+        elif name == "sweep":     # from steep up (or down) to just past level: the far side stays safe
+            s = 1 if R.random() < 0.5 else -1
+            self.sweeps.append(dict(o=e, a0=math.pi + 0.75 * s, a1=math.pi - 0.3 * s, a=math.pi + 0.75 * s, t=0.0,
+                                    warn=0.8, dur=1.6))
             self.sfx("laserwarn")
         elif name == "seek":
             for k in range(p.get("n", 2)):
@@ -3354,61 +3358,352 @@ def draw_hud(g, cv, v):
 
 
 # =============================================================================================
-# Autopilot (title demo, launcher preview, self-test)
+# The pilot: plays like a decent human (auto mode, title demo, launcher preview, self-test)
 # =============================================================================================
-def bot_input(g):
-    """Pick the safest height a little ahead (bullets and enemies projected forward), stay near the left."""
-    inp = Inp()
-    if not g.alive:
+PLAN_T = (0.05, 0.1, 0.16, 0.23, 0.32, 0.45, 0.6, 0.8)          # look-ahead samples in seconds
+PLAN_W = (1.0, 1.0, 0.95, 0.9, 0.8, 0.7, 0.55, 0.4)              # how much a predicted hit at that sample counts
+PLAN_G = tuple(((PLAN_T[min(i + 1, len(PLAN_T) - 1)] - PLAN_T[max(i - 1, 0)]) / 4) for i in range(len(PLAN_T)))
+SAFE_ITEMS = {"missile", "crawlbomb", "bit", "shield", "bomb", "life", "gem", "crystal", "speed"}
+
+
+class Pilot:
+    """Threat-aware autopilot without cheats. It predicts bullets, enemies, lasers, sweeps, vents and the terrain a
+    short time ahead, tries a fan of reachable spots and flies to the safest one that also lines up a target or an
+    item. It sees new bullets only after a human-like reaction delay (react seconds), misjudges speeds a little
+    (err) and re-plans only every few steps; it charges the lance, fires the beam or the nova at good moments, keeps
+    the pod docked (calls it back when it floats) and bombs when a hit can no longer be dodged."""
+
+    def __init__(self, react=0.28, err=0.15, every=6, seed=None, bombs=True, lapse=0.15, focus=9, blur=1.4):
+        self.react, self.err, self.every, self.lapse, self.focus = react, err, every, lapse, focus
+        self.blur = blur            # how far off (field units) it judges where a bullet is: one terminal cell ~ 1.6
+        self.rnd = random.Random(seed)
+        self.n = 0
+        self.tx = self.ty = None
+        self.seen = {}
+        self.release = False
+        self.bombs = bombs
+        self.danger = 0.0
+        self.pod_t = 0.0
+
+    # --- one step ------------------------------------------------------------------------------
+    def __call__(self, g):
+        inp = Inp()
+        if not g.alive or g.phase != "play":
+            self.tx = None
+            self.seen.clear()
+            return inp
+        if g.entering > 0:
+            return inp
+        if self.tx is None or (self.n % self.every == 0 and self.rnd.random() >= self.lapse):
+            self.plan(g, inp)
+        self.n += 1
+        dx, dy = self.tx - g.px, self.ty - g.py
+        sp = SPEEDS[g.speed - 1] * DT
+        inp.dx = 0 if abs(dx) < sp else (1 if dx > 0 else -1)
+        inp.dy = 0 if abs(dy) < sp else (1 if dy > 0 else -1)
+        inp.fire = True
+        if self.release:            # one step without the charge button lets the lance go
+            self.release = False
+            inp.charge = False
+        else:
+            inp.charge = True
+        inp.pod = self._pod
+        inp.bomb = self._bomb
+        self._pod = self._bomb = False
         return inp
-    t = g.t
-    px, py = g.px, g.py
-    cs = [g.ceil_at(px + k) for k in range(-6, 22, 2)]
-    fs = [g.floor_at(px + k) for k in range(-6, 22, 2)]
-    lo, hi = max(cs) + 4.5, min(fs) - 4.5
-    if hi < lo:
-        lo = hi = (max(cs) + min(fs)) / 2
-    fight = g.boss is not None or (g.mid is not None and not g.mid.dead)
-    target = None
-    for e in g.enemies:
-        if not e.dead and not e.inv and e.x > px + 6 and (target is None or e.x < target.x):
-            target = e
-    want = target.y if target is not None else (lo + hi) / 2
-    threats = []
-    for b in g.ebul:
-        if -6 < b.x - px < 40:
-            threats.append((b.x, b.y, b.vx, b.vy, 3.5 + b.r))
-    for e in g.enemies:
-        if not e.dead and not e.ghost and -8 < e.x - px < 30 and e.boss is None:
-            if e.kind in ("prism", "piston"):     # assume a moving wall reaches as far as it ever does
-                reach = e.data["hi"] + 5
-                y0, y1 = (0, g.ceil_at(e.x) + reach) if e.ceil else (g.floor_at(e.x) - reach, FH)
-                threats.append((e.x, (y0 + y1) / 2, -g.scroll, 0.0, (y1 - y0) / 2))
+
+    _pod = _bomb = False
+
+    # --- what will be where ----------------------------------------------------------------------
+    def threats(self, g):
+        """Per look-ahead sample a list of boxes (x, y, half width, half height, weight) the ship's centre must
+        stay out of, and the sweeping lasers."""
+        px, py = g.px, g.py
+        R = self.rnd
+        err = self.err
+        out = [[] for _ in PLAN_T]
+        sweeps = []
+        pod = g.pod
+        shield = pod is not None and pod.state == "front"
+        react = self.react
+        bs = g.bspeed
+        sp = SPEEDS[g.speed - 1]
+        vel = {}
+        seen_b = []
+        for b in g.ebul:
+            if b.t < react or b.dead:
+                continue
+            dxb = b.x - px
+            if dxb < -50 or dxb > 75 or abs(b.y - py) > 50:
+                continue
+            seen_b.append((abs(dxb) + abs(b.y - py), b))
+        if len(seen_b) > self.focus:                # a human keeps an eye on a handful of bullets only
+            seen_b.sort(key=lambda d: d[0])
+            seen_b = seen_b[:self.focus]
+        for _, b in seen_b:
+            if shield and b.kind != "orb" and b.vx < 0 and b.x > px + 7 and abs(b.vy) < -b.vx * 0.8:
+                continue                                           # the docked pod soaks it up
+            k = 1 + R.gauss(0, err)
+            vx, vy = b.vx * k, b.vy * k
+            bx0, by0 = b.x + R.gauss(0, self.blur), b.y + R.gauss(0, self.blur)
+            hx, hy = b.r + 2.2, b.r + 1.0
+            grav = 34 * bs if b.kind == "lob" else 0.0
+            for i, t in enumerate(PLAN_T):        # boxes grow by the way covered between two samples
+                hg = PLAN_G[i]
+                out[i].append((bx0 + vx * t, by0 + vy * t + 0.5 * grav * t * t, hx + abs(vx) * hg + sp * hg,
+                               hy + abs(vy + grav * t) * hg + sp * hg, 1.0))
+        seen = self.seen
+        now = g.t
+        nseen = {}
+        sc = g.scroll
+        for e in g.enemies:
+            if e.dead:
+                continue
+            key = id(e)
+            last = seen.get(key)
+            nseen[key] = (e.x, e.y, now, last[3] if last else now)
+            if e.ghost:
+                continue
+            first = last[3] if last else now
+            if now - first < react and e.boss is None and not e.anch:
+                continue
+            k = e.kind
+            if e.boss is not None:
+                if e.boss["state"] == "dying":
+                    continue
+                hx, hy = e.w * 0.42 + 3, e.h * 0.42 + 1.3
             else:
-                threats.append((e.x, e.y, -g.scroll if e.anch else -20, 0.0, e.h / 2 + 4))
-    for x0, y0, x1, y1 in g.hazards:
-        if x0 - 6 < px < x1 + 6:
-            threats.append((px, (y0 + y1) / 2, 0, 0, (y1 - y0) / 2 + 4))
-    best, bc = py, 1e9
-    y = lo
-    while y <= hi + 0.01:
-        cost = abs(y - want) * 0.08 + abs(y - py) * 0.04
-        for bx, by, vx, vy, r in threats:
-            for k in (0.0, 0.15, 0.3, 0.45):
-                tx, ty = bx + vx * k, by + vy * k
-                if abs(tx - px) < 9 and abs(ty - y) < r:
-                    cost += 10 - k * 10
-        if cost < bc:
-            best, bc = y, cost
-        y += 1.5
-    tx = 16 if fight else 20 + 6 * math.sin(t * 0.3)
-    inp.dy = 0 if abs(best - py) < 1.0 else (1 if best > py else -1)
-    inp.dx = 0 if abs(tx - px) < 2 else (1 if tx > px else -1)
-    cyc = t % 5.0
-    inp.charge = cyc < (2.6 if int(t / 5) % 3 == 2 else 1.6)
-    inp.fire = True
-    inp.pod = int(t * 60) % 600 == 300
-    return inp
+                hx, hy = e.w * 0.5 + 3, e.h * 0.5 + 1.3
+            if e.x - hx > px + 80 or e.x + hx < px - 40:
+                continue
+            if k in ("prism", "piston"):
+                d = e.data
+                for i, t in enumerate(PLAN_T):
+                    ln = d["lo"] + (d["hi"] - d["lo"]) * (0.5 - 0.5 * math.cos((e.t + t) * d["sp"] + d["ph"]))
+                    x = e.x - sc * t              # the terrain under it moves along: same column
+                    if e.ceil:
+                        top, bot = -2, g.ceil_at(e.x) + ln
+                    else:
+                        top, bot = g.floor_at(e.x) - ln, FH + 2
+                    out[i].append((x, (top + bot) / 2, hx, (bot - top) / 2 + 1.3 + 1.0, 1.0))
+                continue
+            if k == "vent":
+                for i, t in enumerate(PLAN_T):
+                    cyc = (e.t + t + e.data.get("ph", 0)) % 3.2
+                    if cyc >= 2.1:
+                        y0 = e.y + 2 if e.ceil else e.y - 24
+                        out[i].append((e.x - sc * t, y0 + 11, 2.5 + 2 + 1, 11 + 1 + 1, 1.0))
+            if k == "node":
+                o = e.data.get("other")
+                if e.ceil and o is not None and not o.dead:
+                    y0, y1 = e.y + 2, o.y - 2
+                    for i, t in enumerate(PLAN_T):
+                        out[i].append((e.x - sc * t, (y0 + y1) / 2, 1.2 + 2 + 1, (y1 - y0) / 2 + 1 + 1, 1.0))
+            if k == "mine" and "arm" not in e.data:
+                for i, t in enumerate(PLAN_T):           # do not wake it up: it bursts into a ring
+                    out[i].append((e.x - 8 * t, e.y, 14, 14, 0.25))
+            if k == "orbiter":
+                b = e.data["boss"]
+                for i, t in enumerate(PLAN_T):
+                    a = e.data["a"] + (e.t + t) * 1.6
+                    r = 20 + 3 * math.sin((e.t + t) * 2)
+                    out[i].append((b.x + r * math.cos(a), b.y + r * 0.85 * math.sin(a), hx + 0.5, hy + 0.5, 1.0))
+                continue
+            if k == "lancer" and e.t < 1.3:
+                for i, t in enumerate(PLAN_T):
+                    x = e.x - max(0.0, e.t + t - 1.3) * 120
+                    out[i].append((x - 4, e.y, hx + 4, hy + 0.5, 1.0))
+                continue
+            if k == "comet" and e.t < 0.8:
+                for i, t in enumerate(PLAN_T):
+                    x = e.x - max(0.0, e.t + t - 0.8) * 110
+                    out[i].append((x - 3, e.y, hx + 3, hy + 0.5, 1.0))
+                continue
+            if e.anch:
+                vx, vy = -sc, 0.0
+            elif last is not None and now > last[2]:
+                vx, vy = (e.x - last[0]) / (now - last[2]), (e.y - last[1]) / (now - last[2])
+            else:
+                vx, vy = -20.0, 0.0
+            if e.boss is not None:
+                vx *= 0.5
+                vy *= 0.5
+                vel[key] = (vx, vy)
+            for i, t in enumerate(PLAN_T):
+                tt = min(t, 0.45)                   # beyond that a straight line says little
+                out[i].append((e.x + vx * tt, e.y + vy * tt, hx + 0.6 + t, hy + 0.6 + t, 1.0))
+        self.seen = nseen
+        for L in g.lasers:
+            x = L["o"].x + L["dx"]
+            for i, t in enumerate(PLAN_T):
+                tt = L["t"] + t
+                if L["warn"] - 0.05 < tt < L["warn"] + L["dur"]:
+                    out[i].append(((x - 2) / 2, L["y"], (x + 2) / 2 + 2 + 1, L["h"] / 2 + 1 + 1, 1.0))
+        for sw in g.sweeps:
+            o = sw["o"]
+            for i, t in enumerate(PLAN_T):
+                tt = sw["t"] + t
+                if tt < sw["warn"] - 0.05 or tt > sw["warn"] + sw["dur"]:
+                    continue
+                k = clamp((tt - sw["warn"]) / sw["dur"], 0, 1)
+                vx, vy = vel.get(id(o), (0.0, 0.0))
+                sweeps.append((i, o.x - o.w / 2 + 2 + vx * t, o.y + vy * t, sw["a0"] + (sw["a1"] - sw["a0"]) * k))
+        return out, sweeps
+
+    def walls(self, g, t):
+        """Ceiling and floor limits for the ship centre t seconds ahead, as a function of the screen x."""
+        cam = g.cam + g.scroll * t
+        C, F, N = g.ceil, g.floor, g.N
+        extra = 3.2 if g.wob else 0.0
+
+        def lim(x):
+            i0 = int(cam + x - 5)
+            i1 = int(cam + x + 6)
+            i0 = 0 if i0 < 0 else N - 1 if i0 >= N else i0
+            i1 = 0 if i1 < 0 else N - 1 if i1 >= N else i1
+            c = max(C[i0:i1 + 1]) if i1 >= i0 else C[i0]
+            f = min(F[i0:i1 + 1]) if i1 >= i0 else F[i0]
+            if extra:
+                c += extra if c > 0.5 else 0
+                f -= extra if f < FH - 0.5 else 0
+            return c + 2.6, f - 2.6
+        return lim
+
+    # --- choosing --------------------------------------------------------------------------------
+    def goal(self, g):
+        """Where a sensible pilot wants to be: lined up with the target (a boss core, the next enemy), near an
+        item worth having, otherwise in the open left third."""
+        px, py = g.px, g.py
+        boss = None
+        for e in (g.boss, g.mid):
+            if e is not None and not e.dead and e.boss["state"] in ("fight", "shift", "intro"):
+                boss = e
+        items = [it for it in g.items if (it.kind in SAFE_ITEMS and not (it.kind == "speed" and g.speed >= 3))
+                 or (it.kind == "slow" and g.speed >= 4)]
+        item = min(items, key=lambda it: abs(it.x - px) + abs(it.y - py)) if items else None
+        lo, hi = g.band(px + 6)
+        lo, hi = lo - 2, hi + 2                    # low enough to hit a turret on the floor
+        if boss is not None:
+            cx, cy = boss.boss["bd"]["core"][:2]
+            wy = boss.y + cy
+            wx = 20.0
+            if boss.boss["state"] == "intro":
+                wy = FH / 2
+        else:
+            wx = 22.0
+            best, bs = None, 1e9
+            for e in g.enemies:
+                if e.dead or e.inv or e.ghost or e.x < px + 6 or e.x > FW + 2:
+                    continue
+                s = abs(e.y - py) + (e.x - px) * 0.35 - (8 if e.solid else 0) + (e.hp if e.solid else 0)
+                if e.kind == "node" and e.data.get("other") is not None and not e.data["other"].dead:
+                    s -= 60                      # a beam between two nodes closes the cave: break it first
+                if s < bs:
+                    best, bs = e, s
+            wy = best.y if best is not None else (lo + hi) / 2
+        if item is not None and item.x > 6:
+            wx, wy = clamp(item.x - 2, 8, FW - 20), item.y
+        return clamp(wx, 8, FW - 20), clamp(wy, lo, hi), boss
+
+    def plan(self, g, inp):
+        px, py = g.px, g.py
+        sp = SPEEDS[g.speed - 1]
+        th, sweeps = self.threats(g)
+        lims = [self.walls(g, t) for t in PLAN_T]
+        wx, wy, boss = self.goal(g)
+        reach = sp * 0.8
+        xs = sorted({clamp(px + d, 5, FW - 9) for d in (-reach * 0.6, -reach * 0.3, 0, reach * 0.3, reach * 0.6)}
+                    | {clamp(wx, 5, FW - 9)})
+        ys = [clamp(py + reach * k / 7, 3, FH - 3) for k in range(-7, 8)] + [clamp(wy, 3, FH - 3)]
+        # threats near the ship only: one pruned list per sample
+        near = []
+        for i, t in enumerate(PLAN_T):
+            m = sp * t + 4
+            near.append([b for b in th[i] if abs(b[0] - px) < b[2] + m and abs(b[1] - py) < b[3] + m])
+        sw_by = {}
+        for i, ox, oy, a in sweeps:
+            sw_by.setdefault(i, []).append((ox, oy, math.cos(a), math.sin(a)))
+        diag = sp * 0.7071
+        best, bc, bhit = (px, py), 1e18, 9
+        for tx in xs:
+            for ty in ys:
+                ax, ay = abs(tx - px), abs(ty - py)
+                sx, sy = (1 if tx > px else -1), (1 if ty > py else -1)
+                tdiag = min(ax, ay) / diag
+                cost = 0.0
+                first = 9
+                for i, t in enumerate(PLAN_T):
+                    if t <= tdiag:
+                        x, y = px + sx * diag * t, py + sy * diag * t
+                    else:
+                        d = min(ax, ay)
+                        rest = (t - tdiag) * sp
+                        x = px + sx * (d + min(ax - d, rest))
+                        y = py + sy * (d + min(ay - d, rest))
+                    w = PLAN_W[i]
+                    c, f = lims[i](x)
+                    if y < c or y > f:
+                        cost += 900 * w
+                    else:
+                        gap = min(y - c, f - y)
+                        if gap < 3:
+                            cost += (3 - gap) * 6 * w
+                    for bx, by, hx, hy, bw in near[i]:
+                        ex, ey = abs(bx - x) - hx, abs(by - y) - hy
+                        if ex < 0 and ey < 0:
+                            cost += 1000 * w * bw
+                            if bw >= 1:
+                                first = min(first, i)
+                        else:
+                            e = ex if ex > ey else ey
+                            if e < 2.5:
+                                cost += (2.5 - e) * 5 * w * bw
+                    for ox, oy, dx, dy in sw_by.get(i, ()):
+                        rx, ry = x - ox, y - oy
+                        if rx * dx + ry * dy > 0 and abs(rx * dy - ry * dx) < 2.6 + 2.0:
+                            cost += 1000 * w
+                            first = min(first, i)
+                cost += abs(ty - wy) * 1.2 + abs(tx - wx) * 0.5 + (ax + ay) * 0.05
+                if tx < 10 or tx > FW - 24:
+                    cost += 15
+                if cost < bc:
+                    best, bc, bhit = (tx, ty), cost, first
+        self.tx, self.ty = best
+        self.danger = bhit
+        # bombs: a hit that can no longer be dodged
+        if self.bombs and bhit <= 1 and g.bombs > 0 and g.inv <= 0 and not g.shield:
+            self._bomb = True
+        # the lance: beam when something worth it is in the lane or bullets come down it, the nova at full charge
+        if g.charge >= CHARGE_LV[2]:
+            lane = 0.0
+            for e in g.targets():
+                if e.x > px + 8 and abs(e.y - py) < e.h / 2 + 3:
+                    lane += 3 if e.boss is not None else max(1.0, e.hp / 4)
+            bul = sum(1 for b in g.ebul if b.x > px + 8 and abs(b.y - py) < 4)
+            if g.charge >= CHARGE_LV[3]:
+                if lane > 0 or bul >= 2 or bhit <= 3:
+                    self.release = True
+            elif (lane >= 3 or bul >= 4 or bhit <= 2) and not boss:
+                self.release = True
+            elif boss is not None and bhit <= 1:
+                self.release = True
+        # the pod: keep it docked
+        p = g.pod
+        if p is not None and p.state in ("free", "out") and p.t > 0.3:
+            self.pod_t += self.every * DT
+            if self.pod_t > 0.6:
+                self._pod = True
+                self.pod_t = 0.0
+        else:
+            self.pod_t = 0.0
+
+
+def bot_input(g):
+    """The pilot for a game (one per game, kept on it); the title demo and the self-test use this."""
+    p = getattr(g, "_pilot", None)
+    if p is None:
+        p = g._pilot = Pilot(react=0.12, seed=1)
+    return p(g)
 
 
 class TitleDemo:
@@ -3464,7 +3759,7 @@ def render_title(demo, cols, rows, dt, sel, stage, diff, help_, kitty):
     cv = demo.scene(cols, rows, dt)
     unlocked, rec = progress()
     st = STAGES[stage]
-    items = ["Play", "Stage       < %d  %s >" % (stage + 1, st["name"]), "Difficulty  < %s >" % DIFFS[diff]]
+    items = ["Play", "Stage       < %d  %s >" % (stage + 1, st["name"]), "Difficulty  < %s >" % DIFFS[diff], AUTO_LABEL]
     extra = ["", "Eight stages, sixteen bosses, six pod crystals.",
              "Stages unlocked: %d of %d" % (unlocked, len(STAGES)),
              "Keys: %s" % ("with releases (kitty protocol)" if kitty else "classic terminal mode")]
@@ -3476,7 +3771,7 @@ def render_title(demo, cols, rows, dt, sel, stage, diff, help_, kitty):
     return cv
 
 
-def render_over(g, cv, record, won):
+def render_over(g, cv, record, won, auto=False):
     if won:
         lines = ["THE VOID FALLS SILENT", "", "All eight stages cleared.", "score %07d" % g.score]
     else:
@@ -3485,7 +3780,10 @@ def render_over(g, cv, record, won):
         lines.append("continues used: %d" % g.continues)
     if record:
         lines += ["", "** NEW RECORD **"]
-    lines += ["", "Esc / Q: menu" if won else "Enter: continue (score resets)   Esc / Q: menu"]
+    if auto:
+        lines += ["", "auto mode: a new round starts in a moment"]
+    else:
+        lines += ["", "Esc / Q: menu" if won else "Enter: continue (score resets)   Esc / Q: menu"]
     w = max(len(l) for l in lines) + 4
     x, y = max(0, (cv.cols - w) // 2), max(1, cv.rows // 2 - len(lines) // 2 - 1)
     edge = (250, 214, 120) if record else (110, 204, 160) if won else (200, 76, 86)
@@ -3496,7 +3794,7 @@ def render_over(g, cv, record, won):
 def continue_game(g):
     g.continues += 1
     g.score = 0
-    g.next_life = 50000
+    g.next_life, g.life_gap = 60000, 60000
     g.lives = g.d["lives"]
     g.bombs = g.d["bombs"]
     g.missile = g.crawl = g.nbits = 0
@@ -3600,6 +3898,64 @@ def play(term, held, stage, diff):
         time.sleep(max(0.0, 1 / 60 - (time.time() - now)))
 
 
+def render_auto(g, auto, cols, rows):
+    """The real game screen one row shorter, with the auto-mode bar on the last row."""
+    cv = render(g, cols, rows - 1)
+    cv.rows, cv.H = rows, rows * 2
+    cv.px += [[(6, 6, 12)] * cv.W for _ in range(2)]
+    auto.banner(cv, extra="%s  stage %d" % (g.diff, g.si + 1))
+    return cv
+
+
+def play_auto(term, stage, diff, hook=None):
+    """Auto mode: the real game (same stage and difficulty as chosen, no invulnerability) flown by the pilot.
+    After a game over or the last stage the result box shows for three seconds, then a new round starts.
+    Never records a score or unlocks a stage."""
+    auto = AutoMode()
+    rounds = 0
+
+    def new_round():
+        g = Game(stage, DIFFS[diff])
+        return g, Pilot(seed=rounds)
+    g, pilot = new_round()
+    last = time.time()
+    shown = 0.0
+    while True:
+        now = time.time()
+        frame = min(0.1, now - last)
+        last = now
+        for k, kind in term.events(0):
+            if kind != "press":
+                continue
+            a = auto.key(k)
+            if a == "stop":
+                return rounds
+            if a == "sound" and SND.toggle():
+                SND.play("sound_on")
+        for _ in range(auto.steps(frame, DT)):
+            g.step(pilot(g))
+        if hook is not None:
+            hook(g)
+        if g.phase in ("over", "won") and g.phase_t > 0.8:
+            if auto.scale(frame) > 0:                  # real seconds, not while paused
+                shown += frame
+            if shown > 3.0:
+                rounds += 1
+                g, pilot = new_round()
+                shown = 0.0
+        cols, rows = term.size()
+        if cols < MIN_COLS or rows < MIN_ROWS:
+            too_small(term)
+            time.sleep(0.2)
+            last = time.time()
+            continue
+        cv = render_auto(g, auto, cols, rows)
+        if g.phase in ("over", "won") and g.phase_t > 0.8:
+            render_over(g, cv, False, g.phase == "won", auto=True)
+        term.write(cv.emit())
+        time.sleep(max(0.0, 1 / 60 - (time.time() - now)))
+
+
 def main():
     with KeyTerminal() as term:
         held = HeldKeys(term.kitty)
@@ -3631,10 +3987,10 @@ def main():
                 elif k in ("q", "esc"):
                     return
                 elif k in ("up", "w"):
-                    sel = (sel - 1) % 3
+                    sel = (sel - 1) % 4
                     SND.play("menu")
                 elif k in ("down", "s", "tab"):
-                    sel = (sel + 1) % 3
+                    sel = (sel + 1) % 4
                     SND.play("menu")
                 elif k in ("left", "a", "right", "d"):
                     d = -1 if k in ("left", "a") else 1
@@ -3651,8 +4007,12 @@ def main():
                         SND.play("sound_on")
                 elif k in ("enter", " "):
                     SND.play("start")
-                    go = True
-            if go:
+                    go = "auto" if sel == 3 else True
+            if go == "auto":
+                play_auto(term, stage, diff)
+                held.clear()
+                last = time.time()
+            elif go:
                 held.clear()
                 play(term, held, stage, diff)
                 held.clear()
@@ -3867,6 +4227,53 @@ def selftest():
     for _ in range(30):
         render(g, 120, 40).emit(True)
     e120 = (time.perf_counter() - a) / 30
+    # auto mode: the real loop headless at x8 for a few seconds, one forced game over -> a new round, no scores
+    global submit
+    calls = []
+    real_submit, submit = submit, (lambda *a, **k: calls.append(a))
+
+    class FakeTerm:
+        kitty = False
+
+        def __init__(self):
+            self.t0 = time.time()
+            self.n = 0
+
+        def events(self, timeout=0.0):
+            self.n += 1
+            if self.n <= 3:
+                return [("+", "press")]          # x2, x4, x8
+            if self.n == 4:
+                return [("?", "press")]
+            if self.n == 5:
+                return [("x", "press")]           # closes the help
+            return [("esc", "press")] if time.time() - self.t0 > 6.0 else []
+
+        def size(self):
+            return (70, 22)
+
+        def write(self, s):
+            pass
+    seen = {"games": set(), "over": False, "far": 0.0}
+
+    def hook(g):
+        seen["games"].add(id(g))
+        seen["far"] = max(seen["far"], g.cam)
+        if time.time() - ft.t0 > 2.5 and not seen["over"]:
+            seen["over"] = True
+            g.lives = 0
+            g.player_hit()
+    snd, SND.enabled = SND.enabled, False          # silent, without touching the saved setting
+    try:
+        ft = FakeTerm()
+        rounds = play_auto(ft, 0, 1, hook=hook)
+    finally:
+        submit = real_submit
+        SND.enabled = snd
+    assert not calls, "auto mode submitted a score"
+    assert rounds >= 1 and len(seen["games"]) >= 2, "auto mode did not start a new round (%d)" % rounds
+    report.append("auto mode: %.0fs at x8 headless, %d new round(s), no scores submitted, flew %d units" % (
+        time.time() - ft.t0, rounds, seen["far"]))
     for line in report:
         print("  " + line)
     for c in (70, 120, 200):

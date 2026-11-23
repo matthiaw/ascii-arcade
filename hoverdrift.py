@@ -68,6 +68,7 @@ except ImportError:
         def toggle(self): return False
         def label(self): return "Sound: none"
         def stop(self): pass
+import arcadekit   # only for the shared auto mode (speed / pause / stop); HOVERDRIFT keeps its own look
 
 N = 512            # world size (it wraps around)
 M = N - 1
@@ -544,11 +545,11 @@ VEHICLES = [
 WEAPONS = [
     dict(name="Laser", rate=9.0, speed=200.0, col=(120, 255, 220), kind="bolt", mode="alt", life=2.2, splash=0),
     dict(name="Twin laser", rate=7.0, speed=200.0, col=(255, 120, 220), kind="bolt", mode="all", life=2.2, splash=0),
-    dict(name="Spread", rate=3.0, speed=170.0, col=(255, 240, 120), kind="bolt", mode="center", fan=5, life=1.6,
-         splash=0),
+    dict(name="Spread", rate=2.6, speed=170.0, col=(255, 240, 120), kind="bolt", mode="center", fan=5, gap=0.055,
+         life=1.6, splash=0),
     dict(name="Plasma", rate=2.2, speed=110.0, col=(170, 120, 255), kind="plasma", mode="center", life=3.0, splash=8),
     dict(name="Rockets", rate=1.8, speed=60.0, col=(255, 200, 90), kind="rocket", mode="alt", life=5.0, splash=9),
-    dict(name="Bombs", rate=1.5, speed=0.0, col=(255, 140, 60), kind="bomb", mode="center", life=9.0, splash=14),
+    dict(name="Bombs", rate=1.5, speed=0.0, col=(255, 140, 60), kind="bomb", mode="center", life=9.0, splash=16),
 ]
 # --- sound effects: calm and soft, one per weapon --------------------------------------------------------
 SND = Sound("hoverdrift", {
@@ -573,6 +574,7 @@ SND = Sound("hoverdrift", {
     "bump": [dict(w="sine", f=90, f2=50, d=0.12, v=0.35), dict(w="noise", f=400, d=0.08, v=0.14, at=0)],
 })
 POPUP_LIFE = 1.1
+BOMB_TALL = 2.0    # a bomb's fireball reaches this many times its radius upwards (balloons and drones too)
 LOCK_COL, POP_BG = (255, 236, 150), (14, 14, 28)
 TOWER_A, TOWER_B = (226, 74, 62), (236, 236, 242)   # radio-mast stripes: readable on every world
 TARGETS = {  # radius, vertical half size, points
@@ -624,6 +626,12 @@ class Game:
         self.amb_acc = 0.0
         self.loading = None
         self.scrape = False    # skimming the ground (the floor holds the craft up)
+        self.fired = 0         # trigger pulls this flight (auto mode shows the accuracy)
+        self.auto = None       # arcadekit.AutoMode while the game plays itself
+        self.pilot = None      # the AutoPilot that flies in auto mode
+        self.sortie_end = 0.0  # auto mode: game time when this sortie ends
+        self.result = None     # auto mode: (lines, real time it closes) of the result box
+        self.pilot_turn = False  # True while the AutoPilot's own key presses are fed in
 
     @property
     def veh(self):
@@ -668,14 +676,14 @@ class Game:
         elif k in ("esc", "q"):
             self.quit = True
         elif k in ("up", "w"):
-            self.tsel = (self.tsel - 1) % 3
+            self.tsel = (self.tsel - 1) % 4
             SND.play("tick")
         elif k in ("down", "s", "tab"):
-            self.tsel = (self.tsel + 1) % 3
+            self.tsel = (self.tsel + 1) % 4
             SND.play("tick")
         elif k in ("left", "a", "right", "d"):
             d = -1 if k in ("left", "a") else 1
-            if self.tsel:
+            if self.tsel in (1, 2):
                 SND.play("blip", 0.8)
             if self.tsel == 1:
                 self.vi = (self.vi + d) % len(VEHICLES)
@@ -688,13 +696,90 @@ class Game:
                     self.loading = (random.randrange(1 << 30), THEME_ORDER[self.tworld - 1])
         elif k in ("enter", " "):
             SND.play("start", 0.8)
+            if self.tsel == 3:
+                self.start_auto()
+                return
             self.title = False
             self.drift, self.armed, self.hud, self.help = False, True, True, True
+            self.reset_flight()
             self.say("")
+
+    def reset_flight(self):
+        self.score, self.hits, self.fired = 0, 0, 0
+        self.targets, self.shots, self.popups = [], [], []
+        self.score_t = -9.0
+        self.autofire, self.firing, self.paused = False, 0.0, False
+
+    # --- auto mode: sorties of AUTO_SORTIE seconds flown by the AutoPilot, a result box, the next sortie
+    def start_auto(self, speed=1.0):
+        self.auto = arcadekit.AutoMode(speed)
+        self.title = False
+        self.drift, self.armed, self.hud, self.help = False, True, True, False
+        self.sortie = 0
+        self.new_sortie(first=True)
+
+    def new_sortie(self, first=False):
+        """The chosen vehicle and world; a fresh land each sortie and the next weapon in turn."""
+        if not first:
+            theme = THEME_ORDER[self.tworld - 1] if self.tworld else random.choice(THEME_ORDER)
+            self.loading = (random.randrange(1 << 30), theme)
+            self.weapon = (self.weapon + 1) % len(WEAPONS)
+        self.sortie += 1
+        self.reset_flight()
+        self.result = None
+        self.throttle = self.speed = self.veh["vmax"] * 0.4
+        self.hover = self.veh["hover"][2]
+        self.pilot = AutoPilot(random.Random())
+        self.sortie_end = self.t + AUTO_SORTIE
+        self.say("Auto mode: %s, %s" % (self.veh["name"], WEAPONS[self.weapon]["name"]))
+
+    def stop_auto(self):
+        self.auto, self.pilot, self.result = None, None, None
+        self.title, self.paused, self.help = True, False, False
+        self.drift, self.armed, self.hud = True, False, False
+        self.targets, self.shots, self.popups = [], [], []
+        self.autofire, self.firing = False, 0.0
+        self.say("")
+
+    def auto_key(self, k):
+        a = self.auto.key(k)
+        if a == "stop":
+            self.stop_auto()
+        elif a == "sound":
+            if SND.toggle():
+                SND.play("blip", 0.8)
+
+    def auto_step(self, dt):
+        """One fixed simulation step of auto mode (the speed setting decides how many run per frame)."""
+        if self.result or self.loading:
+            return
+        self.pilot_turn = True
+        for k in self.pilot.keys(self, dt):
+            self.key(k)
+        self.pilot_turn = False
+        self.update(dt)
+        if self.t >= self.sortie_end:
+            acc = 100.0 * self.hits / max(1, self.fired)
+            lines = ["SORTIE %d OVER" % self.sortie, "",
+                     "%s with %s" % (self.veh["name"], WEAPONS[self.weapon]["name"]),
+                     "Score %d    targets %d    %.1f per minute" % (self.score, self.hits, self.hits * 60.0 / AUTO_SORTIE),
+                     "hits per trigger pull %.0f%%" % acc, "", "next sortie: a new land, the next weapon"]
+            self.result = (lines, time.time() + 3.0)
+
+    def auto_frame(self, dt):
+        """Called once per real frame in auto mode: run the scaled steps, close the result box when due."""
+        if self.result and time.time() >= self.result[1] and not (self.auto.paused or self.auto.help):
+            self.new_sortie()
+            return
+        for _ in range(self.auto.steps(dt, AUTO_STEP)):
+            self.auto_step(AUTO_STEP)
 
     def key(self, k):
         if self.title:
             self.title_key(k)
+            return
+        if self.auto and not self.pilot_turn:
+            self.auto_key(k)
             return
         # the keys every ASCII ARCADE game shares: Esc / P pause menu, Q quits from it, ? help
         if self.paused:
@@ -931,7 +1016,7 @@ class Game:
                               huge=k == "bomb")
                     if self.wdist(s["x"], s["y"]) < 300:
                         SND.play("blast", 1.0 if k == "bomb" else 0.7, 0.12)
-                    self.blast(s["x"], s["y"], z, s["splash"])
+                    self.blast(s["x"], s["y"], z, s["splash"], BOMB_TALL if k == "bomb" else 1.0)
                     if hit:
                         self.pop(hit)
                 elif hit:
@@ -945,6 +1030,7 @@ class Game:
 
     def fire(self):
         w, V = WEAPONS[self.weapon], self.veh
+        self.fired += 1
         self.cool = 1.0 / (w["rate"] * V["rate"])
         SND.play(w["name"], 0.7, max(self.cool * 0.9, 0.13))   # at most ~8 shot sounds a second
         self.flash = self.t + 0.07
@@ -959,7 +1045,7 @@ class Game:
         else:
             offs = (0.0,)
         n = w.get("fan", 1)
-        fan = [(i - (n - 1) / 2) * 0.07 for i in range(n)]
+        fan = [(i - (n - 1) / 2) * w.get("gap", 0.07) for i in range(n)]
         sp = w["speed"] + self.speed
         vz = 0.0
         aim = self.aim_target(0.22)
@@ -987,9 +1073,11 @@ class Game:
             SND.play(snd, 0.8, 0.06)
             self.boom(tg["x"], tg["y"], tg["z"], tg["col"], big=tg["kind"] in ("drone", "tower"))
 
-    def blast(self, x, y, z, r):
+    def blast(self, x, y, z, r, tall=1.0):
+        """Pop everything in the blast; tall > 1 stretches it upwards (a bomb's fireball climbs high)."""
         for tg in list(self.targets):
-            dx, dy, dz = self.wrap(tg["x"] - x), self.wrap(tg["y"] - y), max(0.0, abs(tg["z"] - z) - tg["rz"])
+            dx, dy = self.wrap(tg["x"] - x), self.wrap(tg["y"] - y)
+            dz = max(0.0, abs(tg["z"] - z) - tg["rz"]) / (tall if tg["z"] > z else 1.0)
             if dx * dx + dy * dy + dz * dz < r * r:
                 self.pop(tg)
 
@@ -997,7 +1085,7 @@ class Game:
         n = 120 if huge else 70 if big else 36
         vmax = 26 if huge else 18 if big else 12
         for _ in range(n):
-            a, e = random.uniform(0, 6.3), random.uniform(-0.4, 1.2)
+            a, e = random.uniform(0, 6.3), random.uniform(0.2, 1.5) if huge else random.uniform(-0.4, 1.2)
             v = random.uniform(4, vmax)
             c = random.choice([col, (255, 230, 140), (255, 140, 40), col])
             self.parts.append([x, y, z, math.cos(a) * math.cos(e) * v, math.sin(a) * math.cos(e) * v,
@@ -1044,6 +1132,139 @@ class Game:
             if da < cone and da * 100 + d * 0.1 < bd:
                 best, bd = tg, da * 100 + d * 0.1
         return best
+
+
+# =============================================================================================
+# Auto mode pilot: flies through the same keys a player uses (no cheats), with a human reaction time,
+# a held-key repeat rate and a small aiming error
+# =============================================================================================
+AUTO_SORTIE = 90.0     # seconds of game time per auto-mode sortie
+AUTO_STEP = 1 / 40     # fixed simulation step in auto mode
+
+
+class AutoPilot:
+    REACT = (0.16, 0.30)   # seconds between looks at the scene (a human reaction time)
+    REPEAT = 1 / 30        # a held key repeats this often
+    AIM_ERR = 0.035        # radians: how far off the pilot's idea of "dead ahead" can be
+
+    def __init__(self, rnd):
+        self.rnd = rnd
+        self.next_look = 0.0
+        self.next_press = 0.0
+        self.tg = None
+        self.want = None       # wanted heading (radians), None = just cruise
+        self.err = 0.0         # this look's aiming error
+        self.shoot = False
+        self.give_up = 0.0     # chasing one target too long: pick another
+        self.speed_want = 0.0
+
+    @staticmethod
+    def bearing(g, x, y):
+        dx, dy = g.wrap(x - g.x), g.wrap(y - g.y)
+        return math.atan2(-dx, -dy), math.hypot(dx, dy)
+
+    @staticmethod
+    def adiff(a, b):
+        return (a - b + math.pi) % TAU - math.pi
+
+    def clear_shot(self, g, tg, d):
+        """Terrain does not block the line from the guns to the target (bolts hit hills)."""
+        W = g.world
+        z0 = g.alt + 0.8
+        n = max(3, int(d / 12))
+        for i in range(1, n):
+            f = i / n
+            x = g.x + g.wrap(tg["x"] - g.x) * f
+            y = g.y + g.wrap(tg["y"] - g.y) * f
+            if W.height(x, y) > z0 + (tg["z"] - z0) * f + 0.5:
+                return False
+        return True
+
+    def bomb_lead(self, g, tg):
+        """How far ahead a bomb lands from here (it keeps the craft's speed and falls)."""
+        h = max(0.5, g.alt - 0.5 - g.world.height(tg["x"], tg["y"]))
+        t = (2 + math.sqrt(4 + 60 * h)) / 30
+        return g.speed * t
+
+    def look(self, g):
+        w = WEAPONS[g.weapon]
+        rng = min(300.0, w["speed"] * w["life"] * 0.85) if w["kind"] != "bomb" else 300.0
+        best, bv = None, -1e9
+        for tg in g.targets:
+            a, d = self.bearing(g, tg["x"], tg["y"])
+            da = abs(self.adiff(a, g.heading))
+            if d < (3 if w["kind"] == "bomb" else 12) or d > rng:
+                continue
+            if w["kind"] == "bomb" and tg["z"] - g.world.height(tg["x"], tg["y"]) > BOMB_TALL * w["splash"] + tg["rz"] - 2:
+                continue   # bombs only reach what sits low
+            v = tg["pts"] * 2.0 - da * 7.0 - d * 0.02
+            if tg is self.tg:
+                v += 3.0   # stick with the current choice (no dithering)
+            if v > bv:
+                best, bv = tg, v
+        if best is not self.tg:
+            self.give_up = g.t + 6.0
+        if best is self.tg and g.t > self.give_up:
+            best = None   # it keeps escaping: let it go for a moment
+            self.give_up = g.t + 6.0
+        # a fresh target: a fresh aiming error; staying on it, the pilot sees the shots miss and corrects
+        self.err = self.rnd.gauss(0.0, self.AIM_ERR) if best is not self.tg else self.err * 0.6 + self.rnd.gauss(0.0, self.AIM_ERR * 0.3)
+        self.tg = best
+        self.shoot = False
+        V = g.veh
+        if best is None:
+            # cruise: steer gently away from tall ground ahead, else wander
+            fx, fy = g.fwd()
+            W = g.world
+            self.want = g.heading + 0.3 * math.sin(g.t * 0.11)
+            if W.height(g.x + fx * 60, g.y + fy * 60) > g.alt + 8:
+                l = W.height(g.x + fx * 50 - fy * 30, g.y + fy * 50 + fx * 30)
+                r = W.height(g.x + fx * 50 + fy * 30, g.y + fy * 50 - fx * 30)
+                self.want = g.heading + (0.6 if l < r else -0.6)
+            self.speed_want = V["vmax"] * 0.6
+            return
+        a, d = self.bearing(g, best["x"], best["y"])
+        if best["kind"] == "drone":   # lead a moving drone a little
+            t = d / (w["speed"] + g.speed) if w["kind"] != "bomb" else d / max(g.speed, 10.0)
+            a, d = self.bearing(g, best["x"] - math.sin(best["hd"]) * 14 * t, best["y"] - math.cos(best["hd"]) * 14 * t)
+        self.want = a + self.err
+        off = abs(self.adiff(a, g.heading))
+        if w["kind"] == "bomb":
+            lead = self.bomb_lead(g, best)
+            along, lat = d * math.cos(off), d * math.sin(off)
+            self.shoot = abs(lat) < w["splash"] * 0.5 and -3 < along - lead < 8
+            self.speed_want = min(45.0, V["vmax"] * (0.8 if off < 0.3 else 0.35))
+        else:
+            pad = 2.6 if w["kind"] == "plasma" else 1.6
+            fan = (w.get("fan", 1) - 1) / 2 * w.get("gap", 0.07)
+            spray = 0.05 if w["rate"] >= 5 else 0.0   # a fast gun costs nothing: hold the trigger and sweep
+            tol = 0.5 if w["kind"] == "rocket" else math.atan2(best["r"] + pad, d) + fan + spray
+            self.shoot = off < tol and self.clear_shot(g, best, d)
+            self.speed_want = V["vmax"] * (0.55 if off < 0.5 else 0.3)
+
+    def keys(self, g, dt):
+        out = []
+        if g.t >= self.next_look:
+            self.look(g)
+            self.next_look = g.t + self.rnd.uniform(*self.REACT)
+        if g.t < self.next_press:
+            return out
+        self.next_press = g.t + self.REPEAT
+        V = g.veh
+        if self.want is not None:
+            e = self.adiff(self.want, g.heading) - g.yaw_rate * 0.35   # where the turn will coast to
+            if e > 0.03:
+                out.append("left")
+            elif e < -0.03:
+                out.append("right")
+        step = V["vmax"] / 16
+        if g.throttle < self.speed_want - step * 0.6:
+            out.append("up")
+        elif g.throttle > self.speed_want + step * 0.6:
+            out.append("down")
+        if self.shoot and (g.firing <= g.t + 0.1):
+            out.append(" ")
+        return out
 
 
 # =============================================================================================
@@ -1384,7 +1605,9 @@ def render(g, scr, cols, rows):
             if pr:
                 fgc = mix(mix(pcol, (255, 255, 255), 0.45), POP_BG, clamp((age / POPUP_LIFE - 0.6) * 2.5, 0, 1))
                 put_cells(cells, cols, prow, int(pr[0]) - 2, int(pr[1]) // 2, " %s " % text, fgc, POP_BG)
-    if g.help:
+    if g.auto:
+        auto_cells(g, cells, cols, prow)
+    elif g.help:
         box_cells(cells, HELP, cols, prow)
     elif g.paused:
         box_cells(cells, PAUSE + ["", SND.label()], cols, prow)
@@ -1498,7 +1721,7 @@ def hud(g, cols, rows):
     if g.hud:
         out.append(weapon_bar(g, cols))
     msg = g.msg if g.msg and g.t < g.msg_t else ""
-    right = (" ? help  Esc menu ", HUD_DIM, HUD_BG, 1)
+    right = (" ? help  Esc menu " if not g.auto else " ", HUD_DIM, HUD_BG, 1)
     if g.hud:
         deg = int(math.degrees(-g.heading)) % 360
         ci = int(deg / 360 * len(COMPASS))
@@ -1547,6 +1770,8 @@ HELP = [
     "",
     "Esc / P             pause menu (Q there: quit, M: sound)",
     "?                   show / hide this help",
+    "",
+    "Auto mode: the game plays itself (Space pause, +/- speed, Esc stop)",
 ]
 PAUSE = [
     "P A U S E D",
@@ -1559,6 +1784,22 @@ PAUSE = [
 
 
 BOX_FG, BOX_BG = (240, 240, 246), (22, 22, 42)
+
+
+def auto_cells(g, cells, cols, rows):
+    """Auto mode: the amber AUTO bar on the bottom row of the view, the result box, the auto-mode help."""
+    a = g.auto
+    t = a.text("sortie %d  %ds" % (g.sortie, max(0, int(g.sortie_end - g.t))))
+    if len(t) > cols:
+        t = a.text()
+    if len(t) > cols:
+        t = (" AUTO %s  Esc stop " % ("PAUSED" if a.paused else ("x%g" % a.speed)))[:cols]
+    put_cells(cells, cols, rows, 0, rows - 1, " " * cols, (24, 16, 6), arcadekit.shade(arcadekit.AUTO_BG, 0.55))
+    put_cells(cells, cols, rows, max(0, (cols - len(t)) // 2), rows - 1, t, (20, 14, 4), arcadekit.AUTO_BG)
+    if a.help:
+        box_cells(cells, arcadekit.AUTO_HELP + ["", SND.label()], cols, rows - 1)
+    elif g.result:
+        box_cells(cells, g.result[0], cols, rows - 1)
 
 
 def put_cells(cells, cols, rows, x, y, s, fg, bg=None):
@@ -1595,7 +1836,7 @@ def title_cells(g, colsbuf, cells, cols, rows):
     name = "HOVERDRIFT"
     PW, PH = cols, rows * 2
     world = "Random (now %s)" % THEMES[g.world.theme]["name"] if g.tworld == 0 else THEMES[THEME_ORDER[g.tworld - 1]]["name"]
-    items = ["Fly", "Vehicle   < %s >" % g.veh["name"], "World     < %s >" % world]
+    items = ["Fly", "Vehicle   < %s >" % g.veh["name"], "World     < %s >" % world, arcadekit.AUTO_LABEL]
     extra = ["", "%s: %s" % (g.veh["name"], g.veh["desc"])]
     # the same letter size as every ASCII ARCADE title (it fits the longest name, 11 letters)
     k = 2 if cols >= 11 * 12 - 2 + 4 and 8 + len(items) * 2 + len(extra) + 9 <= rows else 1
@@ -1687,6 +1928,8 @@ def arg(name):
 def main():
     if "--bench" in sys.argv:
         return bench()
+    if "--selftest" in sys.argv:
+        return selftest()
     theme, veh = arg("--world"), arg("--vehicle")
     if theme is not None and theme not in THEMES:
         print("Worlds: %s" % ", ".join(THEME_ORDER))
@@ -1727,7 +1970,10 @@ def main():
                 g.key(k)
             if g.quit:
                 break
-            g.update(dt)
+            if g.auto:
+                g.auto_frame(dt)
+            else:
+                g.update(dt)
             cols, rows = os.get_terminal_size()
             if cols < 40 or rows < 12:
                 w("\x1b[H\x1b[2JPlease make the window larger.")
@@ -1768,6 +2014,66 @@ def bench():
         t2 = time.time()
         print("%-15s world %.2fs, frame %.1f ms at 160x45  (shots %d, score %d)"
               % (THEMES[theme]["name"], t1 - t0, (t2 - t1) / n * 1000, len(g.shots), g.score))
+
+
+def selftest(seconds=40.0):
+    """Headless checks: title menu, normal flight, and auto mode at x8 (sorties, result box, next sortie)."""
+    def submit_forbidden(*a, **k):
+        raise AssertionError("auto mode must never record a score")
+    arcadekit.submit = submit_forbidden
+    scr = Screen()
+    g = Game(7, "meadow", 0)
+    for k in ("down", "right", "down", "down"):          # vehicle -> jet, onto the Auto mode entry
+        g.key(k)
+    assert g.tsel == 3 and g.vi == 1, (g.tsel, g.vi)
+    render(g, scr, 120, 40)
+    g.key("enter")
+    assert g.auto and not g.title and g.armed and g.vi == 1
+    for k in ("+", "+", "+", "+", "+"):
+        g.key(k)
+    assert g.auto.speed == 8.0, g.auto.speed
+    g.key(" ")
+    t0 = g.t
+    g.auto_frame(0.1)
+    assert g.t == t0 and g.auto.paused, "pause must stop game time"
+    g.key(" ")
+    frames, sorties, worlds = 0, set(), set()
+    while g.t < seconds * 3 and frames < 4000:
+        if g.loading:
+            g.finish_load()
+        before = g.t
+        g.auto_frame(0.05)
+        if g.result:                                    # do not wait 3 real seconds for the result box
+            assert g.score >= 0 and "OVER" in g.result[0][0]
+            render(g, scr, 120, 40)
+            g.result = (g.result[0], 0.0)
+        elif not g.loading:
+            assert g.t - before > 0.05 * 8 * 0.7, "x8 must run ~8x the game time per frame"
+        if frames % 25 == 0:
+            render(g, scr, 120, 40)
+        sorties.add(g.sortie)
+        worlds.add(g.world.seed)
+        frames += 1
+    print("auto mode: %.0f s game time in %d frames at x8, %d sorties, score %d (%d targets, %d trigger pulls)"
+          % (g.t, frames, len(sorties), g.score, g.hits, g.fired))
+    assert len(sorties) >= 2 and len(worlds) >= 2, "a new sortie in a new land after the result box"
+    assert g.weapon != 0 or len(sorties) > len(WEAPONS), "the next weapon each sortie"
+    g.key("esc")
+    assert g.title and g.auto is None and not g.armed, "Esc goes back to the title"
+    render(g, scr, 120, 40)
+    g.tsel = 0
+    g.key("enter")
+    assert not g.title and g.auto is None and g.score == 0, "Fly starts clean after auto mode"
+    g.help = False
+    for i in range(80):
+        g.key("left" if i % 2 else " ")
+        g.update(1 / 30)
+    render(g, scr, 120, 40)
+    g.key("esc")
+    assert g.paused
+    g.key("q")
+    assert g.quit
+    print("selftest OK")
 
 
 if __name__ == "__main__":
