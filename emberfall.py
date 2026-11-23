@@ -211,6 +211,7 @@ def line(x0, y0, x1, y1):
 
 
 def wrap(text, width):
+    width = max(8, width)            # a tiny window must not end the game
     out = []
     for para in text.split("\n"):
         if not para.strip():

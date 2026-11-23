@@ -1106,8 +1106,58 @@ def make_wall_textures_fine(R):
     return tex, glow
 
 
+DETAIL, DM = 256, 255   # the grain laid over filtered close-up walls: DETAIL x DETAIL cells per wall face
+
+
+def make_wall_detail(wc):
+    """Fine grain for a wall seen from very close, as colour offsets (around +4, the middle of an 8-step):
+    pits in the bricks, speckles in the concrete, brushed streaks on the tech panels, mottled moss and stone."""
+    rnd = random.Random(70 + ord(wc))
+    D = DETAIL
+    blot = [[rnd.random() for _ in range(32)] for _ in range(32)]
+    streak = [rnd.uniform(-1, 1) for _ in range(D)]
+    xs = []                     # the smooth blotches: 32 cells across, read bilinearly (8 detail cells each)
+    for x in range(D):
+        u = x / 8 - 0.5
+        x0 = math.floor(u)
+        xs.append((x0 % 32, (x0 + 1) % 32, u - x0))
+    amp = 4.5 if wc == 'B' else 5.5
+    out = []
+    for y in range(D):
+        sk = streak[y]
+        v = y / 8 - 0.5
+        y0 = math.floor(v)
+        fy = v - y0
+        ra, rb = blot[y0 % 32], blot[(y0 + 1) % 32]
+        line = [ra[i] * (1 - fy) + rb[i] * fy for i in range(32)]
+        for x0, x1, fx in xs:
+            w = rnd.random() * 2 - 1
+            if wc == 'T':      # brushed metal: lines along the panel, a whisper of grain
+                n = sk * 3.5 + w * 1.5
+            else:
+                n = w * amp + (line[x0] * (1 - fx) + line[x1] * fx - 0.5) * 9
+                q = rnd.random()
+                if q < 0.03:
+                    n -= 10           # pits and dark specks
+                elif q < 0.045 and wc != 'B':
+                    n += 7            # light grit
+            out.append(4.0 + n)
+    return out
+
+
 def make_floor_tables():
     """Floor and ceiling texels for every distance level and light level."""
+    floor, ceil, lamp = make_floor_textures()
+    FT, CT = [], []
+    for lvl in range(LEVELS):
+        fl, cl_ = floor_level(floor, ceil, lamp, lvl)
+        FT.append(fl)
+        CT.append(cl_)
+    return FT, CT
+
+
+def make_floor_textures():
+    """The 16x16 floor, ceiling and ceiling-lamp tiles."""
     rnd = random.Random(9)
     floor, ceil, lamp = [], [], []
     for y in range(16):
@@ -1128,33 +1178,41 @@ def make_floor_tables():
             ceil.append(c)
             d = max(abs(x - 7.5), abs(y - 7.5))
             lamp.append((255, 238, 196) if d < 3 else (200, 180, 140) if d < 4 else c)
-    FT, CT = [], []
-    for lvl in range(LEVELS):
-        fl, cl_ = floor_level(floor, ceil, lamp, lvl)
-        FT.append(fl)
-        CT.append(cl_)
-    return FT, CT
+    return floor, ceil, lamp
 
 
-def floor_level(floor, ceil, lamp, lvl):
-    """Floor and ceiling texels lit for every light level and fogged for one distance level."""
+def floor_level(floor, ceil, lamp, lvl, nl=6):
+    """Floor and ceiling texels lit for every light level (nl of them, from dark to next to a lamp) and
+    fogged for one distance level."""
     fl, cl_ = [], []
-    for li in range(6):
-        boost = 1.0 + li * 0.17
-        warm = li * 5
+    step = 5 / (nl - 1)
+    fu, cu, lu = set(floor), set(ceil), set(lamp)
+    lit = {c: fogged(c, lvl, emissive=(c[0] > 150)) for c in lu}
+    lamp_lit = [lit[c] for c in lamp]
+    for li in range(nl):
+        L = li * step
+        boost = 1.0 + L * 0.17
+        warm = L * 5
         par = []
         for p in (0, 1):
             tint = 1.0 if p == 0 else 0.86
-            par.append([fogged((min(255, c[0] * boost * tint + warm), min(255, c[1] * boost * tint + warm * 0.7),
-                                min(255, c[2] * boost * tint)), lvl) for c in floor])
+            memo = {c: fogged((min(255, c[0] * boost * tint + warm), min(255, c[1] * boost * tint + warm * 0.7),
+                               min(255, c[2] * boost * tint)), lvl) for c in fu}
+            par.append([memo[c] for c in floor])
         fl.append(par)
-        cb = 1.0 + li * 0.12
-        cl_.append([[fogged(shade(c, cb), lvl) for c in ceil],
-                    [fogged(c, lvl, emissive=(c[0] > 150)) for c in lamp]])
+        cb = 1.0 + L * 0.12
+        memo = {c: fogged(shade(c, cb), lvl) for c in cu}
+        cl_.append([[memo[c] for c in ceil], lamp_lit])
     return fl, cl_
 
 
 FLOOR_FINE = 32   # close-up floor and ceiling tiles: twice the texels, thin seams, round bolts and lamps
+LIGHTS, LSUB = 11, 2   # the big-window renderer's floor light levels: two per level of the small one
+BIG_VIEW = 150    # views at least this many pixels wide get the smooth renderer (see Renderer.view_fine)
+_B4 = ((0, 8, 2, 10), (12, 4, 14, 6), (3, 11, 1, 9), (15, 7, 13, 5))   # 4x4 ordered-dither (Bayer) thresholds
+DITHER_LIGHT = [[(_B4[(k + 2) & 3][(m + 1) & 3] + 0.5) / 16 for m in range(4)] for k in range(4)]   # floor light
+DITHER_FOG = [[(_B4[(k + 1) & 3][(m + 2) & 3] + 0.5) / 16 for m in range(4)] for k in range(4)]   # distance fog
+SMOOTH = 0.7      # walls whose texels are over 1/SMOOTH (1.4) pixels tall are filtered (bilinear) in big windows
 
 
 def make_floor_textures_fine():
@@ -1195,6 +1253,58 @@ def make_floor_textures_fine():
             d = (dx ** 4 + dy ** 4) ** 0.25                        # a rounded square
             lamp.append((255, 244, 214) if d < 2.2 else (255, 238, 196) if d < 3 else
                         (200, 180, 140) if d < 3.6 else (120, 110, 96) if d < 4 else cc)
+    return floor, ceil, lamp
+
+
+FLOOR_FINE2 = 64   # the floor and ceiling right in front of the player in a big window: four times the texels
+
+
+def make_floor_textures_64():
+    """The floor and ceiling tiles at 64x64 (the 16x16 layout in quarter-texel steps): bevelled seams, round
+    bolts with a shadow, scuffed grain, ceiling panels with soft seams, a rounded lamp with a glowing rim."""
+    rnd = random.Random(29)
+    R, f = FLOOR_FINE2, FLOOR_FINE2 // 16
+    floor, ceil, lamp = [], [], []
+    for y in range(R):
+        for x in range(R):
+            u, v = (x + 0.5) / f, (y + 0.5) / f
+            e = min(u, v)                                         # distance into the tile from its seams
+            bx, by = (4.5 if u < 8.5 else 12.5), (4.5 if v < 8.5 else 12.5)
+            bolt = math.hypot(u - bx, v - by)
+            diag = (x + y) % (6 * f)
+            if e < 0.5:
+                c = (36, 37, 42) if e < 0.3 else (46, 47, 53)
+            elif e < 1.0:
+                c = (52, 54, 60)
+            elif e < 1.5:
+                c = (86, 88, 96) if e < 1.25 else (80, 82, 90)
+            elif e < 2.0:
+                c = (70, 72, 79)
+            elif bolt < 0.62:
+                c = (170, 172, 180) if (u - bx) + (v - by) < -0.45 else (148, 150, 158) if (u - bx) + (v - by) < -0.1 \
+                    else (120, 122, 130) if bolt < 0.5 else (98, 100, 108)
+            elif bolt < 0.9 and v > by:
+                c = (44, 45, 50)
+            elif diag < f:
+                c = (68, 70, 76) if diag < f // 2 else (63, 65, 71)
+            else:
+                w = 58 + rnd.uniform(-4, 4) + (4 if rnd.random() < 0.04 else -3 if rnd.random() < 0.04 else 0)
+                c = (int(w), int(w) + 1, int(w) + 6)
+            floor.append(c)
+            if u < 0.5 or v < 0.5:
+                cc = (24, 25, 32)
+            else:
+                cc = (36, 38, 48) if (int(u) // 4 + int(v) // 4) % 2 else (32, 34, 43)
+                if (u % 4) < 0.25 or (v % 4) < 0.25:
+                    cc = (cc[0] - 3, cc[1] - 3, cc[2] - 3)
+                elif rnd.random() < 0.06:
+                    cc = (cc[0] + 2, cc[1] + 2, cc[2] + 2)
+            ceil.append(cc)
+            dx, dy = abs(u - 8.0), abs(v - 8.0)
+            d = (dx ** 4 + dy ** 4) ** 0.25
+            lamp.append((255, 248, 226) if d < 1.6 else (255, 244, 214) if d < 2.2 else (255, 238, 196) if d < 3 else
+                        (228, 210, 168) if d < 3.3 else (200, 180, 140) if d < 3.6 else
+                        (150, 138, 116) if d < 3.8 else (120, 110, 96) if d < 4 else cc)
     return floor, ceil, lamp
 
 
@@ -1667,6 +1777,8 @@ class Renderer:
         self.FT, self.CT = make_floor_tables()
         self.fine_tex, self.fine_floor = {}, None   # close-up textures, made the first time they are needed
         self.fine_walls, self.fine_levels = {}, {}
+        self.flat_tex, self.flat_levels = {}, {}    # floor and ceiling tables of the big-window renderer
+        self.details = {}                           # fine grain over close-up walls, per wall kind
         self.sprites = SpriteBank()
         self.true = os.environ.get("COLORTERM", "").lower() in ("truecolor", "24bit")
         self.fgc, self.bgc = {}, {}
@@ -1686,13 +1798,35 @@ class Renderer:
                  if x % 4 == 2 and y % 4 == 2 and g.grid[y][x] == '.']
         self.lamp = [1 if (x % 4 == 2 and y % 4 == 2) else 0 for y in range(H) for x in range(W)]
         self.W4, self.H4 = W * 4, H * 4
-        lg = []
+        lg, lf = [], []
         for sy in range(H * 4):
             for sx in range(W * 4):
                 wx, wy = (sx + 0.5) / 4, (sy + 0.5) / 4
                 best = min(((wx - lx) ** 2 + (wy - ly) ** 2 for lx, ly in lamps), default=99)
-                lg.append(clamp(int((1 - math.sqrt(best) / 2.4) * 6), 0, 5))
+                f = (1 - math.sqrt(best) / 2.4) * 6
+                lg.append(clamp(int(f), 0, 5))
+                lf.append(clamp(f - 0.5, 0.0, 5.0))
         self.light = lg
+        self.lightf, self.light8 = lf, None   # smooth light levels, upsampled to 1/8 tile for big windows
+
+    def light_fine(self):
+        """The light map at 1/8 tile, read bilinearly from the 1/4-tile one (floats, for dithered lighting)."""
+        if self.light8 is None:
+            W4, H4, lf = self.W4, self.H4, self.lightf
+            out = []
+            for sy in range(H4 * 2):
+                v = (sy + 0.5) / 2 - 0.5
+                y0 = math.floor(v)
+                fy = v - y0
+                r0, r1 = lf[(y0 % H4) * W4:(y0 % H4) * W4 + W4], lf[((y0 + 1) % H4) * W4:((y0 + 1) % H4) * W4 + W4]
+                for sx in range(W4 * 2):
+                    u = (sx + 0.5) / 2 - 0.5
+                    x0 = math.floor(u)
+                    fx = u - x0
+                    a, b = x0 % W4, (x0 + 1) % W4
+                    out.append(((r0[a] * (1 - fx) + r0[b] * fx) * (1 - fy) + (r1[a] * (1 - fx) + r1[b] * fx) * fy) * LSUB)
+            self.light8 = out
+        return self.light8
 
     def fg(self, c):
         s = self.fgc.get(c)
@@ -1759,6 +1893,24 @@ class Renderer:
             tab = self.fine_walls[(R, wc, side, lvl)] = wall_level(tex[wc], glow[wc], side, lvl)
         return tab
 
+    def wall_detail(self, wc):
+        d = self.details.get(wc)
+        if d is None:
+            d = self.details[wc] = make_wall_detail(wc)
+        return d
+
+    def flat_level(self, R, lvl):
+        """Floor and ceiling tables for the big-window renderer: R = 16, 32 or 64 texel tiles, LIGHTS levels."""
+        key = (R, lvl)
+        t = self.flat_levels.get(key)
+        if t is None:
+            tex = self.flat_tex.get(R)
+            if tex is None:
+                tex = self.flat_tex[R] = (make_floor_textures() if R == 16 else make_floor_textures_fine() if R == 32
+                                          else make_floor_textures_64())
+            t = self.flat_levels[key] = floor_level(*tex, lvl, nl=LIGHTS)
+        return t
+
     def fine_floor_level(self, lvl):
         ftc = self.fine_levels.get(lvl)
         if ftc is None:
@@ -1779,10 +1931,12 @@ class Renderer:
         plx, ply = -dy * FOV_PLANE, dx * FOV_PLANE
         K = PW / (2.0 * FOV_PLANE)       # pixels of a 1-unit wall at distance 1 (square pixels)
         mid = PH / 2.0
+        boost = 4 if g.muzzle > 0 and cam is None else 0
+        if PW >= BIG_VIEW:
+            return self.view_fine(PW, PH, px, py, dx, dy, plx, ply, K, boost)
         buf = [[FOG] * PW for _ in range(PH)]
         zbuf = [0.0] * PW
         ybot = [0] * PW
-        boost = 4 if g.muzzle > 0 and cam is None else 0
         cast, walls = g.cast, self.walls
         for c in range(PW):
             cm = 2.0 * c / PW - 1.0
@@ -1851,6 +2005,215 @@ class Renderer:
             rx, ry = wx - px, wy - py
             return inv * (dy * rx - dx * ry), inv * (-ply * rx + plx * ry)
 
+        return buf, zbuf, K, mid, project
+
+    def view_fine(self, PW, PH, px, py, dx, dy, plx, ply, K, boost):
+        """view() for big windows, where a texel spans several pixels: walls get anti-aliased top, bottom and
+        end edges (sub-pixel coverage); magnified wall texels are filtered (bilinear) with a fine grain laid
+        over them; the floor and ceiling right ahead use 64x64 tiles; and distance fog and floor light are
+        blended (walls) or dithered (floor, far walls) between their levels instead of stepping."""
+        g = self.g
+        mid = PH / 2.0
+        buf = [[FOG] * PW for _ in range(PH)]
+        zbuf = [0.0] * PW
+        ybot = [0] * PW
+        cast, walls, fine_wall = g.cast, self.walls, self.fine_wall
+        hits, keys, tops = [], [], []
+        for c in range(PW):
+            cm = 2.0 * c / PW - 1.0
+            rdx, rdy = dx + plx * cm, dy + ply * cm
+            perp, side, wc, wx = cast(px, py, rdx, rdy)
+            if perp < 0.05:
+                perp = 0.05
+            zbuf[c] = perp
+            hits.append((perp, side, wc, wx, rdx, rdy))
+            keys.append((side, round(px + perp * rdx) if side == 0 else round(py + perp * rdy)))   # the wall plane
+            tops.append(mid - K * 0.5 / perp)
+        edges = []          # (row, column, wall colour, coverage): wall edge pixels, blended in after the floor
+        half = PH // 2
+        LY, LL = DITHER_LIGHT, DITHER_FOG
+        for c in range(PW):
+            perp, side, wc, wx, _, _ = hits[c]
+            lh = K / perp
+            top = tops[c]
+            key = keys[c]
+            # the top edge runs from el (left side of the pixel column) to er (right side), on one wall plane
+            el = (top + tops[c - 1]) * 0.5 if c > 0 and keys[c - 1] == key else top
+            er = (top + tops[c + 1]) * 0.5 if c + 1 < PW and keys[c + 1] == key else top
+            tmax = el if el > er else er
+            a = math.ceil(tmax)                  # first row the wall covers completely
+            a = 0 if a < 0 else half if a > half else a
+            b = PH - a
+            ybot[c] = b
+            lf = perp * LVL_PER_UNIT - boost - 0.5   # level centres match the small renderer
+            if lf < 0:
+                lf = 0.0
+            l0 = int(lf)
+            fr = lf - l0
+            if l0 >= LEVELS - 1:
+                l0, fr = LEVELS - 1, 0.0
+            if lh >= FINE[0]:
+                R = FINE[1] if lh >= FINE[1] else FINE[0]
+                tab0 = fine_wall(R, wc, side, l0)
+                tab1 = fine_wall(R, wc, side, l0 + 1) if fr > 0 else tab0
+            else:
+                R = 32
+                tab0 = walls[wc][side][l0]
+                tab1 = walls[wc][side][l0 + 1] if fr > 0 else tab0
+            R1 = R - 1
+            scale = R / lh
+            m = c & 3
+            if scale <= SMOOTH:   # texels well over a pixel: bilinear filtering, the result dithered to 8 steps
+                txf = wx * R - 0.5
+                i0 = math.floor(txf)
+                hx = txf - i0
+                i1 = (i0 + 1) & R1
+                i0 &= R1
+                tx = int(wx * R) & R1
+                t = (a + 0.5 - top) * scale + 0.5      # texel row + 1 at the pixel's centre (keeps it positive)
+                base = int(t)
+                rows_ = []                             # texel rows base-1 .., blended across, clamped at the ends
+                for j in range(base - 1, int(t + (b - a) * scale) + 2):
+                    j = (0 if j < 0 else R1 if j > R1 else j) * R
+                    p, q = tab0[j + i0], tab0[j + i1]
+                    cr, cg, cb = p[0] + (q[0] - p[0]) * hx, p[1] + (q[1] - p[1]) * hx, p[2] + (q[2] - p[2]) * hx
+                    if fr:
+                        p, q = tab1[j + i0], tab1[j + i1]
+                        cr += (p[0] + (q[0] - p[0]) * hx - cr) * fr
+                        cg += (p[1] + (q[1] - p[1]) * hx - cg) * fr
+                        cb += (p[2] + (q[2] - p[2]) * hx - cb) * fr
+                    rows_.append((cr, cg, cb))
+                cols = [(p[0], p[1], p[2], q[0] - p[0], q[1] - p[1], q[2] - p[2]) for p, q in zip(rows_, rows_[1:])]
+                dcol = self.wall_detail(wc)[int(wx * DETAIL) & DM::DETAIL]
+                dk = DETAIL / R
+                dt = t * dk - 0.5 * dk
+                dks = scale * dk
+                r = a
+                inv = 1.0 / scale
+                while r < b:                       # one run of pixels per texel row
+                    j = int(t)
+                    f = t - j
+                    e = r + int((j + 1 - t) * inv) + 1
+                    if e > b:
+                        e = b
+                    pr, pg, pb, qr, qg, qb = cols[j - base]
+                    for rr in range(r, e):
+                        d = dcol[int(dt) & DM]
+                        buf[rr][c] = (int(pr + qr * f + d) & 248, int(pg + qg * f + d) & 248,
+                                      int(pb + qb * f + d) & 248)
+                        f += scale
+                        dt += dks
+                    t += (e - r) * scale
+                    r = e
+            else:
+                tx = int(wx * R) & R1
+                tabs = [tab1 if fr > LL[k][m] else tab0 for k in range(4)]
+                ty0 = (a + 0.5 - top) * scale
+                for r in range(a, b):
+                    ty = int(ty0)
+                    buf[r][c] = tabs[r & 3][(R1 if ty > R1 else ty) * R + tx]
+                    ty0 += scale
+            # partly covered rows above (and, mirrored, below) the solid part
+            tmin = er if el > er else el
+            r0 = int(math.floor(tmin))
+            if r0 < 0:
+                r0 = 0
+            d = er - el
+            for r in range(r0, a):
+                cov = 0.0
+                for sx in (0.125, 0.375, 0.625, 0.875):
+                    v = r + 1 - (el + d * sx)
+                    cov += 0.0 if v <= 0 else 1.0 if v >= 1 else v
+                if cov < 0.08:
+                    continue
+                cov *= 0.25
+                ty = int((r + 0.5 - top) * scale)
+                ty = 0 if ty < 0 else R1 if ty > R1 else ty
+                edges.append((r, c, tab0[ty * R + tx], cov))
+                rb = PH - 1 - r
+                ty = int((rb + 0.5 - top) * scale)
+                ty = 0 if ty < 0 else R1 if ty > R1 else ty
+                edges.append((rb, c, tab0[ty * R + tx], cov))
+        # floor and ceiling, row by row, only where no wall covers them
+        LAMP, flat_level = self.lamp, self.flat_level
+        LF8 = self.light_fine()
+        W, H = g.W, g.H
+        W8, H8 = self.W4 * 2, self.H4 * 2
+        rdx0, rdy0 = dx - plx, dy - ply
+        rdx1, rdy1 = dx + plx, dy + ply
+        for y in range(int(mid), PH):
+            if y + 0.5 - mid <= 0:
+                continue
+            rd = K * 0.5 / (y + 0.5 - mid)
+            lf = rd * LVL_PER_UNIT - boost - 0.5
+            if lf < 0:
+                lf = 0.0
+            l0 = int(lf)
+            fr = lf - l0
+            if l0 >= LEVELS - 1:
+                l0, fr = LEVELS - 1, 0.0
+            R = FLOOR_FINE2 if rd * FLOOR_FINE2 <= K else FLOOR_FINE if rd * FLOOR_FINE <= K else 16
+            ft0, ct0 = flat_level(R, l0)
+            ft1, ct1 = flat_level(R, l0 + 1) if fr > 0 else (ft0, ct0)
+            k = y & 3
+            ftm = [ft1 if fr > t else ft0 for t in LL[k]]
+            ctm = [ct1 if fr > t else ct0 for t in LL[k]]
+            jl = LY[(k + 1) & 3]
+            R1 = R - 1
+            fx, fy = px + rd * rdx0, py + rd * rdy0
+            sx, sy = rd * (rdx1 - rdx0) / PW, rd * (rdy1 - rdy0) / PW
+            row = buf[y]
+            yc = PH - 1 - y
+            crow = buf[yc]
+            for c in range(PW):
+                if y >= ybot[c]:
+                    m = c & 3
+                    lx, ly = int(fx * 8), int(fy * 8)
+                    li = int(LF8[(ly % H8) * W8 + lx % W8] + jl[m])
+                    idx = (int(fy * R) & R1) * R + (int(fx * R) & R1)
+                    cx, cy = lx >> 3, ly >> 3
+                    row[c] = ftm[m][li][(cx + cy) & 1][idx]
+                    if yc < PH - ybot[c]:
+                        crow[c] = ctm[m][li][LAMP[(cy % H) * W + cx % W]][idx]
+                fx += sx
+                fy += sy
+        for r, c, w, cov in edges:   # the walls' soft top and bottom edges
+            o = buf[r][c]
+            buf[r][c] = (int(o[0] + (w[0] - o[0]) * cov) & 0xF8, int(o[1] + (w[1] - o[1]) * cov) & 0xF8,
+                         int(o[2] + (w[2] - o[2]) * cov) & 0xF8)
+        inv = 1.0 / (plx * dy - dx * ply)
+
+        def project(wx, wy):
+            rx, ry = wx - px, wy - py
+            return inv * (dy * rx - dx * ry), inv * (-ply * rx + plx * ry)
+
+        # where a near wall ends in front of a farther one: blend the column the wall's corner falls into
+        for c in range(PW - 1):
+            if keys[c] == keys[c + 1]:
+                continue
+            n, f = (c, c + 1) if hits[c][0] < hits[c + 1][0] else (c + 1, c)
+            pn = hits[n][0]
+            if hits[f][0] < pn * 1.04 or K / pn < 12:
+                continue
+            _, _, _, _, rdx, rdy = hits[n]
+            tX, tY = project(round(px + pn * rdx), round(py + pn * rdy))
+            if tY <= 0.05:
+                continue
+            ex = PW / 2.0 * (1 + tX / tY)       # screen x of the corner (column c's ray is at x = c)
+            if not c - 1 <= ex <= c + 2:
+                continue
+            k = int(math.floor(ex + 0.5))
+            if n < f:
+                cov, nb, fb = ex - (k - 0.5), k - 1, k + 1
+            else:
+                cov, nb, fb = (k + 0.5) - ex, k + 1, k - 1
+            if not (0 <= nb < PW and 0 <= fb < PW) or not 0 < cov < 1:
+                continue
+            for r in range(max(0, PH - ybot[nb] - 1), min(PH, ybot[nb] + 1)):
+                row = buf[r]
+                o, w = row[fb], row[nb]
+                row[k] = (int(o[0] + (w[0] - o[0]) * cov) & 0xF8, int(o[1] + (w[1] - o[1]) * cov) & 0xF8,
+                          int(o[2] + (w[2] - o[2]) * cov) & 0xF8)
         return buf, zbuf, K, mid, project
 
     def draw_sprite(self, buf, zbuf, PW, PH, grid, left, top, w, h, tY):
