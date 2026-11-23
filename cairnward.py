@@ -2039,6 +2039,10 @@ class TitleDemo:
                 self.timer = 0.0
             elif g.solved and g.solved_t > 1.6:
                 self.new_run()
+        if cols < g.level.w + 2 or rows * 2 < g.level.h + 2:      # too small for the cairn (tiny previews): sky only
+            cv = Canvas(cols, max(1, rows))
+            cv.px = [r[:] for r in backdrop(g.level.world, cols, max(1, rows))]
+            return cv
         return render(self.g, cols, rows, hud=False)
 
 

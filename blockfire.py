@@ -1819,6 +1819,8 @@ class Renderer:
         rdx1, rdy1 = dx + plx, dy + ply
         y0 = int(mid)
         for y in range(y0, PH):
+            if y + 0.5 - mid <= 0:      # the horizon row itself (odd heights)
+                continue
             rd = K * 0.5 / (y + 0.5 - mid)
             lvl = int(rd * LVL_PER_UNIT) - boost
             lvl = 0 if lvl < 0 else LEVELS - 1 if lvl >= LEVELS else lvl

@@ -367,6 +367,20 @@ THUMBS = {"nightdrive.py": thumb_night, "orbital.py": thumb_orbital, "leafling.p
           "wardstone.py": thumb_demo("wardstone"), "clatterbell.py": thumb_demo("clatterbell"), "cairnward.py": thumb_demo("cairnward"), "gemburrow.py": thumb_demo("gemburrow"), "weftwar.py": thumb_demo("weftwar"), "pebbleputt.py": thumb_demo("pebbleputt")}
 
 
+
+def _safe(thumb):
+    """A preview that fails (a bug at some odd window size) leaves its box dark instead of ending the arcade."""
+    def run(cv, x, y, w, h, t):
+        try:
+            thumb(cv, x, y, w, h, t)
+        except Exception:
+            pass
+    return run
+
+
+THUMBS = {k: _safe(v) for k, v in THUMBS.items()}
+
+
 def record_line(g):
     if "score" not in g:
         return ""
@@ -616,7 +630,11 @@ def start_screen():
         while True:
             cols, rows = term.size()
             if cols < 60 or rows < 20:
-                return 0, False
+                term.write("\x1b[0m\x1b[2J\x1b[HPlease make the window larger (60x20).")
+                for k in term.keys(0.3):
+                    if k in ("q", "esc"):
+                        return None
+                continue
             t = time.time() - t0
             hi = int(t / 2.2) % len(GAMES)
             term.write(render_start(cols, rows, t, hi).emit())
