@@ -1,7 +1,10 @@
 # ASCII ARCADE
 
-A little collection of games for the terminal. Start the launcher, pick a game with the arrow keys (or its
-number: 1-15, two digits typed quickly one after the other), press Enter. When the game ends you are back in the menu.
+![The ASCII ARCADE start screen: all fifteen games playing at once](docs/screenshots/start.png)
+
+A little collection of games for the terminal. Start the launcher: the start screen shows all games playing at once
+(Enter starts the highlighted one, any other key opens the menu). Pick a game with the arrow keys (or its number:
+1-15, two digits typed quickly one after the other), press Enter. When the game ends you are back in the menu.
 
 ```sh
 python3 arcade.py
@@ -110,6 +113,26 @@ No dependencies: Python 3 on macOS or Linux (on Windows use WSL). Best in WezTer
 | **SPOREFIELD** | Stop the sporeworm before it reaches the roots: a fixed shooter on a glowing night meadow. Every hit splits the worm and leaves a toadstool; jitterlegs, plumbugs, gloam moths, puffballs and burrowgrubs get in the way, glowing seeds give double sap, piercing sap, slow time, bombs or a shell. Eight palettes, three difficulties. | 60x22+ |
 | **SCAFFOLD** | Climb an unfinished skyscraper at night while a runaway demolition robot, the Wrecker, throws oil drums, gears, crates, rivets and counterweights down at you. Five stages (sloped girders, conveyor decks, lift shafts, a windy crane yard, the breaker floor where you cut its power), then it topples and comes back faster the next night. | 60x22+ |
 | **VOIDLANCE** | A side-scrolling star fighter: charge the lance (three levels and a nova), dock the Warden pod at your nose or tail, feed it six kinds of crystal weapons, add missiles, crawler bombs, orbiting bits and shields. Eight stages from an orbital wreck yard to the Null Citadel, 41 kinds of enemies, each stage with its own caves, midboss and multi-phase boss. Easy / normal / hard, checkpoints, continues, stage select. | 70x22+ |
+
+## Screenshots
+
+![The menu](docs/screenshots/menu.png)
+
+| | | |
+|:-:|:-:|:-:|
+| <img src="docs/screenshots/hoverdrift.png" alt="HOVERDRIFT" width="260"> | <img src="docs/screenshots/emberfall.png" alt="EMBERFALL" width="260"> | <img src="docs/screenshots/blockfire.png" alt="BLOCKFIRE" width="260"> |
+| **HOVERDRIFT** | **EMBERFALL** | **BLOCKFIRE** |
+| <img src="docs/screenshots/deepcall.png" alt="DEEPCALL" width="260"> | <img src="docs/screenshots/lightkeeper.png" alt="LIGHTKEEPER" width="260"> | <img src="docs/screenshots/skyshot.png" alt="SKYSHOT" width="260"> |
+| **DEEPCALL** | **LIGHTKEEPER** | **SKYSHOT** |
+| <img src="docs/screenshots/nightdrive.png" alt="NIGHTDRIVE" width="260"> | <img src="docs/screenshots/orbital.png" alt="ORBITAL" width="260"> | <img src="docs/screenshots/leafling.png" alt="LEAFLING" width="260"> |
+| **NIGHTDRIVE** | **ORBITAL** | **LEAFLING** |
+| <img src="docs/screenshots/stackfall.png" alt="STACKFALL" width="260"> | <img src="docs/screenshots/depthwell.png" alt="DEPTHWELL" width="260"> | <img src="docs/screenshots/glimmer.png" alt="GLIMMER" width="260"> |
+| **STACKFALL** | **DEPTHWELL** | **GLIMMER** |
+| <img src="docs/screenshots/sporefield.png" alt="SPOREFIELD" width="260"> | <img src="docs/screenshots/scaffold.png" alt="SCAFFOLD" width="260"> | <img src="docs/screenshots/voidlance.png" alt="VOIDLANCE" width="260"> |
+| **SPOREFIELD** | **SCAFFOLD** | **VOIDLANCE** |
+
+The pictures come straight from the games' own canvases: `python3 scripts/screenshots.py` renders them again
+(needs Pillow).
 
 ## DEEPCALL keys
 
@@ -369,4 +392,5 @@ change and share the games freely, as long as the copyright notice stays in.
 | `VERSION` | the current version (written by the release workflow) |
 | `Formula/ascii-arcade.rb` | the Homebrew formula (this repository is its own tap) |
 | `.github/workflows/release.yml`, `scripts/next_version.py` | automatic versioning and releases |
+| `scripts/screenshots.py`, `docs/screenshots/` | the README pictures, rendered from the games' canvases |
 | `LICENSE` | MIT License |

@@ -500,6 +500,109 @@ def render(cols, rows, sel, t, note, help_=False):
     return cv
 
 
+def render_start(cols, rows, t, hi):
+    """The start screen: the big logo over a wall of all games playing at once; hi is the highlighted one."""
+    cv = Canvas(cols, rows)
+    cv.vgradient((6, 4, 16), (26, 10, 34))
+    rnd = random.Random(7)
+    for i in range(140):  # a star field rushing past
+        sp = rnd.uniform(2, 10)
+        sx = (rnd.uniform(0, cols) - t * sp) % cols
+        sy = rnd.uniform(0, cv.H)
+        cv.set(sx, sy, mix((50, 50, 80), (230, 230, 255), min(1.0, sp / 10) * (0.7 + 0.3 * math.sin(t * 3 + i))))
+    # the logo, with a band of light sweeping across it
+    wave = [ACCENT[(i + int(t * 3)) % len(ACCENT)] for i in range(12)]
+    k = 3
+    while k > 1 and title_width("ASCII ARCADE", k) > cols - 4:
+        k -= 1
+    lw = title_width("ASCII ARCADE", k)
+    lx, ly = (cols - lw) // 2, 2
+    sweep = (t * 0.6) % 1.6 - 0.3
+    cols_lit = []
+    for n in range(12):
+        f = max(0.0, 1 - abs((n + 0.5) / 12 - sweep) * 5)
+        cols_lit.append(mix(wave[n], (255, 255, 255), 0.55 * f))
+    if lw <= cols - 2:
+        draw_title(cv, "ASCII ARCADE", lx + 1, ly + 1, k, [(10, 6, 20)])     # drop shadow
+        draw_title(cv, "ASCII ARCADE", lx, ly, k, cols_lit)
+    else:
+        draw_logo(cv, cols, t)
+    top = (ly + 5 * k) // 2 + 2
+    cv.center(top, " %d games for your terminal " % len(GAMES), (200, 200, 222), (12, 8, 24))
+    # the wall of games: every preview running live, names underneath
+    n = len(GAMES)
+    nc = 5 if cols >= 90 else 3
+    nr = (n + nc - 1) // nc
+    gap = 2
+    tw = (min(cols, 150) - 4 - gap * (nc - 1)) // nc
+    avail = rows - top - 7                       # text rows left for the wall (info, prompt and footer below)
+    cell = avail // nr                           # text rows per wall row: preview, name, gap
+    th = min(2 * (cell - 3), tw * 9 // 16)       # preview height in pixels
+    th -= th % 2                                 # whole text rows (the 3D previews need an even height)
+    x0 = (cols - (tw * nc + gap * (nc - 1))) // 2
+    y0 = top + 2 + max(0, (avail - nr * (th // 2 + 3)) // 2)     # the wall sits in the middle of the free space
+    if th >= 6:
+        for i, g in enumerate(GAMES):
+            c, r = i % nc, i // nc
+            x = x0 + c * (tw + gap)
+            row = y0 + r * (th // 2 + 3)
+            acc = accent(g)
+            on = i == hi
+            sub = Canvas(tw, th // 2)                # each preview on its own canvas, so none spills over
+            THUMBS[g["file"]](sub, 0, 0, tw, th, t)
+            blit_scene(cv, x, row * 2, tw, th, sub)
+            if not on:                           # the others a little dimmer, so the eye finds the highlight
+                for yy in range(row * 2, row * 2 + th):
+                    line = cv.px[yy]
+                    for xx in range(x, x + tw):
+                        line[xx] = mix(line[xx], (12, 8, 24), 0.25)
+            cv.frame(x - 1, row * 2 - 1, tw + 2, th + 2, acc if on else shade(acc, 0.45))
+            label = "%d %s" % (i + 1, g["name"])
+            lab = " %s " % label[:tw - 2]
+            cv.put(x + max(0, (tw - len(lab)) // 2), row + th // 2 + 1, lab, (16, 12, 24) if on else (190, 190, 210),
+                   acc if on else (14, 10, 26))
+        info_row = y0 + nr * (th // 2 + 3)
+    else:                                        # small window: just the names
+        per = (n + 1) // 2
+        for i, g in enumerate(GAMES):
+            c, r = i // per, i % per
+            cv.put(cols // 2 - 22 + c * 24, y0 + r, " %2d %-12s" % (i + 1, g["name"]),
+                   accent(g) if i == hi else (170, 170, 196), (14, 10, 26))
+        info_row = y0 + per + 1
+    g = GAMES[hi]
+    line = "%s  -  %s" % (g["name"], g["tag"])
+    cv.center(min(info_row, rows - 4), " %s " % line[:cols - 4], accent(g), (14, 10, 26))
+    if int(t * 1.6) % 2 == 0:
+        cv.center(rows - 2, "  PRESS ANY KEY  ", (16, 12, 24), (236, 212, 70))
+    if cols >= 100:
+        cv.put(cols - len(COPYRIGHT) - 2, rows - 2, COPYRIGHT, (96, 96, 124), (16, 8, 30))
+    footer(cv, "Enter play %s   Space / any key: to the menu   Esc quit" % g["name"])
+    if cols >= 110:
+        cv.put(16, rows - 1, "v%s" % VERSION, (110, 114, 144), (12, 10, 22))
+    return cv
+
+
+def start_screen():
+    """Shown once when the arcade opens. Returns (selected game, play it now?) or None to quit."""
+    with Terminal() as term:
+        t0 = time.time()
+        while True:
+            cols, rows = term.size()
+            if cols < 60 or rows < 20:
+                return 0, False
+            t = time.time() - t0
+            hi = int(t / 2.2) % len(GAMES)
+            term.write(render_start(cols, rows, t, hi).emit())
+            for k in term.keys(1 / 20):
+                if k in ("q", "esc"):
+                    return None
+                if k == "enter":
+                    SND.play("start")
+                    return hi, True
+                SND.play("move")
+                return hi, False
+
+
 def menu(sel, note):
     with Terminal() as term:
         t0 = time.time()
@@ -613,7 +716,16 @@ def cli(args):
 
 def main():
     sel, note = 0, ""
+    first = start_screen()
+    if first is None:
+        return
+    sel, play = first
     while True:
+        if play:
+            play = False
+            g = GAMES[sel]
+            code = run_game(g)
+            note = "" if code == 0 else "%s ended unexpectedly (exit code %d)" % (g["name"], code)
         sel = menu(sel, note)
         if sel is None:
             return
