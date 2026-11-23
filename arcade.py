@@ -96,17 +96,36 @@ GAMES = [
          info=["Bounce Wick, a living candle spark, off your", "brass tray and shatter tinted glass: 25 halls,",
                "five districts, five keepers, gifts and combos."],
          keys="arrows move   Space launch / release", size=(60, 22), score="shatterwick"),
+    dict(file="wardstone.py", name="WARDSTONE", tag="rune towers against the Hollow",
+         info=["Hold eight lands against the Hollow host:", "7 towers, 3 levels and 2 paths each, 10 foes,", "4 bosses, open squares your towers shape."],
+         keys="arrows move   1-7 build   Space upgrade   N wave", size=(70, 22), score="wardstone"),
+    dict(file="clatterbell.py", name="CLATTERBELL", tag="a silver ball on three wild tables",
+         info=["Three original tables: belfry, reef and forge.", "Real ball physics, ramps, orbits, drop targets,", "spinners, kickback, multiball, missions, tilt."],
+         keys="Z / M flippers   Space plunger   Up nudge", size=(60, 22), score="clatterbell"),
+    dict(file="cairnward.py", name="CAIRNWARD", tag="push the scattered waystones home",
+         info=["42 hand-made cairns in 7 regions:", "ice, wind tiles, plates & gates, colours;", "unlimited undo, par from a real solver."],
+         keys="arrows push   U undo   R restart", size=(60, 22), score="cairnward"),
+    dict(file="gemburrow.py", name="GEMBURROW", tag="dig sunstones under falling rock",
+         info=["Pell digs for the warrens' lost sunstones:", "20 caves in 5 worlds + 5 intermissions,", "rocks fall and roll, moths burst to gems."],
+         keys="arrows dig   Space+arrow reach   R give up", size=(60, 22), score="gemburrow"),
+    dict(file="weftwar.py", name="WEFTWAR", tag="light-thread duels on a night loom",
+         info=["Dye riders weave burning threads on a loom:", "cut rivals off, last one weaving wins. Two", "players or 1-3 computer riders, 7 looms."],
+         keys="WASD / arrows steer   Space / Enter spur", size=(60, 22), score="weftwar"),
+    dict(file="pebbleputt.py", name="PEBBLEPUTT", tag="putt a pebble round odd courses",
+         info=["27 holes: a meadow, ice caverns and a", "copper foundry at night. Slopes, ramps,", "portals, gear arms; 1-4 players, scorecard."],
+         keys="arrows aim/power   Space swing   Enter strike", size=(60, 22), score="pebbleputt"),
 ]
 GENRE = {"hoverdrift.py": "flight", "emberfall.py": "role-playing", "blockfire.py": "shooter", "deepcall.py": "exploration",
          "lightkeeper.py": "action", "skyshot.py": "artillery", "nightdrive.py": "racing", "orbital.py": "puzzle",
          "leafling.py": "platformer", "stackfall.py": "blocks", "depthwell.py": "3D blocks",
          "glimmer.py": "maze chase", "sporefield.py": "fixed shooter", "scaffold.py": "climber",
-         "voidlance.py": "shoot 'em up", "shatterwick.py": "brick breaker"}
+         "voidlance.py": "shoot 'em up", "shatterwick.py": "brick breaker",
+         "wardstone.py": "tower defense", "clatterbell.py": "pinball", "cairnward.py": "box-pushing", "gemburrow.py": "cave digger", "weftwar.py": "trail duel", "pebbleputt.py": "minigolf"}
 HELP = [
     "ASCII ARCADE - keys",
     "",
     "Up / Down            choose a game",
-    "1 - 9, 10 - 16       jump to a game (two digits: type them quickly)",
+    "1 - 9, 10 - %d       jump to a game (two digits: type them quickly)" % len(GAMES),
     "Enter / Space        play",
     "M                    sound on / off",
     "G                    pixels: fine / smart / solid",
@@ -344,7 +363,8 @@ def thumb_demo(module):
 THUMBS = {"nightdrive.py": thumb_night, "orbital.py": thumb_orbital, "leafling.py": thumb_leaf, "skyshot.py": thumb_sky, "lightkeeper.py": thumb_light, "deepcall.py": thumb_deep, "hoverdrift.py": thumb_hover, "emberfall.py": thumb_ember, "stackfall.py": thumb_stack,
           "depthwell.py": thumb_depth, "blockfire.py": thumb_block, "glimmer.py": thumb_demo("glimmer"),
           "sporefield.py": thumb_demo("sporefield"), "scaffold.py": thumb_demo("scaffold"),
-          "voidlance.py": thumb_demo("voidlance"), "shatterwick.py": thumb_demo("shatterwick")}
+          "voidlance.py": thumb_demo("voidlance"), "shatterwick.py": thumb_demo("shatterwick"),
+          "wardstone.py": thumb_demo("wardstone"), "clatterbell.py": thumb_demo("clatterbell"), "cairnward.py": thumb_demo("cairnward"), "gemburrow.py": thumb_demo("gemburrow"), "weftwar.py": thumb_demo("weftwar"), "pebbleputt.py": thumb_demo("pebbleputt")}
 
 
 def record_line(g):
@@ -353,6 +373,8 @@ def record_line(g):
     rec = load_scores().get(g["score"], {})
     if not rec:
         return "no records yet"
+    if g["score"] == "cairnward":
+        return "best: %d of 42 cairns set, %d at par" % (rec.get("solved", 0), rec.get("par", 0))
     if g["score"] == "leafling":
         done = sum(1 for k in rec if k.endswith(" time"))
         seeds = sum(bin(v).count("1") for k, v in rec.items() if k.endswith(" seeds"))
@@ -489,7 +511,7 @@ def render(cols, rows, sel, t, note, help_=False):
     snd = SND.label().lower()
     pix = arcadekit.PIXEL_MODE
     if cols >= 112:
-        footer(cv, "Up/Down choose   1-16 jump   Enter play   M %s   G pixels: %s   ? help   Esc quit" % (snd, pix))
+        footer(cv, "Up/Down choose   1-%d jump   Enter play   M %s   G pixels: %s   ? help   Esc quit" % (len(GAMES), snd, pix))
     elif cols >= 96:
         footer(cv, "Up/Down choose   Enter play   M %s   G pixels: %s   ? help   Esc quit" % (snd, pix))
     else:

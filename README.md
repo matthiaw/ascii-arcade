@@ -1,10 +1,10 @@
 # ASCII ARCADE
 
-![The ASCII ARCADE start screen: all sixteen games playing at once](docs/screenshots/start.gif)
+![The ASCII ARCADE start screen: all twenty-two games playing at once](docs/screenshots/start.gif)
 
 A little collection of games for the terminal. Start the launcher: the start screen shows all games playing at once
 (Enter starts the highlighted one, any other key opens the menu). Pick a game with the arrow keys (or its number:
-1-16, two digits typed quickly one after the other), press Enter. When the game ends you are back in the menu.
+1-22, two digits typed quickly one after the other), press Enter. When the game ends you are back in the menu.
 
 ```sh
 python3 arcade.py
@@ -119,6 +119,12 @@ No dependencies: Python 3 on macOS or Linux (on Windows use WSL). Best in WezTer
 | **SCAFFOLD** | Climb an unfinished skyscraper at night while a runaway demolition robot, the Wrecker, throws oil drums, gears, crates, rivets and counterweights down at you. Five stages (sloped girders, conveyor decks, lift shafts, a windy crane yard, the breaker floor where you cut its power), then it topples and comes back faster the next night. | 60x22+ |
 | **VOIDLANCE** | A side-scrolling star fighter: charge the lance (three levels and a nova), dock the Warden pod at your nose or tail, feed it six kinds of crystal weapons, add missiles, crawler bombs, orbiting bits and shields. Eight stages from an orbital wreck yard to the Null Citadel, 41 kinds of enemies, each stage with its own caves, midboss and multi-phase boss. Easy / normal / hard, checkpoints, continues, stage select. | 70x22+ |
 | **SHATTERWICK** | A brick breaker with a living candle spark: bounce Wick off the brass tray and shatter tinted, frosted, iron, powder, sliding and lantern glass. Twenty-five halls in five districts, each ending with a keeper; moths, jellies, cogs and cinders turn the spark aside. Campaign and Endless, gifts and trouble capsules, combos up to x8. | 60x22+ |
+| **WARDSTONE** | Tower defense: raise seven kinds of rune towers (three levels, then one of two paths) against the Hollow host. Eight lands with fixed roads, several portals or open squares your towers shape, ten kinds of foes and four bosses, three stars per land, Campaign and Endless. | 70x22+ |
+| **CLATTERBELL** | Pinball with three original tables (a moonlit belfry, a lantern reef, a comet forge with a third flipper): real ball physics, a plunger you pull, bumpers, slingshots, ramps, orbits, drop targets, a spinner and a kickback; lock two balls for multiball, timed missions, a wizard mode, nudge and tilt. | 60x22+ |
+| **CAIRNWARD** | A box-pushing puzzle: push the scattered waystones back onto their rune sockets. 42 hand-made cairns in seven regions with black ice, one-way wind tiles, plates and gates and coloured stones; unlimited undo, par from the game's own solver. | 60x22+ |
+| **GEMBURROW** | A cave digger: Pell the badger digs for sunstones while rocks fall and roll, beetles and glassmoths creep along the walls, creepmoss spreads and rune seams turn rock to gems. Twenty caves in five worlds plus five intermissions, easy / normal / hard. | 60x22+ |
+| **WEFTWAR** | None | 60x22+ |
+| **PEBBLEPUTT** | Top-down minigolf: three courses of nine holes (a willow meadow, ice caverns, a copper foundry at night) with slopes, ramps, portals, ice, belts and moving gear arms. Solo or two to four players at one keyboard, scorecard with par. | 60x22+ |
 
 ## Screenshots
 
@@ -136,8 +142,12 @@ No dependencies: Python 3 on macOS or Linux (on Windows use WSL). Best in WezTer
 | **STACKFALL** | **DEPTHWELL** | **GLIMMER** |
 | <img src="docs/screenshots/sporefield.png" alt="SPOREFIELD" width="260"> | <img src="docs/screenshots/scaffold.png" alt="SCAFFOLD" width="260"> | <img src="docs/screenshots/voidlance.png" alt="VOIDLANCE" width="260"> |
 | **SPOREFIELD** | **SCAFFOLD** | **VOIDLANCE** |
-| <img src="docs/screenshots/shatterwick.png" alt="SHATTERWICK" width="260"> | | |
-| **SHATTERWICK** | | |
+| <img src="docs/screenshots/shatterwick.png" alt="SHATTERWICK" width="260"> | <img src="docs/screenshots/wardstone.png" alt="WARDSTONE" width="260"> | <img src="docs/screenshots/clatterbell.png" alt="CLATTERBELL" width="260"> |
+| **SHATTERWICK** | **WARDSTONE** | **CLATTERBELL** |
+| <img src="docs/screenshots/cairnward.png" alt="CAIRNWARD" width="260"> | <img src="docs/screenshots/gemburrow.png" alt="GEMBURROW" width="260"> | <img src="docs/screenshots/weftwar.png" alt="WEFTWAR" width="260"> |
+| **CAIRNWARD** | **GEMBURROW** | **WEFTWAR** |
+| <img src="docs/screenshots/pebbleputt.png" alt="PEBBLEPUTT" width="260"> |  |  |
+| **PEBBLEPUTT** |  |  |
 
 The pictures come straight from the games' own canvases: `python3 scripts/screenshots.py` renders them again
 (needs Pillow).
@@ -383,6 +393,136 @@ keeper. Moths, jellies, cogs, frost motes and cinders drift through the halls an
 builds new halls with a keeper every fifth. Gifts: Broadwick, Tallow (catch), Kindle (three sparks), Needleflame
 (burns through glass), Flint (bolts), Lull, Hearth (a saving line) and Spare Wick; dark capsules are trouble
 (Pinch, Gust, Soot). `python3 shatterwick.py --selftest` shows that the autopilot clears every hall.
+
+## WARDSTONE keys
+
+| Key | |
+|---|---|
+| Arrows / `WASD` | move the cursor (hold to glide) |
+| `1` - `7` | pick a tower; on free ground it is built at once |
+| Tab | next tower type |
+| Space / Enter / `U` | build here, or upgrade the tower here (level III: first path) |
+| `B` | second path for a level III tower |
+| `X` / Backspace | sell the tower (70% back) |
+| `T` | aim: first, last, strongest, closest |
+| `N` | call the next wave now (bonus gold) |
+| `F` | speed x1 / x2 / x3 |
+| Esc / `P` | pause menu (`Q` there: back to the menu, `M`: sound on / off) |
+| `?` | help |
+
+The Hollow host marches out of old portals to drain the Wardstones. Move the cursor over the land and raise rune
+towers: Bolt Spires (single target, air too), Mortar Kilns (splash), Frost Bells (slow), Storm Coils (chain
+lightning through armour), Sky Harpoons (anti-air), Venom Briars (poison that stops healing) and Beacon Shrines
+(buff their neighbours). Each tower has three levels and then one of two paths, such as Longshot or Twinbolt,
+Emberstorm or Quakeshell. Eight lands: Hollybrook Vale, Saltmarsh Reach, Ember Canyon, Lantern Market, Frostpine
+Pass, Mosslight Ruins, Clockwork Yard and Starfall Crater. Some have fixed roads, some have two or three portals,
+and the open squares let your towers shape the road. Foes include Scuttlers, fast Dartlings, armoured Shellbacks,
+flying Wisps and Gale Crows, Mirelumps that split, healing Menders, shielded Bulwarks, Gravelhorns, and four bosses
+up to the Hollow King. The next wave is shown before it comes. Gold comes from bounties, a wave bonus and interest,
+and calling a wave early pays extra. Each land gives up to three stars; the campaign runs through all eight lands
+and Endless never stops.
+
+## CLATTERBELL keys
+
+| Key | |
+|---|---|
+| Left / `Z` (`A`) | left flipper |
+| Right / `M` (`/`, `L`) | right flipper (and the Forge's upper flipper) |
+| Space / Down (`S`) | pull the plunger, let go to launch (classic terminals: a tap plunges at half strength) |
+| Up / `W` (`N`) | nudge the table (too often: TILT) |
+| Esc / `P` | pause menu (`Q` there: back to the menu, `M`: sound on / off) |
+| `?` | help |
+
+A pinball parlour with three original tables: the Moonbell Belfry with bronze bells under an owl-filled night, the
+Lantern Reef among glowing fish and clams, and the Comet Forge, a smithy between the stars with a third flipper. The
+ball rolls by real physics on a tilted table: flippers that never let it slip through, a plunger you pull as far as
+you like, pop bumpers, slingshots, a ramp, orbits, drop targets, rollover lanes, a spinner and a kickback. Drop the
+targets to light the lock, lock two balls for three-ball multiball and shoot the ramp for the jackpot; two orbits
+light a timed mission at the scoop, and four missions start the wizard mode. Bonus multiplier, skill shot, extra
+ball, ball save, and a tilt that punishes rough nudging.
+
+## CAIRNWARD keys
+
+| Key | |
+|---|---|
+| Arrows / WASD | walk; push the stone ahead (hold to keep walking) |
+| `U` / `Z` / Backspace | undo a move (unlimited; hold to rewind) |
+| `R` | restart the cairn (undo brings it back) |
+| `[` / `]` | previous / next open cairn |
+| Enter | next cairn once solved |
+| Esc / `P` | pause (`Q`: leave the cairn, `M`: sound) |
+| `?` | help |
+
+A storm has scattered the waystones of the old mountain pass. Hesper the cairn-keeper, a small badger with a
+lantern, pushes every stone back onto its rune socket, one stone at a time and never pulling. There are 42 hand-made
+cairns in seven regions. The Moss Steps and the Quarry Halls are pure pushing. Frostmere adds black ice (stones and
+Hesper slide until something stops them), Windgate adds wind tiles you can only cross one way, the Lantern Vault
+adds plates that hold iron gates open, the Rune Garden adds stones that belong on sockets of their own colour, and
+the Summit mixes everything. Undo is unlimited and restart can be undone. Each cairn shows moves and pushes, your
+best, and a par: the fewest moves, found by the game's own A* solver. In auto mode the solver thinks on screen, then
+walks its solution.
+
+## GEMBURROW keys
+
+| Key | |
+|---|---|
+| Arrows / WASD | walk and dig (one cell per tick; a tap is one step) |
+| Space + direction | reach: dig or take the next cell without moving |
+| `R` | give up the cave (costs a life) |
+| Esc / `P` | pause menu (`Q` there: back to the menu, `M`: sound on / off) |
+| `?` | help |
+
+Pell, a young badger in a brass miner's helmet, digs down after the sunstones that once lit the warrens. Rocks and
+sunstones fall the moment the soil beneath them is gone and roll off each other; push a rock by leaning on it twice.
+Take each cave's quota to open the burrow door before the lamp oil runs out. Cinderbeetles creep along the walls and
+burst into flame, glassmoths shatter into nine sunstones when a rock lands on them, creepmoss spreads through the
+soil (shut in, it turns to sunstones; grown too big, to rock), and old rune seams turn falling rock into gems while
+they glow. Twenty caves in five worlds plus five intermissions, three difficulty levels, scrolling caves whose tiles
+grow finer with the window.
+
+## WEFTWAR keys
+
+| Key | |
+|---|---|
+| `W` `A` `S` `D` | Saffron (player 1) steers |
+| arrows | Woad (player 2) steers; alone against the computer either set steers you |
+| Space / `E` | Saffron's Spur (burst of speed) |
+| Enter / `0` | Woad's Spur |
+| Esc / `P` | pause menu (`Q` there: back to the menu, `M`: sound on / off) |
+| `?` | help |
+
+On the Night Loom the dye riders steer shuttles of light, and every cell they cross is woven shut behind them with a
+burning weft thread. Touch a thread, a rival's or your own, or the loom's frame, and your shuttle bursts; its thread
+burns away and frees the cloth. The last rider weaving takes the round, first to two to five rounds takes the match.
+Two riders share one keyboard, or you take on one to three computer riders (Easy, Normal, Hard) that read the loom
+with flood fills, a who-gets-there-first split of the cloth and a fill estimate for closed pockets. Seven looms
+(Open Loom, Bobbin Court, Spindle Cross, Heddle Gates, Selvage Ring, Shuttle Run, Teasel Field), a Spur meter for
+bursts of speed and four charms: Spur, Skip (cross threads), Thimble (tear one) and Unravel (shed your oldest
+thread). Against the computer your rating rises and falls with every match. `python3 weftwar.py --selftest` measures
+how often each computer level wins.
+
+## PEBBLEPUTT keys
+
+| Key | |
+|---|---|
+| Left / Right | aim: a tap turns 0.5 degrees, holding turns faster |
+| `A` / `D` | aim in 15 degree steps |
+| `C` | aim straight at the cup |
+| Up / Down (`W` / `S`) | set the preset power |
+| Enter | strike at the preset power |
+| Space | swing meter: press to start, press again to strike (with key releases: hold and release) |
+| `X` / Backspace | cancel the swing |
+| Tab | scorecard |
+| Esc / `P` | pause menu (`Q` there: back to the menu, `M`: sound on / off) |
+| `?` | help |
+
+Minigolf seen from above: putt a painted pebble round three courses of nine holes. Willow Meadow has log rails,
+ponds, mill sails, toadstool bumpers and rabbit burrows. Rimewater has ice that keeps rolling, snowdrifts, meltwater
+crevasses, sliding ice gates, frost portals and ice ramps. The Copperworks at night has steel plates, conveyor
+belts, gear arms, pistons, pipes, springs and pools of glowing slag. Hills and slopes are shaded and marked with
+downhill arrows. Water and slag cost a stroke and put the pebble back, and the pebble only drops when it is slow
+over the cup. Play solo or with two to four players at one keyboard, with a scorecard showing par, birdies and
+bogeys, and a best round for every course and the 27-hole Grand Tour.
 
 ## Versions and releases
 
