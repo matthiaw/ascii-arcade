@@ -37,10 +37,10 @@ SHIPS = {  # speed px/s, length, hull colour, points, label
 }
 UPGRADES = [
     ("lens", "Fresnel lens", "the beam reaches 15% further"),
-    ("tank", "Bigger oil tank", "40% more oil before a refill"),
+    ("tank", "Bigger oil tank", "40% more oil, refills twice as fast"),
     ("gear", "Geared mechanism", "the beam turns 30% faster"),
     ("horn", "Louder horn", "reaches further, ready sooner"),
-    ("boat", "Motor launch", "the rescue boat is 30% faster"),
+    ("boat", "Motor launch", "the rescue boat is 20% faster"),
     ("pier", "Pier lanterns", "ships near the harbour find it alone"),
     ("buoy", "Spare lifebuoy", "one more life"),
 ]
@@ -307,8 +307,11 @@ class Night:
     def horn_radius(self):
         return 34 * (1.35 ** self.up.get("horn", 0))
 
+    def refill_time(self):
+        return 4.0 / (2 ** self.up.get("tank", 0))
+
     def boat_speed(self):
-        return 20 * (1.3 ** self.up.get("boat", 0))
+        return 20 * (1.2 ** self.up.get("boat", 0))
 
     def pier_radius(self):
         return 14 + 18 * self.up.get("pier", 0)
@@ -368,7 +371,7 @@ class Night:
             self.horn()
         elif k == "r":
             if self.refill <= 0 and self.oil < self.tank() - 1:
-                self.refill = 4.0
+                self.refill = self.refill_time()
                 self.sfx("refill")
                 self.say("Refilling the lamp - the coast goes dark for a moment.", 3)
         elif k == "b" and not coop:
@@ -431,7 +434,7 @@ class Night:
         self.spin *= 0.06 ** dt
         if self.refill > 0:
             self.refill -= dt
-            self.oil = min(self.tank(), self.oil + self.tank() / 4.0 * dt)
+            self.oil = min(self.tank(), self.oil + self.tank() / self.refill_time() * dt)
             if self.refill <= 0:
                 self.say("The lamp burns again.", 1.5)
                 self.sfx("relit")
@@ -1052,7 +1055,7 @@ class TitleDemo:
 # =============================================================================================
 STEP = 1 / 40          # the fixed simulation step of auto mode (and of the balance runs)
 THINK = 6              # the bot decides every 6 steps (0.15 s) - quick, but not superhuman
-UPGRADE_ORDER = ["boat", "buoy", "lens", "pier", "horn", "tank", "gear"]   # the bot's taste (from the balance runs)
+UPGRADE_ORDER = ["tank", "pier", "boat", "buoy", "lens", "gear", "horn"]   # the bot's taste (from the balance runs)
 
 
 def bot_upgrade(camp):
