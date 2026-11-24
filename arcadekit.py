@@ -323,6 +323,83 @@ class HeldKeys:
 
 
 # =============================================================================================
+# The mouse: SGR reports (any-event tracking), for the point-and-click games (HEATHSHOT, BREAKROOM)
+# =============================================================================================
+MOUSE_RE = re.compile(r"\x1b\[<(\d+);(\d+);(\d+)([Mm])")
+
+
+class MouseTerminal(Terminal):
+    """Terminal plus the mouse. keys() works as usual (mouse reports never show up as keys); the mouse lands in
+    take_mouse(): [(kind, col, row)] with kind 'move', 'left', 'right', 'middle', 'up' (button released),
+    'wheelup' or 'wheeldown'; col and row count from 0. ARCADE_NO_MOUSE=1 leaves the mouse to the terminal."""
+
+    def __enter__(self):
+        super().__enter__()
+        self.mouse = []
+        self.has_mouse = not os.environ.get("ARCADE_NO_MOUSE")
+        if self.has_mouse:
+            self.write("\x1b[?1000h\x1b[?1003h\x1b[?1006h")
+        return self
+
+    def __exit__(self, *exc):
+        if self.has_mouse:
+            self.write("\x1b[?1006l\x1b[?1003l\x1b[?1000l")
+        return super().__exit__(*exc)
+
+    def take_mouse(self):
+        m, self.mouse = self.mouse, []
+        return m
+
+    def keys(self, timeout=0.0):
+        out = []
+        wait = timeout
+        while select.select([self.fd], [], [], wait)[0]:
+            wait = 0
+            data = os.read(self.fd, 4096).decode("utf-8", "ignore")
+            if not data:
+                break
+            out += self.parse(data)
+        return out
+
+    def parse(self, data):
+        out = []
+        i = 0
+        while i < len(data):
+            m = MOUSE_RE.match(data, i)
+            if m:
+                i = m.end()
+                b, col, row = int(m.group(1)), int(m.group(2)) - 1, int(m.group(3)) - 1
+                if b & 64:
+                    kind = "wheelup" if b & 1 == 0 else "wheeldown"
+                elif b & 32:
+                    kind = "move"
+                elif m.group(4) == "m":
+                    kind = "up"
+                else:
+                    kind = ("left", "middle", "right", "move")[b & 3]
+                self.mouse.append((kind, col, row))
+                continue
+            if data[i] == "\x1b":
+                for seq, name in KEYS.items():
+                    if data.startswith(seq, i):
+                        out.append(name)
+                        i += len(seq)
+                        break
+                else:
+                    lone = i + 1 >= len(data) or data[i + 1] not in "[O"
+                    out.append("esc" if lone else "?seq")
+                    i += 1 if lone else 3
+            else:
+                ch = data[i]
+                if ch == "\x03":
+                    raise KeyboardInterrupt
+                out.append("tab" if ch == "\t" else "enter" if ch in "\r\n" else
+                           "backspace" if ch in "\x7f\x08" else ch.lower())
+                i += 1
+        return out
+
+
+# =============================================================================================
 # Canvas: two pixels per character cell (upper half block), text drawn on top
 # =============================================================================================
 class Canvas:
@@ -732,6 +809,8 @@ ACCENTS = {  # (top, bottom) of each game's title gradient
     "PEBBLEPUTT": ((255, 196, 150), (70, 185, 110)),
     "THATCHWOLD": ((250, 222, 130), (150, 176, 74)),
     "FENMARK": ((236, 228, 150), (86, 170, 150)),
+    "HEATHSHOT": ((255, 206, 150), (196, 96, 170)),
+    "BREAKROOM": ((255, 120, 90), (210, 40, 60)),
 }
 
 

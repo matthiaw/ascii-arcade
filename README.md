@@ -1,10 +1,10 @@
 # ASCII ARCADE
 
-![The ASCII ARCADE start screen: all twenty-four games playing at once](docs/screenshots/start.gif)
+![The ASCII ARCADE start screen: all twenty-six games playing at once](docs/screenshots/start.gif)
 
 A little collection of games for the terminal. Start the launcher: the start screen shows all games playing at once
 (Enter starts the highlighted one, any other key opens the menu). Pick a game with the arrow keys (or its number:
-1-24, two digits typed quickly one after the other), press Enter. When the game ends you are back in the menu.
+1-26, two digits typed quickly one after the other), press Enter. When the game ends you are back in the menu.
 
 ```sh
 python3 arcade.py
@@ -127,6 +127,8 @@ No dependencies: Python 3 on macOS or Linux (on Windows use WSL). Best in WezTer
 | **PEBBLEPUTT** | Top-down minigolf: three courses of nine holes (a willow meadow, ice caverns, a copper foundry at night) with slopes, ramps, portals, ice, belts and moving gear arms. Solo or two to four players at one keyboard, scorecard with par. | 60x22+ |
 | **THATCHWOLD** | A turn-based settlement game: every turn is a season. Place cottages, farms, fisheries, woodcutters, quarries, mines, mills and markets where the land and the neighbours pay most, lay up stores for winter, answer droughts, fevers, floods, wolves and raiders. Five scenarios with goals plus an endless mode. | 70x22+ |
 | **FENMARK** | Logic puzzles: sound a peat fen for hidden bog-eyes (every fen is proved solvable without guessing) and mend leadlight windows from row and column clues (22 hand-made pictures plus random ones, each with exactly one solution). Hints that explain the next deduction, best times. | 70x22+ |
+| **HEATHSHOT** | A shooting gallery on the heath, for letting off steam: round, fluffy puffwings cross three layers of a panning landscape (the far ones are tiny and score most), peek over the stone wall, dart past in gold or drift over in a balloon. Eight shells, reload with a right click, combos up to x4. Leave the sheep alone. 90 Seconds or Zen (no clock, no score). Mouse or keys. | 60x22+ |
+| **BREAKROOM** | A rage room in an office: smash plates, mugs, vases, bottles, the monitor, the printer, the clock and the motivational poster with a hammer, a bat (it knocks things off the shelves) or a firecracker. Every shard falls and piles up, stacks collapse, a new delivery arrives when the room is rubble. Free Smash with a stress bar, or One Minute for the biggest damage bill. Mouse or keys. | 60x22+ |
 
 ## Screenshots
 
@@ -150,6 +152,8 @@ No dependencies: Python 3 on macOS or Linux (on Windows use WSL). Best in WezTer
 | **CAIRNWARD** | **GEMBURROW** | **WEFTWAR** |
 | <img src="docs/screenshots/pebbleputt.png" alt="PEBBLEPUTT" width="260"> | <img src="docs/screenshots/thatchwold.png" alt="THATCHWOLD" width="260"> | <img src="docs/screenshots/fenmark.png" alt="FENMARK" width="260"> |
 | **PEBBLEPUTT** | **THATCHWOLD** | **FENMARK** |
+| <img src="docs/screenshots/heathshot.png" alt="HEATHSHOT" width="260"> | <img src="docs/screenshots/breakroom.png" alt="BREAKROOM" width="260"> | |
+| **HEATHSHOT** | **BREAKROOM** | |
 
 The pictures come straight from the games' own canvases: `python3 scripts/screenshots.py` renders them again
 (needs Pillow).
@@ -576,6 +580,45 @@ logic finds. Hints explain the next deduction and highlight the cells it used, a
 penalty, and best times are kept per difficulty and pane. In auto mode the solver plays one explained step at a
 time, using only what a player can see.
 
+## HEATHSHOT keys
+
+| Key | |
+|---|---|
+| Mouse | aim; move the sight to the screen edge and the view pans along the heath |
+| Left click | fire (with an empty gun: reload) |
+| Right click / `R` | reload |
+| Wheel / `Q` / `E` | pan left / right |
+| Arrows / WASD | move the sight without a mouse |
+| Space / Enter | fire |
+| Esc / `P` | pause (`Q` there: back), `?` help |
+
+The puffwings come at three distances: far ones are worth 25, middle ones 10, near ones 5. Peekers over the stone
+wall give 15, the rare golden puffwing 100, the balloon (three hits) 50. A sheep costs 25 and runs off bleating.
+Hits less than 1.4 seconds apart build a combo: x2 from the fourth hit, up to x4. Shots into the wall or the tree
+leave holes, the windmill's sails ring and spin faster. 90 Seconds keeps a best score; Zen has no clock and no
+score, it only counts the poofs. The mouse needs a terminal that reports it (WezTerm, iTerm2, kitty, Ghostty and
+Terminal.app all do); `ARCADE_NO_MOUSE=1` turns it off.
+
+## BREAKROOM keys
+
+| Key | |
+|---|---|
+| Mouse | aim |
+| Left click | smash with the tool in hand |
+| Right click / wheel | next tool |
+| `1` `2` `3` / Tab | hammer, bat, firecracker |
+| Arrows / WASD | move the hand without a mouse |
+| Space / Enter | smash |
+| `N` | a new delivery now |
+| Esc / `P` | pause (`Q` there: back), `?` help |
+
+The hammer hits one thing, quickly. The bat hits everything within reach twice as hard and sends whatever survives
+flying: off the shelf, off the desk, onto the floor, where glass and china break and a monitor takes another blow.
+The firecracker is set down at the hand, fizzes for a moment and then breaks or throws everything near it; it also
+throws the rubble up again. A plate stack collapses when its bottom plate goes. Every shard falls, bounces and
+piles up. When the room is down to rubble a delivery drops in new things. In Free Smash the stress bar goes down
+with every smash (the room's value decides how much); One Minute keeps the best damage bill.
+
 ## Versions and releases
 
 Versioning is automatic: every push to `main` that changes the games becomes a release
@@ -603,9 +646,9 @@ change and share the games freely, as long as the copyright notice stays in.
 | File | |
 |---|---|
 | `arcade.py` | the launcher |
-| `arcadekit.py` | shared toolkit: raw terminal input (with held keys via the kitty keyboard protocol), half-block pixel canvas, block font, high scores |
+| `arcadekit.py` | shared toolkit: raw terminal input (with held keys via the kitty keyboard protocol, and the mouse), half-block pixel canvas, block font, high scores |
 | `arcadesound.py` | the sound engine: synthesized effects, played without waiting |
-| `stackfall.py`, `depthwell.py`, `deepcall.py`, `lightkeeper.py`, `skyshot.py`, `nightdrive.py`, `orbital.py`, `leafling.py`, `glimmer.py`, `sporefield.py`, `scaffold.py`, `voidlance.py` | the games written for the arcade (use `arcadekit.py`) |
+| `stackfall.py`, `depthwell.py`, `deepcall.py`, `lightkeeper.py`, `skyshot.py`, `nightdrive.py`, `orbital.py`, `leafling.py`, `glimmer.py`, `sporefield.py`, `scaffold.py`, `voidlance.py`, `heathshot.py`, `breakroom.py` | the games written for the arcade (use `arcadekit.py`) |
 | `hoverdrift.py`, `emberfall.py`, `blockfire.py` | HOVERDRIFT, EMBERFALL and BLOCKFIRE (they run on their own and do not need `arcadekit.py`) |
 | `extras/emberfall-art/` | the source images and tools behind EMBERFALL's pictures (not in the Homebrew package) |
 | `VERSION` | the current version (written by the release workflow) |

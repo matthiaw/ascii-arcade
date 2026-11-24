@@ -120,6 +120,12 @@ GAMES = [
     dict(file="fenmark.py", name="FENMARK", tag="sound the fen, mend the windows",
          info=["Probe the fen for bog-eyes without one guess:", "every fen proved solvable by logic. 22 hand-", "made leadlight panes + random, hints, auto."],
          keys="arrows move   Space probe/glass   F/X flag/lead", size=(70, 22), score="fenmark"),
+    dict(file="heathshot.py", name="HEATHSHOT", tag="a shooting gallery on the heath",
+         info=["Puffwings cross the heath near and far; the", "far ones score most. Eight shells, combos,", "peekers, a balloon, a windmill. Spare the sheep."],
+         keys="mouse aim/click   R reload   arrows + Space", size=(60, 22), score="heathshot"),
+    dict(file="breakroom.py", name="BREAKROOM", tag="an office full of things that had it coming",
+         info=["A rage room: plates, vases, a monitor, the", "printer. Hammer, bat, firecracker; shards pile", "up. Free Smash with a stress bar, or One Minute."],
+         keys="mouse aim/click   1 2 3 tool   arrows + Space", size=(60, 22), score="breakroom"),
 ]
 GENRE = {"hoverdrift.py": "flight", "emberfall.py": "role-playing", "blockfire.py": "shooter", "deepcall.py": "exploration",
          "lightkeeper.py": "action", "skyshot.py": "artillery", "nightdrive.py": "racing", "orbital.py": "puzzle",
@@ -127,7 +133,8 @@ GENRE = {"hoverdrift.py": "flight", "emberfall.py": "role-playing", "blockfire.p
          "glimmer.py": "maze chase", "sporefield.py": "fixed shooter", "scaffold.py": "climber",
          "voidlance.py": "shoot 'em up", "shatterwick.py": "brick breaker",
          "wardstone.py": "tower defense", "clatterbell.py": "pinball", "cairnward.py": "box-pushing", "gemburrow.py": "cave digger", "weftwar.py": "trail duel", "pebbleputt.py": "minigolf",
-         "thatchwold.py": "settlement", "fenmark.py": "logic puzzles"}
+         "thatchwold.py": "settlement", "fenmark.py": "logic puzzles", "heathshot.py": "shooting gallery",
+         "breakroom.py": "rage room"}
 HELP = [
     "ASCII ARCADE - keys",
     "",
@@ -381,7 +388,8 @@ THUMBS = {"nightdrive.py": thumb_night, "orbital.py": thumb_orbital, "leafling.p
           "sporefield.py": thumb_demo("sporefield"), "scaffold.py": thumb_demo("scaffold"),
           "voidlance.py": thumb_demo("voidlance"), "shatterwick.py": thumb_demo("shatterwick"),
           "wardstone.py": thumb_demo("wardstone"), "clatterbell.py": thumb_demo("clatterbell"), "cairnward.py": thumb_demo("cairnward"), "gemburrow.py": thumb_demo("gemburrow"), "weftwar.py": thumb_demo("weftwar"), "pebbleputt.py": thumb_demo("pebbleputt"),
-          "thatchwold.py": thumb_demo("thatchwold"), "fenmark.py": thumb_demo("fenmark")}
+          "thatchwold.py": thumb_demo("thatchwold"), "fenmark.py": thumb_demo("fenmark"),
+          "heathshot.py": thumb_demo("heathshot"), "breakroom.py": thumb_demo("breakroom")}
 
 
 
@@ -412,6 +420,8 @@ def record_line(g):
             return "%d:%02d" % (v // 60, v % 60)
         parts = ["%s %s" % (k, mmss(rec[k])) for k in ("Reedbed", "Peat Meadow", "Deep Fen") if k in rec]
         return "best: " + ", ".join(parts + ["%d of 22 panes" % rec.get("panes", 0)])
+    if g["score"] == "breakroom":
+        return "best: %s € damage in One Minute" % "{:,}".format(rec.get("One Minute", 0)).replace(",", ".")
     if g["score"] == "cairnward":
         return "best: %d of 42 cairns set, %d at par" % (rec.get("solved", 0), rec.get("par", 0))
     if g["score"] == "leafling":
