@@ -27,7 +27,7 @@ from arcadekit import (AUTO_LABEL, PAUSE_LINES, AutoMode, Canvas, MouseTerminal,
 from arcadesound import Sound
 
 GAME = "heathshot"
-MODES = [("90 Seconds", "score against the clock"), ("Zen", "no clock, no score, just shooting")]
+MODES = [("90 Seconds", "score against the clock"), ("Zen", "no clock, just shooting (no record kept)")]
 ROUND = 90.0
 MAG = 8                    # shells in the gun
 RELOAD = 0.55              # seconds
@@ -87,6 +87,7 @@ HELP = [
     "Far puffwings 25, middle 10, near 5, peekers 15,",
     "golden 100, the balloon 50. Sheep: -25.",
     "Quick hits build a combo (up to x4).",
+    "Zen: no clock; the score counts but no record is kept.",
 ]
 
 
@@ -139,6 +140,7 @@ class Game:
         self.left = ROUND
         self.ammo, self.reloading = MAG, 0.0
         self.score = self.hits = self.shots = 0
+        self.shown = 0.0
         self.chain, self.chain_t, self.best_chain = 0, -9.0, 0
         self.golds = self.sheep_hit = 0
         self.targets, self.parts, self.pops, self.holes = [], [], [], []
@@ -368,12 +370,11 @@ class Game:
 
     def add_score(self, value, t, color, combo=True):
         m = self.mult() if combo and value > 0 else 1
-        if not self.zen:
-            self.score = max(0, self.score + value * m)
+        self.score = max(0, self.score + value * m)
         if combo and m > 1 and self.chain % 3 == 1:
             self.sfx("combo", 0.6)
-        txt = ("%+d" % (value * m)) if not self.zen else ("baa!" if value < 0 else "poof!")
-        if m > 1 and not self.zen:
+        txt = "%+d" % (value * m)
+        if m > 1:
             txt += " x%d" % m
         y = t.y if t.kind not in ("peek", "sheep") else (WALL_TOP - 0.1 if t.kind == "peek" else self.mid_ground(t.x) - 0.08)
         self.popup(t.x, y - t.r - 0.03, t.d, txt, color)
@@ -416,6 +417,8 @@ class Game:
                 self.ammo = MAG
         self.flash = max(0.0, self.flash - dt)
         self.kick = max(0.0, self.kick - dt)
+        gap = self.score - self.shown                      # the big score counts up (or down) to the real one
+        self.shown = self.score if abs(gap) < 0.5 else self.shown + gap * min(1.0, dt * 7) + (1 if gap > 0 else -1) * dt * 20
         # panning: the sight at the edge drags the view along
         edge = 0.07
         if self.cx < edge:
@@ -850,11 +853,35 @@ def draw_sight(cv, g):
     cv.set(x, y, red)
 
 
+DIGITS = {"0": "111101101101111", "1": "010110010010111", "2": "111001111100111", "3": "111001111001111",
+          "4": "101101111001001", "5": "111100111001111", "6": "111100111101111", "7": "111001010010010",
+          "8": "111101111101111", "9": "111101111001111"}
+
+
+def draw_score(cv, g):
+    """The score in big digits, top right, counting up to the real value; it glows while it climbs."""
+    txt = str(int(round(g.shown)))
+    k = 2 if g.H >= 96 else 1
+    w = len(txt) * 4 * k - k
+    x0, y0 = g.W - w - 3, 2
+    cv.rect(x0 - 2, y0 - 1, w + 4, 5 * k + 3, (22, 18, 34))           # a small dark board behind it
+    cv.frame(x0 - 2, y0 - 1, w + 4, 5 * k + 3, (90, 70, 110))
+    rising = g.score - g.shown > 0.5
+    col = mix((255, 214, 110), (255, 255, 255), 0.6) if rising else (255, 214, 110)
+    for off, c in (((0, 0), col),):
+        for i, ch in enumerate(txt):
+            bits = DIGITS[ch]
+            for j, b in enumerate(bits):
+                if b == "1":
+                    cv.rect(x0 + (i * 4 + j % 3) * k + off[0], y0 + (j // 3) * k + off[1], k, k, c)
+
+
 def render(g, cols, rows, hud=True):
     play = rows - 1 if hud else rows
     cv = render_scene(g, cols, rows, play)
     draw_sight(cv, g)
     if hud:
+        draw_score(cv, g)
         draw_hud(cv, g)
     if g.paused:
         overlay(cv, HELP if g.help else PAUSE_LINES + ["", SND.label()])
@@ -868,10 +895,7 @@ def fmt(t):
 def draw_hud(cv, g):
     r = cv.rows - 1
     cv.put(0, r, " " * cv.cols, HUD_FG, HUD_BG)
-    if g.zen:
-        left = " ZEN   poofs %d " % g.hits
-    else:
-        left = " SCORE %d " % g.score
+    left = " SCORE %d %s" % (g.score, "  zen " if g.zen else "")
     cv.put(0, r, left, (16, 14, 20), (236, 200, 120) if not g.zen else (160, 210, 170))
     x = len(left) + 2
     if g.chain >= 2 and g.t - g.chain_t <= COMBO_GAP:
@@ -1272,6 +1296,17 @@ def selftest():
     keys = mt.parse("\x1b[<35;12;5M\x1b[<0;12;5Mx\x1b[<0;12;5m\x1b[<2;3;4M\x1b[<64;1;1M\x1b[A")
     assert keys == ["x", "up"], keys
     assert mt.take_mouse() == [("move", 11, 4), ("left", 11, 4), ("up", 11, 4), ("right", 2, 3), ("wheelup", 0, 0)]
+    # the big score counts up to the real one; Zen counts too
+    g = Game("Zen", seed=3, W=100, H=60)
+    g.score = 120
+    for _ in range(120):
+        g.update(1 / 60)
+    assert g.shown == 120
+    t = g.spawn_puff(d=2)
+    t.x, t.y0, t.y, t.amp = g.ux(50, 2), 0.3, 0.3, 0
+    g.aim(0.505, 0.3)
+    assert g.fire() is t and g.score == 120 + VALUE[2]
+    draw_score(render(g, 100, 32), g)
     # every size, the title, auto mode
     for cols, rows in ((60, 22), (100, 32), (180, 50)):
         d = TitleDemo()

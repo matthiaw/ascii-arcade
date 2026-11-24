@@ -18,7 +18,7 @@ import depthwell
 from arcadesound import Sound
 import arcadekit
 from arcadesound import load_settings, save_settings
-from arcadekit import (ACCENTS, COPYRIGHT, VERSION, Canvas, Terminal, draw_title, footer, load_scores, mix, overlay, shade,
+from arcadekit import (ACCENTS, COPYRIGHT, VERSION, Canvas, Terminal, clamp, draw_title, footer, load_scores, mix, overlay, shade,
                        title_width)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -123,9 +123,21 @@ GAMES = [
     dict(file="heathshot.py", name="HEATHSHOT", tag="a shooting gallery on the heath",
          info=["Puffwings cross the heath near and far; the", "far ones score most. Eight shells, combos,", "peekers, a balloon, a windmill. Spare the sheep."],
          keys="mouse aim/click   R reload   arrows + Space", size=(60, 22), score="heathshot"),
-    dict(file="breakroom.py", name="BREAKROOM", tag="an office full of things that had it coming",
-         info=["A rage room: plates, vases, a monitor, the", "printer. Hammer, bat, firecracker; shards pile", "up. Free Smash with a stress bar, or One Minute."],
+    dict(file="breakroom.py", name="BREAKROOM", tag="rooms full of things that had it coming",
+         info=["A rage room: office, kitchen, living room and", "china shop. Hammer, bat, firecracker; shards", "pile up. Free Smash with a stress bar, or 1 Min."],
          keys="mouse aim/click   1 2 3 tool   arrows + Space", size=(60, 22), score="breakroom"),
+    dict(file="spanwork.py", name="SPANWORK", tag="build a bridge, then let the physics decide",
+         info=["Road, wood, steel and cable on a grid, a budget,", "then real physics: mass, stiffness, load from", "green to red, beams that snap. Eight crossings."],
+         keys="mouse click joints   1-4 material   Enter test", size=(60, 22), score="spanwork"),
+    dict(file="solace.py", name="SOLACE", tag="patience on a green felt table",
+         info=["Klondike (draw 1 or 3), Spider (1, 2 or 4", "suits) and FreeCell (numbered deals). Drag,", "click, undo, hints, auto-complete, best times."],
+         keys="mouse drag/click   U undo   H hint   N new deal", size=(60, 22), score="solace"),
+    dict(file="underhold.py", name="UNDERHOLD", tag="one hero, ten floors down, no second chances",
+         info=["A roguelike: new floors every run, unknown", "potions and wands, 17 kinds of foes, three", "heroes, perks, permadeath. The Mawkeeper waits."],
+         keys="arrows move   X explore   I items   > stairs", size=(60, 22), score="underhold"),
+    dict(file="puckslide.py", name="PUCKSLIDE", tag="air hockey on a glowing table",
+         info=["Real puck physics: mass, rebounds, hard swings", "make hard shots. Two players at one keyboard", "or you against the computer (easy/normal/hard)."],
+         keys="W A S D left   arrows right   mouse vs computer", size=(60, 22), score="puckslide"),
 ]
 GENRE = {"hoverdrift.py": "flight", "emberfall.py": "role-playing", "blockfire.py": "shooter", "deepcall.py": "exploration",
          "lightkeeper.py": "action", "skyshot.py": "artillery", "nightdrive.py": "racing", "orbital.py": "puzzle",
@@ -134,13 +146,36 @@ GENRE = {"hoverdrift.py": "flight", "emberfall.py": "role-playing", "blockfire.p
          "voidlance.py": "shoot 'em up", "shatterwick.py": "brick breaker",
          "wardstone.py": "tower defense", "clatterbell.py": "pinball", "cairnward.py": "box-pushing", "gemburrow.py": "cave digger", "weftwar.py": "trail duel", "pebbleputt.py": "minigolf",
          "thatchwold.py": "settlement", "fenmark.py": "logic puzzles", "heathshot.py": "shooting gallery",
-         "breakroom.py": "rage room"}
+         "breakroom.py": "rage room", "spanwork.py": "bridge builder",
+         "solace.py": "patience", "underhold.py": "roguelike", "puckslide.py": "air hockey"}
+HIDDEN = set(load_settings().get("hidden", []))     # files of games the player took off the list
+
+
+def listed(all_=False):
+    """Indices into GAMES of the games on the list (all of them with all_)."""
+    return [i for i, g in enumerate(GAMES) if all_ or g["file"] not in HIDDEN]
+
+
+def toggle_hidden(g):
+    """Take a game off the list or put it back (remembered for every start). Never hides the last one."""
+    if g["file"] in HIDDEN:
+        HIDDEN.discard(g["file"])
+    elif len(listed()) > 1:
+        HIDDEN.add(g["file"])
+    else:
+        return False
+    save_settings(hidden=sorted(HIDDEN))
+    return True
+
+
 HELP = [
     "ASCII ARCADE - keys",
     "",
     "Up / Down            choose a game",
     "1 - 9, 10 - %d       jump to a game (two digits: type them quickly)" % len(GAMES),
     "Enter / Space        play",
+    "X                    hide the game from the list (and the start screen)",
+    "V                    show all games, hidden ones too (X there: show again)",
     "M                    sound on / off",
     "G                    pixels: fine / smart / solid",
     "                     (smart and solid avoid streaks in macOS Terminal)",
@@ -389,7 +424,9 @@ THUMBS = {"nightdrive.py": thumb_night, "orbital.py": thumb_orbital, "leafling.p
           "voidlance.py": thumb_demo("voidlance"), "shatterwick.py": thumb_demo("shatterwick"),
           "wardstone.py": thumb_demo("wardstone"), "clatterbell.py": thumb_demo("clatterbell"), "cairnward.py": thumb_demo("cairnward"), "gemburrow.py": thumb_demo("gemburrow"), "weftwar.py": thumb_demo("weftwar"), "pebbleputt.py": thumb_demo("pebbleputt"),
           "thatchwold.py": thumb_demo("thatchwold"), "fenmark.py": thumb_demo("fenmark"),
-          "heathshot.py": thumb_demo("heathshot"), "breakroom.py": thumb_demo("breakroom")}
+          "heathshot.py": thumb_demo("heathshot"), "breakroom.py": thumb_demo("breakroom"),
+          "spanwork.py": thumb_demo("spanwork"), "solace.py": thumb_demo("solace"),
+          "underhold.py": thumb_demo("underhold"), "puckslide.py": thumb_demo("puckslide")}
 
 
 
@@ -422,6 +459,15 @@ def record_line(g):
         return "best: " + ", ".join(parts + ["%d of 22 panes" % rec.get("panes", 0)])
     if g["score"] == "breakroom":
         return "best: %s € damage in One Minute" % "{:,}".format(rec.get("One Minute", 0)).replace(",", ".")
+    if g["score"] == "solace":
+        wins = sum(v for k, v in rec.items() if k.endswith(" wins"))
+        times = {k[:-5]: v for k, v in rec.items() if k.endswith(" time")}
+        best = ", ".join("%s %d:%02d" % (k, v // 60, v % 60) for k, v in sorted(times.items())[:3])
+        return "best: %d games won%s" % (wins, (", " + best) if best else "")
+    if g["score"] == "puckslide":
+        return "wins vs computer: " + ", ".join("%s %d" % (d, rec[d]) for d in ("easy", "normal", "hard") if d in rec)
+    if g["score"] == "spanwork":
+        return "best: %d of 8 crossings built within budget" % len(rec)
     if g["score"] == "cairnward":
         return "best: %d of 42 cairns set, %d at par" % (rec.get("solved", 0), rec.get("par", 0))
     if g["score"] == "leafling":
@@ -469,7 +515,11 @@ def draw_logo(cv, cols, t):
     return k
 
 
-def render(cols, rows, sel, t, note, help_=False):
+def render(cols, rows, sel, t, note, help_=False, all_=False):
+    """The menu. sel is an index into GAMES; the list shows the games not hidden (all_: every game)."""
+    view_ = listed(all_)
+    if sel not in view_:
+        view_ = sorted(set(view_) | {sel})
     cv = Canvas(cols, rows)
     cv.vgradient((8, 6, 18), (24, 10, 30))
     rnd = random.Random(11)
@@ -487,30 +537,41 @@ def render(cols, rows, sel, t, note, help_=False):
     rx = lx + lw + 4
     ly = top + 3 if rows >= 30 else top + 2
     # tighter list on small windows: names with taglines and gaps, then without gaps, then names only
-    step = next((k for k in (3, 2) if ly + k * len(GAMES) < rows - 1), 1)
-    for i, g in enumerate(GAMES):
-        r = ly + i * step
+    n = len(view_)
+    step = next((k for k in (3, 2) if ly + k * n < rows - 1), 1)
+    fit = max(1, (rows - 2 - ly) // step)               # rows for the list; more games scroll
+    pos = view_.index(sel)
+    first = clamp(pos - fit // 2, 0, max(0, n - fit))
+    for j, i in enumerate(view_[first:first + fit]):
+        g = GAMES[i]
+        r = ly + j * step
         on = i == sel
+        off = g["file"] in HIDDEN
         acc = accent(g)
-        band = acc if on else LIST_BG[i % 2]
-        genre = GENRE.get(g["file"], "")
-        b = badge(i)
+        band = acc if on else LIST_BG[j % 2]
+        genre = "hidden" if off else GENRE.get(g["file"], "")
+        b = badge(first + j)
         cv.put(lx, r, " " * lw, (14, 14, 20), band)
         cv.put(lx + 1, r, b.center(4), acc if on else (220, 220, 236), (14, 14, 22) if on else BADGE_BG)
-        cv.put(lx + 6, r, g["name"], (14, 14, 20) if on else (236, 236, 246), band)
+        cv.put(lx + 6, r, g["name"], (14, 14, 20) if on else (120, 120, 140) if off else (236, 236, 246), band)
         if genre and lw - 6 - len(g["name"]) - len(genre) > 3:
-            cv.put(lx + lw - len(genre) - 2, r, genre, shade(acc, 0.32) if on else DIM, band)
+            cv.put(lx + lw - len(genre) - 2, r, genre, (255, 140, 110) if off else shade(acc, 0.32) if on else DIM,
+                   band)
         if step > 1:
             tb = mix(LIST_BG[i % 2], acc, 0.18) if on else LIST_BG[i % 2]
             cv.put(lx, r + 1, " " * lw, (14, 14, 20), tb)
             cv.put(lx + 6, r + 1, g["tag"][:lw - 7], (240, 240, 248) if on else DIM, tb)
             if on:
                 cv.put(lx, r + 1, " ", acc, acc)
-        if step > 2 and i < len(GAMES) - 1:
+        if step > 2 and j < n - 1:
             cv.put(lx, r + 2, " " * lw, (14, 14, 20), (14, 12, 28))
+    if first > 0:
+        cv.put(lx + lw - 3, ly - 1, " ^ ", (200, 200, 220), (14, 12, 28))
+    if first + fit < n:
+        cv.put(lx + lw - 3, ly + fit * step - (1 if step > 2 else 0), " v ", (200, 200, 220), (14, 12, 28))
     g = GAMES[sel]
     acc = accent(g)
-    list_bot = ly + len(GAMES) * step - (1 if step > 2 else 0)
+    list_bot = ly + min(n, fit) * step - (1 if step > 2 else 0)
     th = max(8, min(2 * (rows - ly - 11), 30, tw2 * 9 // 16 * 2 // 2))
     if tw2 >= 20:
         THUMBS[g["file"]](cv, rx, ly * 2, tw2, th, t)
@@ -559,23 +620,25 @@ def render(cols, rows, sel, t, note, help_=False):
         cv.center(rows - 3, " %s " % note, (14, 14, 20), (255, 150, 100))
     snd = SND.label().lower()
     pix = arcadekit.PIXEL_MODE
-    if cols >= 112:
-        footer(cv, "Up/Down choose   1-%d jump   Enter play   M %s   G pixels: %s   ? help   Esc quit" % (len(GAMES), snd, pix))
+    hide = "X %s" % ("show" if g["file"] in HIDDEN else "hide")
+    vall = "V %s" % ("hide hidden" if all_ else "all (%d hidden)" % len(HIDDEN) if HIDDEN else "all")
+    if cols >= 130:
+        footer(cv, "Up/Down choose   Enter play   %s   %s   M %s   G pixels: %s   ? help   Esc quit" % (hide, vall, snd, pix))
     elif cols >= 96:
-        footer(cv, "Up/Down choose   Enter play   M %s   G pixels: %s   ? help   Esc quit" % (snd, pix))
+        footer(cv, "Up/Down choose   Enter play   %s   %s   M %s   ? help   Esc quit" % (hide, vall, snd))
     else:
-        footer(cv, "Up/Down choose  Enter play  M %s  G pixels  ? help  Esc quit" % snd.split(":")[0])
+        footer(cv, "Enter play  %s  %s  ? help  Esc quit" % (hide, vall.split(" (")[0]))
     if TERMINAL_APP_HINT[0] and not arcadekit.SOLID_PIXELS and not help_:
         cv.center(rows - 2, " Streaky pixels in macOS Terminal? Press G for smart pixels. ", (20, 16, 10), (236, 200, 110))
     sig = "v%s" % VERSION
-    if cols >= 110:
+    if cols >= 150:
         cv.put(16, rows - 1, sig, (110, 114, 144), (12, 10, 22))
     if help_:
         overlay(cv, HELP)
     return cv
 
 
-def render_start(cols, rows, t, hi):
+def render_start(cols, rows, t, hi, games=None):
     """The start screen: the big logo over a wall of all games playing at once; hi is the highlighted one."""
     cv = Canvas(cols, rows)
     cv.vgradient((6, 4, 16), (26, 10, 34))
@@ -603,9 +666,10 @@ def render_start(cols, rows, t, hi):
     else:
         draw_logo(cv, cols, t)
     top = (ly + 5 * k) // 2 + 2
-    cv.center(top, " %d games for your terminal " % len(GAMES), (200, 200, 222), (12, 8, 24))
+    games = [GAMES[i] for i in listed()] if games is None else games
+    cv.center(top, " %d games for your terminal " % len(games), (200, 200, 222), (12, 8, 24))
     # the wall of games: every preview running live, names underneath
-    n = len(GAMES)
+    n = len(games)
     nc = (5 if n <= 15 else 6) if cols >= 90 else 3      # three rows on a wide window
     nr = (n + nc - 1) // nc
     gap = 2
@@ -617,7 +681,7 @@ def render_start(cols, rows, t, hi):
     x0 = (cols - (tw * nc + gap * (nc - 1))) // 2
     y0 = top + 2 + max(0, (avail - nr * (th // 2 + 3)) // 2)     # the wall sits in the middle of the free space
     if th >= 6:
-        for i, g in enumerate(GAMES):
+        for i, g in enumerate(games):
             c, r = i % nc, i // nc
             in_row = min(nc, n - r * nc)                 # an unfinished last row sits in the middle
             x = x0 + (nc - in_row) * (tw + gap) // 2 + c * (tw + gap)
@@ -640,12 +704,12 @@ def render_start(cols, rows, t, hi):
         info_row = y0 + nr * (th // 2 + 3)
     else:                                        # small window: just the names
         per = (n + 1) // 2
-        for i, g in enumerate(GAMES):
+        for i, g in enumerate(games):
             c, r = i // per, i % per
             cv.put(cols // 2 - 22 + c * 24, y0 + r, " %2d %-12s" % (i + 1, g["name"]),
                    accent(g) if i == hi else (170, 170, 196), (14, 10, 26))
         info_row = y0 + per + 1
-    g = GAMES[hi]
+    g = games[hi % n]
     line = "%s  -  %s" % (g["name"], g["tag"])
     cv.center(min(info_row, rows - 4), " %s " % line[:cols - 4], accent(g), (14, 10, 26))
     if int(t * 1.6) % 2 == 0:
@@ -671,22 +735,24 @@ def start_screen():
                         return None
                 continue
             t = time.time() - t0
-            hi = int(t / 2.2) % len(GAMES)
+            view_ = listed()
+            hi = int(t / 2.2) % len(view_)
             term.write(render_start(cols, rows, t, hi).emit())
             for k in term.keys(1 / 20):
                 if k in ("q", "esc"):
                     return None
                 if k == "enter":
                     SND.play("start")
-                    return hi, True
+                    return view_[hi], True
                 SND.play("move")
-                return hi, False
+                return view_[hi], False
 
 
 def menu(sel, note):
     with Terminal() as term:
         t0 = time.time()
         help_ = False
+        all_ = False                 # V: the hidden games are listed too
         digit = (None, 0.0)          # the last digit typed and when
         while True:
             cols, rows = term.size()
@@ -694,7 +760,10 @@ def menu(sel, note):
                 term.write("\x1b[0m\x1b[2J\x1b[HPlease make the window larger (60x20).")
                 term.keys(0.3)
                 continue
-            term.write(render(cols, rows, sel, time.time() - t0, note, help_).emit())
+            view_ = listed(all_)
+            if sel not in view_:
+                sel = min(view_, key=lambda i: abs(i - sel))
+            term.write(render(cols, rows, sel, time.time() - t0, note, help_, all_).emit())
             for k in term.keys(1 / 20):
                 note = ""
                 if help_:            # any key closes the help
@@ -711,25 +780,41 @@ def menu(sel, note):
                 elif k == "g":
                     set_pixels({"fine": "smart", "smart": "solid"}.get(arcadekit.PIXEL_MODE, "fine"))
                     SND.play("move")
+                elif k == "x":
+                    g = GAMES[sel]
+                    if toggle_hidden(g):
+                        SND.play("back" if g["file"] in HIDDEN else "move")
+                        note = ("%s hidden - V shows all games" % g["name"]) if g["file"] in HIDDEN and not all_ else ""
+                        if g["file"] in HIDDEN and not all_:   # it left the list: move on to a neighbour
+                            rest = listed()
+                            sel = next((i for i in rest if i > sel), rest[-1])
+                    else:
+                        note = "the last game stays on the list"
+                    view_ = listed(all_)
+                elif k == "v":
+                    all_ = not all_
+                    SND.play("move")
+                    view_ = listed(all_)
+                pos = view_.index(sel) if sel in view_ else 0
                 if k in ("up", "w", "k"):
-                    sel = (sel - 1) % len(GAMES)
+                    sel = view_[(pos - 1) % len(view_)]
                     SND.play("move")
                 elif k in ("down", "s", "j", "tab"):
-                    sel = (sel + 1) % len(GAMES)
+                    sel = view_[(pos + 1) % len(view_)]
                     SND.play("move")
                 elif k in tuple("0123456789"):
                     now = time.time()
                     prev, when = digit
                     n = int(k)
-                    if prev is not None and now - when < DIGIT_GAP and 1 <= prev * 10 + n <= len(GAMES):
+                    if prev is not None and now - when < DIGIT_GAP and 1 <= prev * 10 + n <= len(view_):
                         n = prev * 10 + n                 # second digit: 1 then 2 = game 12
                         digit = (None, 0.0)
                     else:
                         digit = (n, now)
                         if n == 0:
                             n = 10                        # 0 alone: game 10, as before
-                    if 1 <= n <= len(GAMES):
-                        sel = n - 1
+                    if 1 <= n <= len(view_):
+                        sel = view_[n - 1]
                         SND.play("move")
                 elif k in ("enter", " "):
                     SND.play("start")

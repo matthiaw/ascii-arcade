@@ -1,10 +1,10 @@
 # ASCII ARCADE
 
-![The ASCII ARCADE start screen: all twenty-six games playing at once](docs/screenshots/start.gif)
+![The ASCII ARCADE start screen: all thirty games playing at once](docs/screenshots/start.gif)
 
 A little collection of games for the terminal. Start the launcher: the start screen shows all games playing at once
 (Enter starts the highlighted one, any other key opens the menu). Pick a game with the arrow keys (or its number:
-1-26, two digits typed quickly one after the other), press Enter. When the game ends you are back in the menu.
+1-30, two digits typed quickly one after the other), press Enter. When the game ends you are back in the menu.
 
 ```sh
 python3 arcade.py
@@ -52,6 +52,7 @@ Homebrew brings its own Python (3.14); the games need nothing else.
 | P | pause (real-time games; in EMBERFALL P drinks a potion, Esc opens its game menu: M sound, Q save and quit) |
 | M | in the pause menu and in the launcher: sound on / off (remembered for every game) |
 | G | in the launcher: pixels fine / smart / solid (smart and solid avoid streaks in macOS Terminal) |
+| X / V | in the launcher: take the highlighted game off the list and the start screen / show all games (X there puts a hidden one back); remembered |
 | Q | in the pause menu: quit - on a title screen: quit (in DEPTHWELL Q also turns pieces) |
 | ? | help with all of the game's keys, also on the title screens |
 | Enter / Space | confirm |
@@ -127,8 +128,12 @@ No dependencies: Python 3 on macOS or Linux (on Windows use WSL). Best in WezTer
 | **PEBBLEPUTT** | Top-down minigolf: three courses of nine holes (a willow meadow, ice caverns, a copper foundry at night) with slopes, ramps, portals, ice, belts and moving gear arms. Solo or two to four players at one keyboard, scorecard with par. | 60x22+ |
 | **THATCHWOLD** | A turn-based settlement game: every turn is a season. Place cottages, farms, fisheries, woodcutters, quarries, mines, mills and markets where the land and the neighbours pay most, lay up stores for winter, answer droughts, fevers, floods, wolves and raiders. Five scenarios with goals plus an endless mode. | 70x22+ |
 | **FENMARK** | Logic puzzles: sound a peat fen for hidden bog-eyes (every fen is proved solvable without guessing) and mend leadlight windows from row and column clues (22 hand-made pictures plus random ones, each with exactly one solution). Hints that explain the next deduction, best times. | 70x22+ |
-| **HEATHSHOT** | A shooting gallery on the heath, for letting off steam: round, fluffy puffwings cross three layers of a panning landscape (the far ones are tiny and score most), peek over the stone wall, dart past in gold or drift over in a balloon. Eight shells, reload with a right click, combos up to x4. Leave the sheep alone. 90 Seconds or Zen (no clock, no score). Mouse or keys. | 60x22+ |
-| **BREAKROOM** | A rage room in an office: smash plates, mugs, vases, bottles, the monitor, the printer, the clock and the motivational poster with a hammer, a bat (it knocks things off the shelves) or a firecracker. Every shard falls and piles up, stacks collapse, a new delivery arrives when the room is rubble. Free Smash with a stress bar, or One Minute for the biggest damage bill. Mouse or keys. | 60x22+ |
+| **HEATHSHOT** | A shooting gallery on the heath, for letting off steam: round, fluffy puffwings cross three layers of a panning landscape (the far ones are tiny and score most), peek over the stone wall, dart past in gold or drift over in a balloon. Eight shells, reload with a right click, combos up to x4. Leave the sheep alone. 90 Seconds or Zen (no clock, no record). Mouse or keys. | 60x22+ |
+| **BREAKROOM** | A rage room in four rooms (an office, a kitchen, a living room, a china shop): smash plates, mugs, vases, bottles, the monitor, the microwave, the big TV, figurines, urns, mirrors and the motivational poster with a hammer, a bat (it knocks things off the shelves) or a firecracker. Every shard falls and piles up, stacks collapse, the next room is delivered when one is rubble. Free Smash with a stress bar, or One Minute for the biggest damage bill. Mouse or keys. | 60x22+ |
+| **SOLACE** | Patience on a green felt table: Klondike (draw one or three), Spider (one, two or four suits) and FreeCell with the classic numbered deals. Drag cards with the mouse or click one to send it where it fits; unlimited undo, hints, auto-complete, a bouncing finale, best times and wins per game. In auto mode a solver plays. | 60x22+ |
+| **UNDERHOLD** | A roguelike for a quick run: one hero, ten new floors (halls and doors or caves with water and lava), field of view and a remembered map, seventeen kinds of foes (fast gnawers, slingers that keep their distance, splitting jellies, unseen lurkers, chanters that call for help) and the Mawkeeper at the bottom. Warden, Hexer or Skulker, a perk choice at every level, unidentified potions, scrolls and wands, food, permadeath. Mouse or keys. | 60x22+ |
+| **PUCKSLIDE** | Air hockey with real physics on a glowing table: puck and mallets with mass, elastic hits and rebounds, and a moving mallet's speed goes into the shot. Two players at one keyboard (W A S D against the arrow keys) or one against the computer (easy / normal / hard, also with the mouse). First to 5, 7 or 11. | 60x22+ |
+| **SPANWORK** | A bridge builder with real physics: join the anchors with road, wood, steel and cable on a one-metre grid within a budget, then send the traffic across. Every joint has mass, every beam the stiffness, weight, strength and price of its material; loads show from green to red and beams snap past their limit in tension or compression. Eight crossings: wider gaps, a stepping stone, a van, a convoy, cable towers, a truck, a long haul. | 60x22+ |
 
 ## Screenshots
 
@@ -152,8 +157,10 @@ No dependencies: Python 3 on macOS or Linux (on Windows use WSL). Best in WezTer
 | **CAIRNWARD** | **GEMBURROW** | **WEFTWAR** |
 | <img src="docs/screenshots/pebbleputt.png" alt="PEBBLEPUTT" width="260"> | <img src="docs/screenshots/thatchwold.png" alt="THATCHWOLD" width="260"> | <img src="docs/screenshots/fenmark.png" alt="FENMARK" width="260"> |
 | **PEBBLEPUTT** | **THATCHWOLD** | **FENMARK** |
-| <img src="docs/screenshots/heathshot.png" alt="HEATHSHOT" width="260"> | <img src="docs/screenshots/breakroom.png" alt="BREAKROOM" width="260"> | |
-| **HEATHSHOT** | **BREAKROOM** | |
+| <img src="docs/screenshots/heathshot.png" alt="HEATHSHOT" width="260"> | <img src="docs/screenshots/breakroom.png" alt="BREAKROOM" width="260"> | <img src="docs/screenshots/spanwork.png" alt="SPANWORK" width="260"> |
+| **HEATHSHOT** | **BREAKROOM** | **SPANWORK** |
+| <img src="docs/screenshots/solace.png" alt="SOLACE" width="260"> | <img src="docs/screenshots/underhold.png" alt="UNDERHOLD" width="260"> | <img src="docs/screenshots/puckslide.png" alt="PUCKSLIDE" width="260"> |
+| **SOLACE** | **UNDERHOLD** | **PUCKSLIDE** |
 
 The pictures come straight from the games' own canvases: `python3 scripts/screenshots.py` renders them again
 (needs Pillow).
@@ -595,8 +602,8 @@ time, using only what a player can see.
 The puffwings come at three distances: far ones are worth 25, middle ones 10, near ones 5. Peekers over the stone
 wall give 15, the rare golden puffwing 100, the balloon (three hits) 50. A sheep costs 25 and runs off bleating.
 Hits less than 1.4 seconds apart build a combo: x2 from the fourth hit, up to x4. Shots into the wall or the tree
-leave holes, the windmill's sails ring and spin faster. 90 Seconds keeps a best score; Zen has no clock and no
-score, it only counts the poofs. The mouse needs a terminal that reports it (WezTerm, iTerm2, kitty, Ghostty and
+leave holes, the windmill's sails ring and spin faster. The score counts up in big digits at the top right. 90 Seconds keeps a best
+score; Zen has no clock and keeps no record. The mouse needs a terminal that reports it (WezTerm, iTerm2, kitty, Ghostty and
 Terminal.app all do); `ARCADE_NO_MOUSE=1` turns it off.
 
 ## BREAKROOM keys
@@ -609,15 +616,109 @@ Terminal.app all do); `ARCADE_NO_MOUSE=1` turns it off.
 | `1` `2` `3` / Tab | hammer, bat, firecracker |
 | Arrows / WASD | move the hand without a mouse |
 | Space / Enter | smash |
-| `N` | a new delivery now |
+| `N` | the next room now |
+| Left / Right (title) | the first room |
 | Esc / `P` | pause (`Q` there: back), `?` help |
 
 The hammer hits one thing, quickly. The bat hits everything within reach twice as hard and sends whatever survives
 flying: off the shelf, off the desk, onto the floor, where glass and china break and a monitor takes another blow.
 The firecracker is set down at the hand, fizzes for a moment and then breaks or throws everything near it; it also
 throws the rubble up again. A plate stack collapses when its bottom plate goes. Every shard falls, bounces and
-piles up. When the room is down to rubble a delivery drops in new things. In Free Smash the stress bar goes down
+piles up. There are four rooms: the office (monitor, printer, keyboard, trophy), a kitchen (microwave, toaster,
+teapots, jars), a living room (the big TV, a mirror, figurines, a floor urn) and a china shop full of porcelain.
+When a room is down to rubble, the next one is delivered. In Free Smash the stress bar goes down
 with every smash (the room's value decides how much); One Minute keeps the best damage bill.
+
+## SPANWORK keys
+
+| Key | |
+|---|---|
+| Left click / Space | start a beam at a joint (or a red anchor), then click where it ends; beams chain on |
+| Right click / `X` | cancel the beam, or delete the one under the hand |
+| Arrows / WASD | move the hand on the grid |
+| `1` `2` `3` `4` / Tab / wheel | road, wood, steel, cable |
+| `U` / `C` | undo / clear the bridge |
+| Enter / `T` | test it; `R` back to building, Enter after a crossing: the next one |
+| `N` / `B` | next / previous crossing |
+| Esc / `P` | pause (`Q` there: back), `?` help |
+
+The physics is position-based dynamics with compliant constraints (XPBD), fourteen substeps a frame: every joint
+carries half the mass of its beams, every beam is a stiff spring (compliance = length / EA of its material), and
+the force each beam carries comes straight out of the solve. Past its strength in tension or compression it snaps.
+Road is the only thing wheels touch, wood is light and cheap, steel strong, heavy and dear, cable takes only
+tension (it goes slack when pushed), and a road may be doubled with steel. Gravity comes on gently while the bridge
+settles, then the traffic starts. A crossing counts when everything reaches the flag; the cheapest design within
+budget is kept per crossing. Designs stay while the game runs. In auto mode the bot builds a truss beam by beam
+(resting it on rocks, hanging it from towers) and tests it.
+
+## SOLACE keys
+
+| Key | |
+|---|---|
+| Mouse drag | move a card (a run moves with its top card) |
+| Click a card | send it where it fits best (foundation first) |
+| Right click | send the card to a foundation |
+| Click the stock / Tab / `T` | draw (Klondike) or deal a row (Spider) |
+| Arrows / WASD, Space / Enter | move the cursor, pick up and drop |
+| `U` | undo (unlimited) |
+| `H` | hint: the next good move lights up |
+| `A` | auto-complete once every card is face up |
+| `N` | new deal (after a FreeCell win: the next number) |
+| Left / Right (title) | draw one or three, one/two/four suits, the FreeCell deal number (`R`: random) |
+| Esc / `P` | pause (`Q` there: back), `?` help |
+
+Klondike builds down in alternating colours with kings on empty columns, and the waste turns over without limit.
+Spider builds down in any suit, but only a run of one suit moves together; a full King-to-Ace run of one suit
+leaves the table, and a new row can be dealt only when no column is empty. FreeCell has four free cells; how many
+cards move at once is (free cells + 1) × 2^(empty columns), with one empty column fewer when the target is empty.
+Deals are reproducible, and FreeCell uses the classic numbering (deal #1 is the well-known one). Best times and
+wins are kept for every variant. In auto mode a solver plays: greedy with care in Klondike and Spider, a real
+search in FreeCell.
+
+## UNDERHOLD keys
+
+| Key | |
+|---|---|
+| Arrows / WASD / numpad | move; moving into a foe attacks |
+| `Y` `U` `B` `N` | diagonals |
+| Mouse | left click: travel there (or attack next to you, pick up / descend on your tile); right click: describe |
+| `X` | explore until something turns up |
+| `>` / Enter | travel to the stairs, then go down |
+| `G` | pick up |
+| `I` | inventory (then the item's letter: use, equip or `D` drop) |
+| `Q` `R` `Z` `T` `E` | quaff, read, zap, throw, equip / eat |
+| `F` | ability: second wind (Warden), hex bolt (Hexer), vanish (Skulker) |
+| `C` / Space | rest until healed / wait a turn |
+| `L` | look (arrows move the marker, Esc ends) |
+| Esc / `P` | pause (`Q` there: back), `?` help |
+
+Every run makes new floors and new looks for the potions, scrolls and wands: a "violet potion" may heal in one run
+and poison in the next, so things are known only once used (or read about). The Warden is sturdy and can catch a
+second wind, the Hexer is frail but casts hex bolts from regenerating mana, the Skulker stabs sleeping or unaware
+foes for triple damage, throws knives and can vanish. Each level up offers two perks to choose from. Food keeps
+hunger away; zapped wands and thrown knives aim at the nearest foe in sight. Death is final; the best score is kept
+per hero (gold, depth, kills, level, and a bonus for slaying the Mawkeeper). In auto mode a bot explores, fights,
+drinks potions when low and heads down.
+
+## PUCKSLIDE keys
+
+| Key | |
+|---|---|
+| W A S D | left mallet |
+| Arrow keys | right mallet |
+| Mouse | left mallet against the computer |
+| Left / Right (title) | goals to win: 5, 7 or 11 |
+| Esc / `P` | pause (`Q` there: back), `?` help |
+
+The puck and the mallets have mass. Hits are elastic with a little loss, the walls give back 90 % of the speed,
+and the air cushion barely slows the puck. A mallet that is moving hands its speed to the puck, so a hard swing
+makes a hard shot. The physics takes as many small steps as the speed needs, so even the fastest shot never slips
+through a mallet. Each player stays in their own half. In terminals with the kitty keyboard protocol held keys
+steer exactly; in classic terminals (which repeat only the last key held) every tap gives the mallet a shove and
+it glides on, so two players can still play at once. The title screen shows which mode is active. Against the
+computer W A S D, the arrows and the mouse all steer you. The computer reacts a little late, predicts the puck off
+the walls, guards its goal and attacks with straight or banked shots. Wins against each difficulty are counted.
+Auto mode lets the computer play both sides.
 
 ## Versions and releases
 
@@ -648,7 +749,7 @@ change and share the games freely, as long as the copyright notice stays in.
 | `arcade.py` | the launcher |
 | `arcadekit.py` | shared toolkit: raw terminal input (with held keys via the kitty keyboard protocol, and the mouse), half-block pixel canvas, block font, high scores |
 | `arcadesound.py` | the sound engine: synthesized effects, played without waiting |
-| `stackfall.py`, `depthwell.py`, `deepcall.py`, `lightkeeper.py`, `skyshot.py`, `nightdrive.py`, `orbital.py`, `leafling.py`, `glimmer.py`, `sporefield.py`, `scaffold.py`, `voidlance.py`, `heathshot.py`, `breakroom.py` | the games written for the arcade (use `arcadekit.py`) |
+| `stackfall.py`, `depthwell.py`, `deepcall.py`, `lightkeeper.py`, `skyshot.py`, `nightdrive.py`, `orbital.py`, `leafling.py`, `glimmer.py`, `sporefield.py`, `scaffold.py`, `voidlance.py`, `heathshot.py`, `breakroom.py`, `spanwork.py`, `solace.py`, `underhold.py`, `puckslide.py` | the games written for the arcade (use `arcadekit.py`) |
 | `hoverdrift.py`, `emberfall.py`, `blockfire.py` | HOVERDRIFT, EMBERFALL and BLOCKFIRE (they run on their own and do not need `arcadekit.py`) |
 | `extras/emberfall-art/` | the source images and tools behind EMBERFALL's pictures (not in the Homebrew package) |
 | `VERSION` | the current version (written by the release workflow) |

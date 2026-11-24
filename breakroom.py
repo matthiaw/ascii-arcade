@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 Matthias Wegner
 # SPDX-License-Identifier: MIT (see the LICENSE file)
-"""BREAKROOM - an office full of things that had it coming.
+"""BREAKROOM - rooms full of things that had it coming.
 
 A rage room in your terminal. Shelves of plates, mugs, vases and bottles, a desk with a monitor, a lamp and a
 trophy, a printer on the floor, a clock and a motivational poster on the wall. Three tools: the hammer (quick
@@ -9,7 +9,9 @@ and precise), the bat (two hits' worth, and it sends things flying off the shelv
 fuse, a bang, and everything near it goes). Every shard falls and piles up on the floor. Stacks collapse when
 the plate underneath goes, a monitor knocked off the desk breaks on the floor.
 
-When the room is mostly rubble, a new delivery arrives. Free Smash has no clock: a stress bar goes down with
+Four rooms: the office, a kitchen (microwave, toaster, teapots, jars), a living room (the big TV, a mirror,
+figurines, a floor urn) and a china shop full of porcelain. When a room is mostly rubble, the next one is
+delivered. Free Smash has no clock: a stress bar goes down with
 every smash. One Minute adds up the damage bill against the clock.
 
 Point with the mouse and click (right click or the wheel changes the tool), or steer with the arrow keys and
@@ -52,13 +54,45 @@ KINDS = {
     "printer": (0.24, 0.15, 6, "electronic", 260),
     "clock": (0.11, 0.11, 2, "glass", 35),
     "poster": (0.17, 0.13, 2, "glass", 60),
+    "microwave": (0.22, 0.13, 4, "electronic", 120),
+    "toaster": (0.1, 0.08, 3, "metal", 35),
+    "teapot": (0.11, 0.09, 1, "ceramic", 28),
+    "jar": (0.06, 0.09, 1, "glass", 8),
+    "tv": (0.3, 0.2, 4, "electronic", 400),
+    "figurine": (0.045, 0.1, 1, "ceramic", 55),
+    "mirror": (0.12, 0.16, 2, "glass", 90),
+    "urn": (0.12, 0.26, 3, "ceramic", 150),
 }
 FRAGILE = ("ceramic", "glass")
 COLORS = [(214, 72, 64), (64, 120, 214), (236, 186, 60), (90, 170, 110), (170, 100, 200), (240, 240, 236),
           (240, 130, 70)]
-WALLPAPER = ((214, 206, 182), (198, 190, 168))
-FLOOR = (118, 98, 82)
-WOOD, WOOD_D = (150, 104, 66), (110, 74, 46)
+THEMES = [  # the rooms; every delivery brings the next one
+    dict(name="Office", wall="stripes", paper=((214, 206, 182), (198, 190, 168)), floor="planks",
+         floor_c=((118, 98, 82), (94, 78, 66)), wood=((150, 104, 66), (110, 74, 46)), table="desk", window="blinds",
+         shelves=[["plates", "mug", "vase", "bottle", "glass", "trophy", "mug", "glass", "plant"],
+                  ["plates", "plates", "vase", "bottle", "mug", "plant", "glass"]],
+         main="monitor", extras=["lamp", "mug", "plant", "trophy", "glass", "keyboard"], left=["mug", "bottle"],
+         ground=["printer", "vase|plant"], wall_items=["clock", "poster"], extra=None),
+    dict(name="Kitchen", wall="tiles", paper=((238, 240, 234), (150, 200, 194)), floor="checker",
+         floor_c=((226, 222, 210), (70, 72, 82)), wood=((186, 150, 108), (138, 104, 70)), table="counter",
+         window="curtains", shelves=[["plates", "mug", "glass", "jar", "teapot", "mug", "jar"],
+                                     ["plates", "plates", "jar", "bottle", "teapot", "mug", "bottle"]],
+         main="microwave", extras=["toaster", "teapot", "jar", "mug", "bottle", "glass"], left=["jar", "mug"],
+         ground=["plant", "jar", "bottle"], wall_items=["clock", "mirror"], extra=None),
+    dict(name="Living Room", wall="damask", paper=((116, 142, 118), (150, 172, 140)), floor="carpet",
+         floor_c=((150, 64, 62), (190, 150, 90)), wood=((120, 76, 48), (82, 50, 32)), table="sideboard",
+         window="curtains", shelves=[["vase", "figurine", "glass", "plant", "trophy", "figurine", "bottle"],
+                                     ["plates", "vase", "teapot", "figurine", "glass", "vase"]],
+         main="tv", extras=["lamp", "vase", "plant", "glass", "figurine"], left=["figurine", "glass"],
+         ground=["urn", "plant"], wall_items=["mirror", "poster"], extra=None),
+    dict(name="China Shop", wall="panels", paper=((236, 220, 196), (176, 120, 90)), floor="checker",
+         floor_c=((236, 232, 224), (176, 160, 140)), wood=((110, 70, 50), (72, 44, 30)), table="display",
+         window=None, shelves=[["plates", "teapot", "vase", "figurine", "glass", "figurine", "teapot"],
+                               ["plates", "plates", "vase", "teapot", "figurine", "vase"]],
+         main="urn", extras=["teapot", "figurine", "vase", "glass", "plates", "figurine", "teapot"],
+         left=["figurine", "teapot"], ground=["urn", "urn", "vase"], wall_items=["clock", "mirror"],
+         extra=["teapot", "figurine", "glass", "vase", "figurine"]),
+]
 HUD_BG, HUD_FG = (16, 14, 26), (226, 226, 236)
 SND = Sound(GAME, {
     "thud": [dict(w="noise", f=700, f2=150, d=0.07, v=0.35), dict(w="tri", f=150, f2=90, d=0.06, v=0.35, at=0)],
@@ -96,7 +130,7 @@ HELP = [
     "Arrows / WASD         move the hand",
     "Space / Enter         smash",
     "1 2 3 / Tab           hammer, bat, firecracker",
-    "N                     new delivery now",
+    "N                     the next room now",
     "Esc / P               pause     ? help",
     "",
     "Hammer: quick and precise.  Bat: hits twice as hard",
@@ -234,6 +268,75 @@ def shape(kind, c, u, v):
         if abs(u - 0.5) * 1.3 < (v - 0.22) and v > 0.22:
             return (240, 240, 250) if v < 0.38 else (90, 96, 130)
         return mix((250, 170, 110), (90, 140, 220), v / 0.75)
+    if kind == "microwave":
+        if v > 0.92:
+            return (60, 60, 66) if u < 0.12 or u > 0.88 else None
+        if 0.06 < u < 0.68 and 0.14 < v < 0.8:
+            return (70, 76, 84) if abs(u - v * 0.5 - 0.2) < 0.05 else (36, 38, 44)
+        if u > 0.74 and 0.2 < v < 0.75 and int(u * 30) % 3 == 0 and int(v * 20) % 3 == 0:
+            return (90, 220, 120) if v < 0.3 else (120, 120, 126)
+        return shade((228, 228, 222), 1 - 0.12 * v)
+    if kind == "toaster":
+        if (u < 0.06 or u > 0.94) and (v < 0.2 or v > 0.9):
+            return None
+        if v < 0.14:
+            return (210, 150, 80) if (0.22 < u < 0.44 or 0.56 < u < 0.78) and v < 0.1 else None
+        if 0.2 < v < 0.26 and (0.22 < u < 0.44 or 0.56 < u < 0.78):
+            return (30, 30, 34)
+        return mix((236, 240, 246), (150, 156, 166), u * 0.8) if v < 0.9 else (60, 60, 66)
+    if kind == "teapot":
+        if ((u - 0.5) / 0.32) ** 2 + ((v - 0.62) / 0.36) ** 2 <= 1:
+            return (250, 250, 246) if int(u * 12 + v * 7) % 4 == 0 else shade(c, 1.05 - 0.3 * u)
+        if 0.18 <= v <= 0.3 and du < 0.18 or v < 0.18 and du < 0.06 and v > 0.06:
+            return shade(c, 0.85)
+        if u < 0.22 and abs(v - (0.62 - (0.22 - u) * 1.6)) < 0.09 and v > 0.25:
+            return shade(c, 0.9)
+        d = math.hypot((u - 0.82) / 0.16, (v - 0.58) / 0.22)
+        return shade(c, 0.8) if u > 0.78 and 0.5 <= d <= 1.0 else None
+    if kind == "jar":
+        if du > 0.46:
+            return None
+        if v < 0.16:
+            return c if v > 0.04 else None
+        if v > 0.45 and du < 0.38:
+            return (176, 120, 70) if int(u * 8 + v * 11) % 3 else (120, 78, 44)
+        return (226, 240, 246) if 0.18 < u < 0.28 else (196, 220, 230)
+    if kind == "tv":
+        if v > 0.86:
+            return (40, 40, 46) if (0.44 < u < 0.56 or (v > 0.94 and 0.28 < u < 0.72)) else None
+        if 0.03 < u < 0.97 and 0.05 < v < 0.8:
+            if ((u - 0.7) / 0.08) ** 2 + ((v - 0.25) / 0.12) ** 2 <= 1:
+                return (255, 230, 150)
+            if v > 0.5:
+                return mix((40, 110, 170), (20, 50, 100), (v - 0.5) / 0.3)
+            return mix((240, 140, 110), (120, 90, 170), 1 - v / 0.5)
+        return (24, 24, 28)
+    if kind == "figurine":
+        if math.hypot((u - 0.5) / 0.22, (v - 0.12) / 0.1) <= 1:
+            return (246, 236, 222)
+        if v > 0.9:
+            return (90, 70, 60) if du < 0.4 else None
+        if v > 0.22:
+            hw = 0.14 + 0.32 * (v - 0.22) / 0.68
+            if du <= hw:
+                return shade(c, 1.1 - 0.3 * u) if v > 0.45 else (246, 236, 222)
+        return None
+    if kind == "mirror":
+        d = ((u - 0.5) / 0.5) ** 2 + ((v - 0.5) / 0.5) ** 2
+        if d > 1:
+            return None
+        if d > 0.72:
+            return (214, 172, 80) if int((u + v) * 10) % 2 else (180, 140, 60)
+        return (236, 246, 252) if abs(u - v + 0.1) < 0.08 else mix((190, 214, 230), (140, 170, 196), v)
+    if kind == "urn":
+        hw = _hw(v, [(0, 0.3), (0.05, 0.3), (0.08, 0.2), (0.25, 0.22), (0.6, 0.48), (0.9, 0.36), (1, 0.3)])
+        if du > hw:
+            return None
+        if 0.06 < v < 0.1 or 0.9 < v < 0.94:
+            return shade(c, 0.8)
+        if 0.35 < v < 0.82 and (int((u - 0.5) / max(0.01, hw) * 3 + v * 14) % 3 == 0):
+            return c
+        return shade((244, 242, 236), 1.05 - 0.3 * (u - 0.5 + hw) / max(0.01, 2 * hw))
     return c
 
 
@@ -301,8 +404,9 @@ class Thing:
 # The room
 # =============================================================================================
 class Room:
-    def __init__(self, mode="Free Smash", seed=None, demo=False, W=100, H=58):
+    def __init__(self, mode="Free Smash", seed=None, demo=False, W=100, H=58, theme=0):
         self.mode, self.demo = mode, demo
+        self.theme = theme % len(THEMES)
         self.timed = mode == "One Minute"
         self.rnd = random.Random(seed)
         self.t = 0.0
@@ -339,12 +443,24 @@ class Room:
         self.shelf_x = (int(W * 0.03), int(W * 0.33))
         self.shelves = [int(H * 0.33), int(H * 0.56)]
         self.desk = (int(W * 0.52), int(W * 0.95), int(H * 0.6))
-        self.surfaces = [(self.shelf_x[0], self.shelf_x[1], y) for y in self.shelves]
-        self.surfaces.append(self.desk)
-        self.surfaces.append((0, W, self.floor))
         self.things, self.shards, self.crackers = [], [], []
         self.debris = {}
+        self.layout()
         self.stock()
+
+    @property
+    def th(self):
+        return THEMES[self.theme]
+
+    def layout(self):
+        """The surfaces of the current room: the shelf boards, the table, a display board (shop), the floor."""
+        W, H = self.W, self.H
+        self.surfaces = [(self.shelf_x[0], self.shelf_x[1], y) for y in self.shelves]
+        self.surfaces.append(self.desk)
+        self.board = (int(W * 0.36), int(W * 0.5), int(H * 0.42)) if self.th["extra"] else None
+        if self.board:
+            self.surfaces.append(self.board)
+        self.surfaces.append((0, W, self.floor))
 
     def size(self, kind):
         w, h = KINDS[kind][:2]
@@ -364,66 +480,84 @@ class Room:
         return t
 
     def stock(self, drop=False):
-        """Fill the shelves, the desk, the floor and the wall with things."""
+        """Fill the shelves, the table, the floor and the wall of the current room with things."""
         rnd = self.rnd
         H = self.H
+        th = self.th
+        pools = th["shelves"]
         for si, sy in enumerate(self.shelves):
-            x = self.shelf_x[0] + 2
-            while True:
-                kind = rnd.choice(["plates", "mug", "vase", "bottle", "glass", "trophy", "mug", "glass", "plant"]
-                                  if si == 0 else ["plates", "plates", "vase", "bottle", "mug", "plant", "glass"])
-                w, h = self.size("plate" if kind == "plates" else kind)
-                if x + w > self.shelf_x[1] - 1:
-                    break
-                if h > sy - (self.shelves[si - 1] if si else 0) - 2:
-                    continue
-                surf = (self.shelf_x[0], self.shelf_x[1], sy)
-                if kind == "plates":                     # a stack: each plate stands on the one below
-                    c = rnd.choice(COLORS[:4])
-                    below = None
-                    fall = rnd.uniform(0.6, 1.0) if drop else False    # the whole stack drops together
-                    for _ in range(rnd.randint(3, 6)):
-                        below = self.place("plate", x, surf, c, on=below, drop=fall)
-                else:
-                    self.place(kind, x, surf, drop=drop)
-                x += w + rnd.randint(1, 3)
+            self.fill((self.shelf_x[0], self.shelf_x[1], sy), pools[si % len(pools)],
+                      sy - (self.shelves[si - 1] if si else int(H * 0.1)) - 2, drop)
+        if self.board:
+            self.fill(self.board, th["extra"], self.board[2] - int(H * 0.22), drop)
         x0, x1, dy = self.desk
-        mw, _ = self.size("monitor")
+        mw, _ = self.size(th["main"])
         mx = rnd.randint(x0 + 2, max(x0 + 2, x0 + (x1 - x0) // 2 - mw // 2))
-        self.place("monitor", mx, self.desk, drop=drop)
-        kw, _ = self.size("keyboard")
-        rest = [k for k in ("lamp", "mug", "plant", "trophy", "glass", "keyboard") if rnd.random() < 0.75]
+        self.place(th["main"], mx, self.desk, drop=drop)
         x = mx + mw + 2
-        for kind in rest:
-            w, _ = self.size(kind)
+        for kind in [k for k in th["extras"] if rnd.random() < 0.75]:
+            w, _ = self.size("plate" if kind == "plates" else kind)
             if x + w <= x1 - 1:
-                self.place(kind, x, self.desk, drop=drop)
+                self.put(kind, x, self.desk, drop)
                 x += w + rnd.randint(1, 3)
         lx = mx - 2
-        for kind in ("mug", "bottle"):
+        for kind in th["left"]:
             w, _ = self.size(kind)
             if lx - w >= x0 + 1 and rnd.random() < 0.7:
                 lx -= w
                 self.place(kind, lx, self.desk, drop=drop)
                 lx -= 2
         fl = (0, self.W, self.floor)
-        pw, _ = self.size("printer")
-        self.place("printer", int(self.W * 0.355), fl, drop=drop)
-        vx = int(self.W * 0.355) + pw + 3
-        if vx + self.size("vase")[0] < x0:
-            self.place(rnd.choice(("vase", "plant")), vx, fl, drop=drop)
-        # the wall: a clock and a poster above the desk
-        cw, ch = self.size("clock")
-        c = self.place("clock", int(self.W * 0.42), (0, 0, int(H * 0.1) + ch))
-        p = self.place("poster", int(x0 + (x1 - x0) * 0.55), (0, 0, int(H * 0.12) + self.size("poster")[1]))
-        for t in (c, p):
-            t.on = "wall"
-            t.state = "rest"
-            t.gentle = False
-            if drop:
-                t.y = t.y - 0                              # wall things are hung, not dropped
+        x = int(self.W * 0.355)
+        for kind in th["ground"]:
+            kind = rnd.choice(kind.split("|"))
+            w, _ = self.size(kind)
+            if x + w < x0 - 1:
+                self.place(kind, x, fl, drop=drop)
+                x += w + rnd.randint(2, 4)
+        # the wall: two things hung up, one above the window, one above the table
+        a, b = th["wall_items"]
+        ha, hb = self.size(a)[1], self.size(b)[1]
+        wa = self.place(a, int(self.W * 0.42), (0, 0, int(H * 0.08) + ha))
+        wb = self.place(b, int(x0 + (x1 - x0) * 0.55), (0, 0, int(H * 0.1) + hb))
+        for t in (wa, wb):
+            t.on, t.state, t.gentle = "wall", "rest", False
         self.stocked = sum(t.price for t in self.things)
         self.deliver_at = None
+
+    def put(self, kind, x, surf, drop, room=None):
+        """One thing, or a stack of plates (each plate stands on the one below)."""
+        if kind != "plates":
+            return self.place(kind, x, surf, drop=drop)
+        rnd = self.rnd
+        c = rnd.choice(COLORS[:4])
+        below = None
+        fall = rnd.uniform(0.6, 1.0) if drop else False      # the whole stack drops together
+        n = rnd.randint(3, 6)
+        if room is not None:
+            n = max(1, min(n, room // max(1, self.size("plate")[1])))
+        for _ in range(n):
+            below = self.place("plate", x, surf, c, on=below, drop=fall)
+        return below
+
+    def fill(self, surf, pool, room, drop):
+        """Things side by side along a board, as many as fit."""
+        rnd = self.rnd
+        x = surf[0] + 2
+        tries = 0
+        while tries < 30:
+            kind = rnd.choice(pool)
+            w, h = self.size("plate" if kind == "plates" else kind)
+            if x + w > surf[1] - 1:
+                tries += 1
+                if tries > 6:
+                    break
+                continue
+            if h > room:
+                tries += 1
+                continue
+            self.put(kind, x, surf, drop, room)
+            x += w + rnd.randint(1, 3)
 
     def intact_value(self):
         return sum(t.price for t in self.things if t.state != "broken")
@@ -436,10 +570,12 @@ class Room:
         self.debris = {k: v for k, v in self.debris.items() if k[1] >= self.floor - 1}
         if len(self.debris) > self.W * 6:
             self.debris = {}
+        self.theme = (self.theme + 1) % len(THEMES)
+        self.layout()
         self.stock(drop=True)
         self.deliveries += 1
         self.sfx("delivery")
-        self.popup(self.W / 2, self.H * 0.2, "NEW DELIVERY", (255, 230, 140))
+        self.popup(self.W / 2, self.H * 0.2, "NEXT ROOM: %s" % self.th["name"].upper(), (255, 230, 140))
 
     # --- tools -----------------------------------------------------------------------------------
     def set_tool(self, i):
@@ -803,43 +939,121 @@ class Bot:
 def draw_room(cv, r):
     W, H = r.W, r.H
     px = cv.px
-    a, b = WALLPAPER
-    stripe = max(3, W // 24)
-    for y in range(r.floor):
-        k = y / max(1, r.floor)
-        row = [mix(a if (x // stripe) % 2 == 0 else b, (150, 140, 120), k * 0.35) for x in range(W)]
-        px[y] = row
-    for x in range(W):                                           # a window with blinds, left of the clock
-        pass
-    wx0, wx1, wy0, wy1 = int(W * 0.37), int(W * 0.5), int(H * 0.28), int(H * 0.56)
-    cv.rect(wx0 - 1, wy0 - 1, wx1 - wx0 + 2, wy1 - wy0 + 2, (236, 232, 222))
-    for y in range(wy0, wy1):
-        c = mix((150, 196, 236), (220, 236, 250), (y - wy0) / max(1, wy1 - wy0))
-        if (y - wy0) % 3 == 2:
-            c = (236, 232, 222)
-        cv.rect(wx0, y, wx1 - wx0, 1, c)
-    cv.rect(r.shelf_x[0] - 1, int(H * 0.1), 1, r.floor - int(H * 0.1), WOOD_D)
-    cv.rect(r.shelf_x[1], int(H * 0.1), 1, r.floor - int(H * 0.1), WOOD_D)
-    for y in range(r.floor - 1, r.floor + 1):
-        cv.rect(0, y, W, 1, (90, 70, 56))
-    for y in range(r.floor + 1, H):
-        k = (y - r.floor) / max(1, H - r.floor)
-        plank = max(4, W // 10)
-        off = ((y - r.floor) // 2) * plank // 3
+    th = r.th
+    a, b = th["paper"]
+    wood, wood_d = th["wood"]
+    fl = r.floor
+    wall = th["wall"]
+    if wall == "stripes":
+        stripe = max(3, W // 24)
+        for y in range(fl):
+            k = y / max(1, fl) * 0.35
+            px[y] = [mix(a if (x // stripe) % 2 == 0 else b, (150, 140, 120), k) for x in range(W)]
+    elif wall == "tiles":                                       # plain paint above, tiles below
+        tile = max(3, H // 14)
+        top = int(H * 0.4)
+        for y in range(fl):
+            if y < top:
+                px[y] = [mix(a, (200, 200, 190), y / max(1, top) * 0.3)] * W
+                continue
+            row = []
+            for x in range(W):
+                if (y - top) % tile == 0 or x % tile == 0:
+                    row.append(shade(b, 0.8))
+                else:
+                    row.append(b if ((x // tile) + (y - top) // tile) % 2 == 0 else mix(b, a, 0.35))
+            px[y] = row
+    elif wall == "damask":
+        cell = max(4, H // 10)
+        for y in range(fl):
+            row = []
+            for x in range(W):
+                dx, dy = abs(x % cell - cell / 2), abs(y % cell - cell / 2)
+                row.append(b if dx + dy < cell * 0.22 or (dx + dy) == int(cell * 0.45) else a)
+            px[y] = row
+    else:                                                       # panels: paper above, wood panelling below
+        top = int(H * 0.5)
+        pw = max(5, W // 12)
+        for y in range(fl):
+            if y < top:
+                px[y] = [a if (x // 2) % 6 else mix(a, b, 0.25) for x in range(W)]
+            else:
+                px[y] = [shade(b, 0.75) if x % pw in (0, 1) or y == top else
+                         shade(b, 1.0 - 0.15 * ((y - top) / max(1, fl - top))) for x in range(W)]
+    win = th["window"]
+    if win:
+        wx0, wx1, wy0, wy1 = int(W * 0.37), int(W * 0.5), int(H * 0.28), int(H * 0.56)
+        cv.rect(wx0 - 1, wy0 - 1, wx1 - wx0 + 2, wy1 - wy0 + 2, (236, 232, 222))
+        for y in range(wy0, wy1):
+            c = mix((150, 196, 236), (220, 236, 250), (y - wy0) / max(1, wy1 - wy0))
+            if win == "blinds" and (y - wy0) % 3 == 2:
+                c = (236, 232, 222)
+            cv.rect(wx0, y, wx1 - wx0, 1, c)
+        if win == "curtains":
+            cw = max(2, (wx1 - wx0) // 4)
+            curtain = (200, 70, 70) if th["name"] == "Kitchen" else (220, 190, 120)
+            for y in range(wy0 - 2, wy1 + 2):
+                for x in list(range(wx0 - 2, wx0 + cw)) + list(range(wx1 - cw, wx1 + 2)):
+                    cv.set(x, y, shade(curtain, 0.85 if x % 2 else 1.0))
+            cv.rect(wx0 - 3, wy0 - 3, wx1 - wx0 + 6, 1, (90, 70, 56))
+    cv.rect(r.shelf_x[0] - 1, int(H * 0.1), 1, fl - int(H * 0.1), wood_d)
+    cv.rect(r.shelf_x[1], int(H * 0.1), 1, fl - int(H * 0.1), wood_d)
+    cv.rect(0, fl - 1, W, 2, shade(wood_d, 0.8))
+    fa, fb = th["floor_c"]
+    style = th["floor"]
+    sq = max(3, (H - fl) // 3)
+    for y in range(fl + 1, H):
+        k = (y - fl) / max(1, H - fl)
         row = []
-        for x in range(W):
-            c = shade(FLOOR, 1.05 - 0.25 * k)
-            if (x + off) % plank == 0:
-                c = shade(c, 0.8)
-            row.append(c)
+        if style == "planks":
+            plank = max(4, W // 10)
+            off = ((y - fl) // 2) * plank // 3
+            for x in range(W):
+                c = shade(fa, 1.05 - 0.25 * k)
+                row.append(shade(c, 0.8) if (x + off) % plank == 0 else c)
+        elif style == "checker":
+            for x in range(W):
+                row.append(shade(fa if ((x // (sq * 2)) + (y - fl) // sq) % 2 == 0 else fb, 1.05 - 0.2 * k))
+        else:
+            for x in range(W):
+                c = fb if (y == fl + 2 or y == H - 2) and 2 < x < W - 3 else fa
+                row.append(shade(c, (1.0 if (x * 7 + y * 13) % 5 else 0.92) - 0.15 * k))
         px[y] = row
     for s in r.surfaces[:-1]:
-        cv.rect(s[0], s[2], s[1] - s[0], 1, WOOD)
-        cv.rect(s[0], s[2] + 1, s[1] - s[0], 1, WOOD_D)
+        cv.rect(s[0], s[2], s[1] - s[0], 1, wood)
+        cv.rect(s[0], s[2] + 1, s[1] - s[0], 1, wood_d)
+    if r.board:                                                 # the shop's display board on brackets
+        x0, x1, y = r.board
+        cv.rect(x0 + 1, y + 2, 1, 2, wood_d)
+        cv.rect(x1 - 2, y + 2, 1, 2, wood_d)
     x0, x1, dy = r.desk
-    cv.rect(x0 + 1, dy + 2, 2, r.floor - dy - 2, WOOD_D)
-    cv.rect(x1 - 3, dy + 2, 2, r.floor - dy - 2, WOOD_D)
-    cv.rect(x0 + (x1 - x0) // 2, dy + 2, (x1 - x0) // 2 - 3, max(2, (r.floor - dy) // 2), shade(WOOD, 0.85))
+    table = th["table"]
+    if table == "desk":
+        cv.rect(x0 + 1, dy + 2, 2, fl - dy - 2, wood_d)
+        cv.rect(x1 - 3, dy + 2, 2, fl - dy - 2, wood_d)
+        cv.rect(x0 + (x1 - x0) // 2, dy + 2, (x1 - x0) // 2 - 3, max(2, (fl - dy) // 2), shade(wood, 0.85))
+    elif table == "counter":
+        cv.rect(x0, dy, x1 - x0, 1, (200, 200, 204))
+        cv.rect(x0, dy + 1, x1 - x0, 1, (150, 150, 156))
+        cv.rect(x0 + 1, dy + 2, x1 - x0 - 2, fl - dy - 2, wood)
+        n = max(2, (x1 - x0) // 10)
+        dw = (x1 - x0 - 2) / n
+        for i in range(n):
+            cv.frame(int(x0 + 1 + i * dw) + 1, dy + 3, int(dw) - 1, fl - dy - 4, wood_d)
+            cv.set(int(x0 + 1 + (i + 0.5) * dw), dy + 5, (210, 210, 214))
+    elif table == "sideboard":
+        cv.rect(x0 + 1, dy + 2, x1 - x0 - 2, max(3, (fl - dy) * 2 // 3), wood)
+        for i in range(3):
+            xx = int(x0 + 2 + i * (x1 - x0 - 4) / 3)
+            cv.frame(xx, dy + 3, int((x1 - x0 - 4) / 3) - 1, max(2, (fl - dy) * 2 // 3 - 2), wood_d)
+        ly = dy + 2 + max(3, (fl - dy) * 2 // 3)
+        cv.rect(x0 + 2, ly, 1, fl - ly, wood_d)
+        cv.rect(x1 - 3, ly, 1, fl - ly, wood_d)
+    else:                                                       # display: a glass-fronted shop counter
+        cv.rect(x0 + 1, dy + 2, x1 - x0 - 2, fl - dy - 2, wood_d)
+        cv.rect(x0 + 3, dy + 3, x1 - x0 - 6, fl - dy - 6, (170, 200, 214))
+        for x in range(x0 + 4, x1 - 4, 5):
+            cv.set(x, dy + 4, (230, 244, 250))
 
 
 def draw_thing(cv, t, dx=0):
@@ -1000,7 +1214,7 @@ class TitleDemo:
         self.new()
 
     def new(self):
-        self.r = Room("Free Smash", seed=70 + self.k, demo=True)
+        self.r = Room("Free Smash", seed=70 + self.k, demo=True, theme=self.k)
         self.bot = Bot(random.Random(self.k), speed=0.8)
         self.k += 1
 
@@ -1013,14 +1227,15 @@ class TitleDemo:
         return render(self.r, cols, rows, hud=False)
 
 
-def render_menu(demo, cols, rows, sel, dt, help_=False, mode=0):
+def render_menu(demo, cols, rows, sel, dt, help_=False, mode=0, theme=0):
     cv = demo.scene(cols, rows, dt)
     rec = load_scores().get(GAME, {}).get("One Minute")
     best = None if rec is None else "best One Minute: %s €" % "{:,}".format(rec).replace(",", ".")
     items = ["%-11s %s" % m for m in MODES] + ["%-11s watch it play %s" % (AUTO_LABEL, MODES[mode][0])]
-    title_screen(cv, "BREAKROOM", "an office full of things that had it coming", items, sel, best,
-                 extra=["", "mouse: aim and click    keys: arrows + Space, 1 2 3"],
-                 keys="Up/Down choose   Enter start   M %s   ? help   Esc back" % SND.label().lower(),
+    title_screen(cv, "BREAKROOM", "rooms full of things that had it coming", items, sel, best,
+                 extra=["", "first room   < %s >   (every delivery: the next room)" % THEMES[theme]["name"],
+                        "mouse: aim and click    keys: arrows + Space, 1 2 3"],
+                 keys="Up/Down choose   Left/Right room   Enter start   M %s   ? help   Esc back" % SND.label().lower(),
                  help_lines=HELP, show_help=help_)
     return cv
 
@@ -1066,10 +1281,10 @@ def game_key(r, k):
         r.deliver()
 
 
-def run_auto(term, mode):
+def run_auto(term, mode, theme=0):
     auto = AutoMode()
     while True:
-        r = Room(MODES[mode][0])
+        r = Room(MODES[mode][0], theme=theme)
         bot = Bot()
         last = time.time()
         over_at = None
@@ -1112,9 +1327,9 @@ def run_auto(term, mode):
             time.sleep(max(0, 1 / 50 - (time.time() - now)))
 
 
-def play(term, mode):
+def play(term, mode, theme=0):
     while True:
-        r = Room(MODES[mode][0])
+        r = Room(MODES[mode][0], theme=theme)
         last = time.time()
         record = None
         again = False
@@ -1168,7 +1383,7 @@ def play(term, mode):
 def main():
     with MouseTerminal() as term:
         demo = TitleDemo()
-        sel, help_, mode = 0, False, 0
+        sel, help_, mode, theme = 0, False, 0, 0
         n = len(MODES) + 1
         last = time.time()
         while True:
@@ -1180,7 +1395,7 @@ def main():
                     return
                 last = time.time()
                 continue
-            term.write(render_menu(demo, cols, rows, sel, min(0.1, now - last), help_, mode).emit())
+            term.write(render_menu(demo, cols, rows, sel, min(0.1, now - last), help_, mode, theme).emit())
             last = now
             go = False
             term.take_mouse()
@@ -1198,6 +1413,11 @@ def main():
                 elif k in ("down", "s"):
                     sel = (sel + 1) % n
                     SND.play("menu")
+                elif k in ("left", "a", "right", "d"):
+                    theme = (theme + (1 if k in ("right", "d") else -1)) % len(THEMES)
+                    demo.r = Room("Free Smash", seed=demo.k, demo=True, theme=theme)
+                    demo.bot = Bot(random.Random(demo.k), speed=0.8)
+                    SND.play("menu")
                 elif k == "m":
                     if SND.toggle():
                         SND.play("sound_on")
@@ -1208,9 +1428,9 @@ def main():
                 mode = sel
             if go:
                 if sel == len(MODES):
-                    run_auto(term, mode)
+                    run_auto(term, mode, theme)
                 else:
-                    play(term, sel)
+                    play(term, sel, theme)
                 last = time.time()
 
 
@@ -1322,6 +1542,16 @@ def selftest():
         r.update(1 / 60)
     live = [t for t in r.things if t.state != "broken"]
     assert len(live) >= 15 and all(t.state == "rest" for t in live), [(t.kind, t.state) for t in live if t.state != "rest"]
+    # every room stocks its own things, draws, and a delivery moves on to the next room
+    for i, th in enumerate(THEMES):
+        r = Room("Free Smash", seed=10 + i, W=100, H=60, theme=i)
+        kinds = {t.kind for t in r.things}
+        assert th["main"] in kinds and len(r.things) >= 12, (th["name"], kinds)
+        for t in r.things:
+            assert t.y >= 0 and t.x >= 0 and t.x + t.w <= r.W, (th["name"], t.kind)
+        render(r, 100, 32).emit()
+        r.deliver()
+        assert r.theme == (i + 1) % len(THEMES)
     # One Minute: the clock ends it
     r = Room("One Minute", seed=2)
     r.left = 0.05
