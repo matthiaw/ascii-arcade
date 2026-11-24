@@ -811,7 +811,7 @@ class Game:
             elif k == "m":             # sound on / off (only here, so it never clashes with flying)
                 if SND.toggle():
                     SND.play("blip", 0.8)
-            elif k == "v":             # the view: pixels / ASCII / mono (only here: in flight V is the vehicle)
+            elif k == "v":             # the view: pixels / ASCII / mono
                 arcadekit.cycle_view()
             return
         if k == "?":
@@ -835,7 +835,10 @@ class Game:
             self.hover = min(V["hover"][1], self.hover + 2.5)
         elif k in ("f", "pgdn"):
             self.hover = max(V["hover"][0], self.hover - 2.5)
-        elif k == "v":
+        elif k == "v":                 # the view, as in every ASCII ARCADE game
+            arcadekit.cycle_view()
+            SND.play("tick")
+        elif k == "b":                 # the next vehicle
             self.vi = (self.vi + 1) % len(VEHICLES)
             V = self.veh
             self.throttle = min(self.throttle, V["vmax"])
@@ -1983,7 +1986,7 @@ HELP = [
     "Left/Right  A/D     steer",
     "Up/Down     W/S     throttle",
     "R / F               hover higher / lower",
-    "V                   next vehicle",
+    "B                   next vehicle",
     "L                   next world: meadows, ice, desert, planets",
     "N                   a new land of the same kind",
     "T                   time of day: day, sunset, night",
@@ -1993,8 +1996,9 @@ HELP = [
     "1-6  or  Tab        laser, twin, spread, plasma, rockets, bombs",
     "X                   weapons off / on",
     "H                   hide the status lines",
+    "V                   view: pixels / ASCII / mono",
     "",
-    "Esc / P             pause menu (Q there: quit, M: sound, V: view pixels / ASCII / mono)",
+    "Esc / P             pause menu (Q there: quit, M: sound)",
     "?                   show / hide this help",
     "",
     "Auto mode: the game plays itself (Space pause, +/- speed, Esc stop)",

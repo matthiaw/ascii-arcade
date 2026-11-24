@@ -53,7 +53,7 @@ Homebrew brings its own Python (3.14); the games need nothing else.
 | M | in the pause menu and in the launcher: sound on / off (remembered for every game) |
 | G | in the launcher: pixels fine / smart / solid (smart and solid avoid streaks in macOS Terminal) |
 | X / V | in the launcher: take the highlighted game off the list and the start screen / show all games (X there puts a hidden one back); remembered |
-| V | in a game and in its pause menu: the view - pixels, ASCII art or mono ASCII (see [Views](#views-pixels-ascii-art-or-mono)); remembered. HOVERDRIFT and FENMARK's window panes use V themselves, there it is in the pause menu; EMBERFALL keeps its own map views on v |
+| V | in a game and in its pause menu: the view - pixels, ASCII art or mono ASCII (see [Views](#views-pixels-ascii-art-or-mono)); remembered. FENMARK's window panes use V for the brush lock, there it is in the pause menu; EMBERFALL keeps its own map views on v |
 | A | in the launcher: the same view switch |
 | Q | in the pause menu: quit - on a title screen: quit (in DEPTHWELL Q also turns pieces) |
 | ? | help with all of the game's keys, also on the title screens |
@@ -109,10 +109,9 @@ three views; the choice is kept for every game in `~/.ascii_arcade_settings.json
 
 Text (scores, menus, messages) stays readable in both: it keeps its colours in the ascii view and becomes light
 on dark (highlighted lines reversed) in mono. A bigger window gives finer ASCII art, just as it gives finer pixels,
-and the views also show on the launcher's start screen and in auto mode (V there too). HOVERDRIFT uses V for the
-next vehicle and FENMARK's window panes for the brush lock, so there you switch the view in the pause menu (Esc);
-HOVERDRIFT also takes V on its title screen. EMBERFALL keeps its own map views on v (narrow, square and pixel
-tiles) and is not affected. In the launcher press **A**; also `arcade --view pixels|ascii|mono`, or
+and the views also show on the launcher's start screen and in auto mode (V there too). FENMARK's window panes use
+V for the brush lock, so there you switch the view in the pause menu (Esc); in HOVERDRIFT the next vehicle moved
+from V to B. EMBERFALL keeps its own map views on v (narrow, square and pixel tiles) and is not affected. In the launcher press **A**; also `arcade --view pixels|ascii|mono`, or
 `ARCADE_VIEW=ascii arcade` for a single run. The pixel style (G) only matters in the pixels view.
 
 ## Sound

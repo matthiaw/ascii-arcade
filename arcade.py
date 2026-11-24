@@ -186,7 +186,7 @@ HELP = [
     "Esc / P              pause / game menu (Q there: quit,",
     "                     M there: sound on / off, V: view)",
     "V                    view: pixels / ASCII art / mono ASCII",
-    "                     (HOVERDRIFT, FENMARK panes: in the pause menu)",
+    "                     (FENMARK's window panes: in the pause menu)",
     "?                    help with all of the game's keys",
     "Enter / Space        confirm",
     "Arrows / WASD        move, choose",
