@@ -53,6 +53,115 @@ def solid_cell(t, b):
         return t if lt > lb else b
     return ((t[0] + b[0]) >> 1, (t[1] + b[1]) >> 1, (t[2] + b[2]) >> 1)
 
+
+# =============================================================================================
+# Views: "pixels" (half-block pixels, the default), "ascii" (every pixel pair becomes a coloured ASCII
+# character on black) or "mono" (the same in one colour: plain ASCII art). V in a game or in its pause menu
+# switches; the choice is kept in ~/.ascii_arcade_settings.json. ARCADE_VIEW=... overrides it for one run.
+# =============================================================================================
+VIEWS = ("pixels", "ascii", "mono")
+VIEW_NAMES = {"pixels": "pixels", "ascii": "ASCII", "mono": "mono"}
+SETTINGS_PATH = os.path.expanduser("~/.ascii_arcade_settings.json")
+
+
+def _view_mode():
+    env = os.environ.get("ARCADE_VIEW", "").strip().lower()
+    if env in VIEWS:
+        return env
+    try:
+        with open(SETTINGS_PATH) as f:
+            mode = json.load(f).get("view")
+        return mode if mode in VIEWS else "pixels"
+    except (OSError, ValueError, AttributeError):
+        return "pixels"
+
+
+VIEW_MODE = _view_mode()
+
+
+def set_view(mode):
+    """Switch the view now and remember it for every game."""
+    global VIEW_MODE
+    if mode not in VIEWS:
+        return VIEW_MODE
+    VIEW_MODE = mode
+    os.environ.pop("ARCADE_VIEW", None)
+    try:
+        try:
+            with open(SETTINGS_PATH) as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                data = {}
+        except (OSError, ValueError):
+            data = {}
+        data["view"] = mode
+        tmp = SETTINGS_PATH + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(data, f, indent=1)
+        os.replace(tmp, SETTINGS_PATH)
+    except OSError:
+        pass
+    return mode
+
+
+def cycle_view():
+    """The next view (V): pixels -> ascii -> mono -> pixels. Returns its name."""
+    return set_view(VIEWS[(VIEWS.index(VIEW_MODE) + 1) % len(VIEWS)])
+
+
+def view_label():
+    return "View: %s" % VIEW_NAMES[VIEW_MODE]
+
+
+ASCII_RAMP = " .:-=+*#%@"       # darkest to brightest: the classic ramp
+ASCII_TOP = "'\"^"              # a cell whose upper pixel is the bright one: dim, mid, bright
+ASCII_BOTTOM = ".,m"            # a cell whose lower pixel is the bright one
+MONO_FG, VIEW_BG = (205, 205, 205), (0, 0, 0)
+_ASCII = {}
+
+
+def _lum(c):
+    return (c[0] * 3 + c[1] * 6 + c[2]) // 10
+
+
+def ascii_cell(t, b):
+    """The ASCII views: the character and colour for a cell whose pixels are t (top) and b (bottom).
+    Brightness picks a character from the ramp (gamma-lifted, so night scenes keep their texture); where
+    one pixel is clearly brighter than the other, a top- or bottom-heavy character keeps the edge. The
+    colour is the brighter pixel's, lifted a little, since a character covers less of the cell than a block."""
+    r = _ASCII.get((t, b))
+    if r is not None:
+        return r
+    if len(_ASCII) > 80000:
+        _ASCII.clear()
+    if not isinstance(t, tuple):      # palette indices: no brightness to read
+        r = ("#", t)
+    else:
+        vt, vb = (_lum(t) / 255.0) ** 0.75, (_lum(b) / 255.0) ** 0.75
+        d = vt - vb
+        if abs(d) > 0.25 and max(vt, vb) > 0.2:
+            hi = max(vt, vb)
+            ramp = ASCII_TOP if d > 0 else ASCII_BOTTOM
+            ch = ramp[0 if hi < 0.45 else 1 if hi < 0.72 else 2]
+            col = t if d > 0 else b
+        else:
+            v = (vt + vb) / 2
+            ch = ASCII_RAMP[min(len(ASCII_RAMP) - 1, int(v * len(ASCII_RAMP)))]
+            col = mix(t, b, 0.5)
+        lum = _lum(col)
+        k = max(1.25, 72.0 / lum) if lum else 1.0
+        r = (ch, (min(255, int(col[0] * k)), min(255, int(col[1] * k)), min(255, int(col[2] * k))))
+    _ASCII[(t, b)] = r
+    return r
+
+
+def mono_text(fg, bg):
+    """Text colours in the mono view: one colour, light on dark, reversed for highlighted text."""
+    if bg is not None and _lum(bg) > _lum(fg):
+        return VIEW_BG, MONO_FG
+    return MONO_FG, VIEW_BG
+
+
 SCORES_PATH = os.path.expanduser("~/.ascii_arcade_scores.json")
 
 
@@ -498,6 +607,8 @@ class Canvas:
             fgs, bgs = (lambda c: "\x1b[38;2;%d;%d;%dm" % c), (lambda c: "\x1b[48;2;%d;%d;%dm" % c)
         else:
             fgs, bgs = (lambda c: "\x1b[38;5;%dm" % x256(c)), (lambda c: "\x1b[48;5;%dm" % x256(c))
+        if VIEW_MODE != "pixels":
+            return self.emit_ascii(fgs, bgs, VIEW_MODE == "mono")
         out = ["\x1b[?2026h\x1b[H"]
         px, text = self.px, self.text
         for j in range(self.rows):
@@ -536,6 +647,41 @@ class Canvas:
                     line.append(bgs(b))
                     lb = b
                 line.append("▀")
+            out.append("".join(line))
+            out.append("\x1b[0m" + ("\r\n" if j < self.rows - 1 else ""))
+        out.append("\x1b[?2026l")
+        return "".join(out)
+
+    def emit_ascii(self, fgs, bgs, mono):
+        """The frame in the ascii or mono view: every pixel pair becomes one character on black (see ascii_cell);
+        text keeps its colours in the ascii view and becomes light on dark (or reversed) in mono."""
+        out = ["\x1b[?2026h\x1b[H"]
+        px, text = self.px, self.text
+        black = VIEW_BG
+        for j in range(self.rows):
+            top, bot = px[2 * j], px[2 * j + 1]
+            lt = lb = None
+            line = []
+            for i in range(self.cols):
+                tx = text.get((i, j))
+                if tx:
+                    ch, f, bg = tx
+                    if mono:
+                        f, bg = mono_text(f, bg)
+                    elif bg is None:
+                        bg = black
+                else:
+                    ch, f = ascii_cell(top[i], bot[i])
+                    if mono:
+                        f = MONO_FG
+                    bg = black
+                if bg != lb:
+                    line.append(bgs(bg))
+                    lb = bg
+                if ch != " " and f != lt:
+                    line.append(fgs(f))
+                    lt = f
+                line.append(ch)
             out.append("".join(line))
             out.append("\x1b[0m" + ("\r\n" if j < self.rows - 1 else ""))
         out.append("\x1b[?2026l")
@@ -628,12 +774,14 @@ def submit(game, mode, value, lower_is_better=False):
 # The keys every game shares: Esc / P pause menu, Q quits from it, ? help, Enter / Space confirm
 # =============================================================================================
 PAUSE_LINES = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "M                 sound on / off",
-               "Q                 quit to the menu"]
+               "V                 view: pixels / ASCII / mono", "Q                 quit to the menu"]
 
 
-def shared_key(k, paused, pause_keys=("esc", "p", "q")):
+def shared_key(k, paused, pause_keys=("esc", "p", "q"), view_key=True):
     """What a key means for the shared in-game controls: 'pause', 'resume', 'quit', 'help',
-    'sound' (M in the pause menu: sound on / off), 'eaten' (swallowed while paused) or None (the game's own key)."""
+    'sound' (M in the pause menu: sound on / off), 'view' (V: the next view, pixels / ASCII / mono, already
+    switched), 'eaten' (swallowed while paused) or None (the game's own key). view_key=False leaves V to the
+    game while it plays; the pause menu still switches the view."""
     if paused:
         if k in ("esc", "p", "enter", " "):
             return "resume"
@@ -643,11 +791,17 @@ def shared_key(k, paused, pause_keys=("esc", "p", "q")):
             return "help"
         if k == "m":
             return "sound"
+        if k == "v":
+            cycle_view()
+            return "view"
         return "eaten"
     if k in pause_keys:
         return "pause"
     if k == "?":
         return "help"
+    if k == "v" and view_key:
+        cycle_view()
+        return "view"
     return None
 
 
@@ -703,7 +857,8 @@ def scale_art(grid, ow, oh):
 AUTO_LABEL = "Auto mode"          # the title-menu entry, the same wording in every game
 AUTO_BG = (236, 180, 70)
 AUTO_HELP = ["AUTO MODE - the game plays itself", "", "Space            pause / continue", "+ / -            faster / slower",
-             "M                sound on / off", "Esc / Q          stop (back to the title)", "?                this help"]
+             "M                sound on / off", "V                view: pixels / ASCII / mono",
+             "Esc / Q          stop (back to the title)", "?                this help"]
 
 
 class AutoMode:
@@ -711,7 +866,7 @@ class AutoMode:
 
         auto = AutoMode()
         for k in term.keys():
-            a = auto.key(k)        # 'stop', 'sound', 'help', True (used) or None (not an auto-mode key)
+            a = auto.key(k)        # 'stop', 'sound', 'help', True (used: speed, pause, V view) or None
         sim_dt = auto.scale(dt)    # 0 while paused, dt * speed otherwise (step the game with it)
         auto.banner(cv)            # the amber AUTO bar (default: on the last row)
     """
@@ -743,6 +898,9 @@ class AutoMode:
             return True
         if k == "m":
             return "sound"
+        if k == "v":
+            cycle_view()
+            return True
         if k == "?":
             self.help = True
             return "help"

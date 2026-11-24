@@ -2318,9 +2318,11 @@ HELP = [
     "",
     "Esc / P                  pause menu (Q there: quit)",
     "M  (in the pause menu)   sound on / off",
+    "V                        view: pixels / ASCII / mono",
     "?                        this help",
 ]
 PAUSE = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "M                 sound on / off",
+         "V                 view: pixels / ASCII / mono",
          "Q                 quit to the menu"]
 
 

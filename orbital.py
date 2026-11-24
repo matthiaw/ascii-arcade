@@ -1525,12 +1525,13 @@ HELP = [
     "Reach the gold dock ring (pass numbered beacons first).",
     "1 launch = 3 stars, 2-4 launches = 2 stars, more = 1 star.",
     "",
-    "Esc / P             pause menu (Q there: quit, M: sound on / off)",
+    "Esc / P             pause menu (Q there: quit, M: sound on / off, V: view)",
     "?                   this help",
     "",
     "Auto mode: the game plays itself (Space pause, +/- speed, Esc stop).",
 ]
 PAUSE = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "M                 sound on / off",
+         "V                 view: pixels / ASCII / mono",
          "Q                 quit to the menu"]
 
 

@@ -53,6 +53,8 @@ Homebrew brings its own Python (3.14); the games need nothing else.
 | M | in the pause menu and in the launcher: sound on / off (remembered for every game) |
 | G | in the launcher: pixels fine / smart / solid (smart and solid avoid streaks in macOS Terminal) |
 | X / V | in the launcher: take the highlighted game off the list and the start screen / show all games (X there puts a hidden one back); remembered |
+| V | in a game and in its pause menu: the view - pixels, ASCII art or mono ASCII (see [Views](#views-pixels-ascii-art-or-mono)); remembered. HOVERDRIFT and FENMARK's window panes use V themselves, there it is in the pause menu; EMBERFALL keeps its own map views on v |
+| A | in the launcher: the same view switch |
 | Q | in the pause menu: quit - on a title screen: quit (in DEPTHWELL Q also turns pieces) |
 | ? | help with all of the game's keys, also on the title screens |
 | Enter / Space | confirm |
@@ -62,7 +64,7 @@ Every game has an **Auto mode** entry on its title screen: the real game plays i
 or `A` in a run; SKYSHOT: CPU against CPU). Space pauses, `+` / `-` change the speed (x0.25 to x8), Esc stops.
 Auto runs never enter the high-score list.
 
-The pause menu always reads: Esc / P / Enter continue, ? help, M sound on / off, Q quit. No game ends on a single stray key.
+The pause menu always reads: Esc / P / Enter continue, ? help, M sound on / off, V view, Q quit. No game ends on a single stray key.
 
 ## Pixels: fine, smart or solid
 
@@ -88,6 +90,30 @@ Press **G** in the launcher to cycle through three pixel styles; the choice is k
 
 Also `arcade --pixels fine|smart|solid`, or `ARCADE_PIXELS=smart arcade` for a single run. In Terminal.app the
 launcher suggests it until you have chosen once.
+
+## Views: pixels, ASCII art or mono
+
+Every game can also be drawn as real ASCII art. Press **V** in a game (or in its pause menu) to cycle through
+three views; the choice is kept for every game in `~/.ascii_arcade_settings.json`:
+
+| View | |
+|---|---|
+| **pixels** | the half-block pictures described above (the default) |
+| **ascii** | every pixel pair becomes one character on black: its brightness picks it from ` .:-=+*#%@`, and where the upper or the lower pixel is clearly the brighter one an edge character keeps the shape (`'` `"` `^` above, `.` `,` `m` below); the character takes the colour of what it shows |
+| **mono** | the same characters in one light grey on black: plain ASCII art, as it would look pasted into a text file |
+
+| | |
+|:-:|:-:|
+| <img src="docs/screenshots/ascii-view.png" alt="DEEPCALL in the ASCII view" width="400"> | <img src="docs/screenshots/mono-view.png" alt="VOIDLANCE in the mono view" width="400"> |
+| **DEEPCALL, ascii** | **VOIDLANCE, mono** |
+
+Text (scores, menus, messages) stays readable in both: it keeps its colours in the ascii view and becomes light
+on dark (highlighted lines reversed) in mono. A bigger window gives finer ASCII art, just as it gives finer pixels,
+and the views also show on the launcher's start screen and in auto mode (V there too). HOVERDRIFT uses V for the
+next vehicle and FENMARK's window panes for the brush lock, so there you switch the view in the pause menu (Esc);
+HOVERDRIFT also takes V on its title screen. EMBERFALL keeps its own map views on v (narrow, square and pixel
+tiles) and is not affected. In the launcher press **A**; also `arcade --view pixels|ascii|mono`, or
+`ARCADE_VIEW=ascii arcade` for a single run. The pixel style (G) only matters in the pixels view.
 
 ## Sound
 
@@ -575,7 +601,7 @@ economy.
 | `C` | check flags / cells for errors (+20 s) |
 | `N` / `R` | new fen or random pane / clear the pane |
 | `[` / `]` | previous / next pane |
-| Esc / `P` | pause (`Q` there: back), `?` help |
+| Esc / `P` | pause (`Q` there: back; `V` there: the view, since V is the brush lock in the panes), `?` help |
 
 Odile Sedge is warden of the Fenmark, a lantern-lit peat marsh. By day she sounds the fen with her ash pole: every
 probed tussock tells how many hidden bog-eyes touch it, and reed flags mark the ones that must be there. The first
@@ -747,7 +773,7 @@ change and share the games freely, as long as the copyright notice stays in.
 | File | |
 |---|---|
 | `arcade.py` | the launcher |
-| `arcadekit.py` | shared toolkit: raw terminal input (with held keys via the kitty keyboard protocol, and the mouse), half-block pixel canvas, block font, high scores |
+| `arcadekit.py` | shared toolkit: raw terminal input (with held keys via the kitty keyboard protocol, and the mouse), half-block pixel canvas with the ASCII views, block font, high scores |
 | `arcadesound.py` | the sound engine: synthesized effects, played without waiting |
 | `stackfall.py`, `depthwell.py`, `deepcall.py`, `lightkeeper.py`, `skyshot.py`, `nightdrive.py`, `orbital.py`, `leafling.py`, `glimmer.py`, `sporefield.py`, `scaffold.py`, `voidlance.py`, `heathshot.py`, `breakroom.py`, `spanwork.py`, `solace.py`, `underhold.py`, `puckslide.py` | the games written for the arcade (use `arcadekit.py`) |
 | `hoverdrift.py`, `emberfall.py`, `blockfire.py` | HOVERDRIFT, EMBERFALL and BLOCKFIRE (they run on their own and do not need `arcadekit.py`) |

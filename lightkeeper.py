@@ -1434,7 +1434,7 @@ HELP_SOLO = [
     "Wrecks fire red flares - rescue the crew before time runs out.",
     "The rescue boat is slow in the dark: keep it in the light.",
     "",
-    "Esc / P                  pause menu (Q there: quit, M: sound on / off)",
+    "Esc / P                  pause menu (Q there: quit, M: sound on / off, V: view)",
     "?                        this help",
     "",
     "Auto mode: the game plays itself (Space pause, +/- speed, Esc stop)",
@@ -1449,12 +1449,13 @@ HELP_COOP = [
     "",
     "The boat is slower in the dark - the keeper should light its way.",
     "",
-    "Esc / P            pause menu (Q there: quit, M: sound on / off)",
+    "Esc / P            pause menu (Q there: quit, M: sound on / off, V: view)",
     "?                  this help",
     "",
     "Auto mode: the game plays itself (Space pause, +/- speed, Esc stop)",
 ]
 PAUSE = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "M                 sound on / off",
+         "V                 view: pixels / ASCII / mono",
          "Q                 quit to the menu"]
 
 

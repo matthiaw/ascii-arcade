@@ -18,6 +18,7 @@ os.environ.setdefault("COLORTERM", "truecolor")
 import arcadekit  # noqa: E402
 
 arcadekit.SOLID_PIXELS = False
+arcadekit.VIEW_MODE = "pixels"
 OUT = os.path.join(HERE, "docs", "screenshots")
 CW, CH = 10, 20
 FONTS = ["/System/Library/Fonts/Menlo.ttc", "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"]
@@ -55,6 +56,27 @@ def to_image(cv, CW=CW, CH=CH):
         elif ch != " ":
             d.text((x * CW + CW // 2, j * CH + CH // 2), ch, fill=tuple(fg), font=FONT, anchor="mm")
     return img
+
+
+def view_canvas(cv, mono=False):
+    """The canvas as the ascii or mono view shows it: a canvas of text cells on black (see arcadekit.ascii_cell)."""
+    out = arcadekit.Canvas(cv.cols, cv.rows, arcadekit.VIEW_BG)
+    for j in range(cv.rows):
+        for i in range(cv.cols):
+            tx = cv.text.get((i, j))
+            if tx:
+                ch, fg, bg = tx
+                if mono:
+                    fg, bg = arcadekit.mono_text(fg, bg)
+                elif bg is None:
+                    bg = arcadekit.VIEW_BG
+            else:
+                ch, fg = arcadekit.ascii_cell(cv.px[2 * j][i], cv.px[2 * j + 1][i])
+                if mono:
+                    fg = arcadekit.MONO_FG
+                bg = arcadekit.VIEW_BG
+            out.text[(i, j)] = (ch, fg, bg)
+    return out
 
 
 def save(cv, name):
@@ -97,6 +119,11 @@ if __name__ == "__main__":
         start_gif(arcade)
     if not which or "menu" in which:
         save(arcade.render(120, 40, 0, 4.0, ""), "menu")
+    if not which or "views" in which:             # the ASCII views (V in any game)
+        import deepcall
+        import voidlance
+        save(view_canvas(deepcall.screenshot(100, 32)), "ascii-view")
+        save(view_canvas(voidlance.screenshot(100, 32), mono=True), "mono-view")
     for g in arcade.GAMES:
         mod = g["file"][:-3]
         if which and mod not in which:

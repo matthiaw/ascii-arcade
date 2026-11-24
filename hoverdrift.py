@@ -710,6 +710,9 @@ class Game:
                 self.tworld = (self.tworld + d) % (len(THEME_ORDER) + 1)
                 if self.tworld:
                     self.loading = (random.randrange(1 << 30), THEME_ORDER[self.tworld - 1])
+        elif k == "v":
+            arcadekit.cycle_view()
+            SND.play("tick")
         elif k in ("enter", " "):
             SND.play("start", 0.8)
             if self.tsel == 3:
@@ -808,6 +811,8 @@ class Game:
             elif k == "m":             # sound on / off (only here, so it never clashes with flying)
                 if SND.toggle():
                     SND.play("blip", 0.8)
+            elif k == "v":             # the view: pixels / ASCII / mono (only here: in flight V is the vehicle)
+                arcadekit.cycle_view()
             return
         if k == "?":
             self.help = not self.help
@@ -1816,6 +1821,8 @@ def render(g, scr, cols, rows):
         box_cells(cells, HELP, cols, prow)
     elif g.paused:
         box_cells(cells, PAUSE + ["", SND.label()], cols, prow)
+    view = arcadekit.VIEW_MODE                     # pixels, or the ASCII views (V in the pause menu)
+    asc, mono, black = view != "pixels", view == "mono", arcadekit.VIEW_BG
     for j in range(prow):
         y0, y1 = 2 * j, 2 * j + 1
         lt = lb = None
@@ -1824,8 +1831,10 @@ def render(g, scr, cols, rows):
         for i in range(PW):
             if rc and i in rc:
                 ch, f, bg = rc[i]
-                if bg is None:
-                    bg = mix(colsbuf[i][y0], colsbuf[i][y1], 0.5)
+                if mono:
+                    f, bg = arcadekit.mono_text(f, bg)
+                elif bg is None:
+                    bg = black if asc else mix(colsbuf[i][y0], colsbuf[i][y1], 0.5)
                 line.append(sfg(f) + sbg(bg) + ch)
                 lt = lb = None
                 continue
@@ -1833,6 +1842,18 @@ def render(g, scr, cols, rows):
             t, b = col[y0], col[y1]
             t = (t[0] & 0xF8, t[1] & 0xF8, t[2] & 0xF8)
             b = (b[0] & 0xF8, b[1] & 0xF8, b[2] & 0xF8)
+            if asc:
+                ch, f = arcadekit.ascii_cell(t, b)
+                if mono:
+                    f = arcadekit.MONO_FG
+                if lb != black:
+                    line.append(sbg(black))
+                    lb = black
+                if ch != " " and f != lt:
+                    line.append(sfg(f))
+                    lt = f
+                line.append(ch)
+                continue
             if SOLID_PIXELS and t != b:
                 c = solid_cell(t, b)
                 if c is not None:
@@ -1973,7 +1994,7 @@ HELP = [
     "X                   weapons off / on",
     "H                   hide the status lines",
     "",
-    "Esc / P             pause menu (Q there: quit, M: sound)",
+    "Esc / P             pause menu (Q there: quit, M: sound, V: view pixels / ASCII / mono)",
     "?                   show / hide this help",
     "",
     "Auto mode: the game plays itself (Space pause, +/- speed, Esc stop)",
@@ -1984,6 +2005,7 @@ PAUSE = [
     "Esc / P / Enter   continue",
     "?                 help",
     "M                 sound on / off",
+    "V                 view: pixels / ASCII / mono",
     "Q                 quit",
 ]
 
@@ -2163,10 +2185,10 @@ def ansi_canvas(s, cols, rows):
 def screenshot(cols=100, rows=32, seed=SHOT_SEED, theme=SHOT_THEME, vehicle=SHOT_VEH, weapon=SHOT_WEAPON, at=SHOT_T):
     """README picture: the AutoPilot flies a sortie with a fixed seed; the frame at `at` seconds, HUD and all."""
     global TRUECOLOR, SOLID_PIXELS
-    saved = (random.getstate(), SND.enabled, TRUECOLOR, SOLID_PIXELS, arcadekit.submit)
+    saved = (random.getstate(), SND.enabled, TRUECOLOR, SOLID_PIXELS, arcadekit.submit, arcadekit.VIEW_MODE)
     random.seed(seed)
     SND.enabled, TRUECOLOR, SOLID_PIXELS = False, True, False
-    arcadekit.submit = lambda *a, **k: None
+    arcadekit.submit, arcadekit.VIEW_MODE = (lambda *a, **k: None), "pixels"
     try:
         g = Game(seed, theme, vehicle)
         g.start_auto()
@@ -2182,7 +2204,7 @@ def screenshot(cols=100, rows=32, seed=SHOT_SEED, theme=SHOT_THEME, vehicle=SHOT
         return ansi_canvas(render(g, scr, cols, rows), cols, rows)
     finally:
         random.setstate(saved[0])
-        SND.enabled, TRUECOLOR, SOLID_PIXELS, arcadekit.submit = saved[1:]
+        SND.enabled, TRUECOLOR, SOLID_PIXELS, arcadekit.submit, arcadekit.VIEW_MODE = saved[1:]
 
 
 def arg(name):

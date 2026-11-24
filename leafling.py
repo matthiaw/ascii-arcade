@@ -9,7 +9,7 @@ mossy walls and jump off them, collect light motes and find the three hidden see
 
 Keys:  Left / Right (A / D) run    Space / Up / W / Z jump    jump again in the air: glide
        Down (S) drop through thin platforms / stop    R back to the last lantern
-       Esc / P pause menu (Q there: quit, M there: sound on / off)    ? help
+       Esc / P pause menu (Q there: quit, M there: sound on / off, V: view)    ? help
 
 In terminals with the kitty keyboard protocol (kitty, WezTerm, Ghostty, recent iTerm2) keys are read with their
 releases: hold jump longer to jump higher, hold it in the air to glide. Elsewhere (macOS Terminal) a direction
@@ -4766,6 +4766,7 @@ def help_lines(kitty):
             "R                         back to the last lantern",
             "Esc / P                   pause menu (Q there: quit)",
             "M  (in the pause menu)    sound on / off",
+            "V                         view: pixels / ASCII / mono",
             "?                         this help", ""] + mode + [
             "",
             "Slide down mossy walls and jump off them to climb.",
@@ -4777,6 +4778,7 @@ def help_lines(kitty):
 
 
 PAUSE = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "M                 sound on / off",
+         "V                 view: pixels / ASCII / mono",
          "Q                 quit to the world map"]
 
 

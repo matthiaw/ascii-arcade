@@ -45,6 +45,105 @@ def _pixel_mode():
 PIXEL_MODE = _pixel_mode()
 SOLID_PIXELS = PIXEL_MODE != "fine"   # some cells are filled with one colour instead of a half-block
 
+try:   # the view (pixels / ASCII / mono, switched with V) is shared with the collection
+    import arcadekit as _KIT
+except ImportError:   # BLOCKFIRE on its own: a small copy of arcadekit's view handling
+    _KIT = None
+VIEWS = ("pixels", "ascii", "mono")
+VIEW_NAMES = {"pixels": "pixels", "ascii": "ASCII", "mono": "mono"}
+MONO_FG, VIEW_BG = (205, 205, 205), (0, 0, 0)
+_SETTINGS = os.path.expanduser("~/.ascii_arcade_settings.json")
+
+
+def _view_mode():
+    env = os.environ.get("ARCADE_VIEW", "").strip().lower()
+    if env in VIEWS:
+        return env
+    try:
+        with open(_SETTINGS) as f:
+            mode = json.load(f).get("view")
+        return mode if mode in VIEWS else "pixels"
+    except (OSError, ValueError, AttributeError):
+        return "pixels"
+
+
+_VIEW = [_view_mode()]
+
+
+def view_mode():
+    return _KIT.VIEW_MODE if _KIT else _VIEW[0]
+
+
+def _set_view(mode):
+    """The view for this process only (the README screenshot); nothing is remembered."""
+    if _KIT:
+        _KIT.VIEW_MODE = mode
+    else:
+        _VIEW[0] = mode
+
+
+def cycle_view():
+    """V: the next view, pixels -> ascii -> mono, remembered for every game."""
+    if _KIT:
+        return _KIT.cycle_view()
+    _VIEW[0] = mode = VIEWS[(VIEWS.index(_VIEW[0]) + 1) % len(VIEWS)]
+    os.environ.pop("ARCADE_VIEW", None)
+    try:
+        try:
+            with open(_SETTINGS) as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                data = {}
+        except (OSError, ValueError):
+            data = {}
+        data["view"] = mode
+        with open(_SETTINGS + ".tmp", "w") as f:
+            json.dump(data, f, indent=1)
+        os.replace(_SETTINGS + ".tmp", _SETTINGS)
+    except OSError:
+        pass
+    return mode
+
+
+_ASCII = {}
+
+
+def _lum(c):
+    return (c[0] * 3 + c[1] * 6 + c[2]) // 10
+
+
+def ascii_cell(t, b):
+    """The ASCII views: character and colour for a cell whose pixels are t (top) and b (bottom); the same
+    rules as arcadekit.ascii_cell (brightness ramp, edge characters, the brighter pixel's colour lifted)."""
+    if _KIT:
+        return _KIT.ascii_cell(t, b)
+    r = _ASCII.get((t, b))
+    if r is not None:
+        return r
+    if len(_ASCII) > 80000:
+        _ASCII.clear()
+    vt, vb = (_lum(t) / 255.0) ** 0.75, (_lum(b) / 255.0) ** 0.75
+    d = vt - vb
+    if abs(d) > 0.25 and max(vt, vb) > 0.2:
+        hi = max(vt, vb)
+        ch = ("'\"^" if d > 0 else ".,m")[0 if hi < 0.45 else 1 if hi < 0.72 else 2]
+        col = t if d > 0 else b
+    else:
+        v = (vt + vb) / 2
+        ch = " .:-=+*#%@"[min(9, int(v * 10))]
+        col = mix(t, b, 0.5)
+    lum = _lum(col)
+    k = max(1.25, 72.0 / lum) if lum else 1.0
+    r = _ASCII[(t, b)] = (ch, (min(255, int(col[0] * k)), min(255, int(col[1] * k)), min(255, int(col[2] * k))))
+    return r
+
+
+def mono_text(fg, bg):
+    """Text colours in the mono view: one colour, light on dark, reversed for highlighted text."""
+    if bg is not None and _lum(bg) > _lum(fg):
+        return VIEW_BG, MONO_FG
+    return MONO_FG, VIEW_BG
+
 
 def solid_cell(t, b):
     """One colour for a cell whose two pixels are t (top) and b (bottom), or None to keep the half-block.
@@ -1618,7 +1717,8 @@ except ImportError:   # BLOCKFIRE on its own: a small copy of arcadekit.AutoMode
     AUTO_LABEL, AUTO_BG = "Auto mode", (236, 180, 70)
     AUTO_HELP = ["AUTO MODE - the game plays itself", "", "Space            pause / continue",
                  "+ / -            faster / slower", "M                sound on / off",
-                 "Esc / Q          stop (back to the title)", "?                this help"]
+                 "V                view: pixels / ASCII / mono", "Esc / Q          stop (back to the title)",
+                 "?                this help"]
 
     class AutoMode:
         SPEEDS = (0.25, 0.5, 1.0, 2.0, 4.0, 8.0)
@@ -1644,6 +1744,8 @@ except ImportError:   # BLOCKFIRE on its own: a small copy of arcadekit.AutoMode
                 self.i = max(0, self.i - 1)
             elif k == "m":
                 return "sound"
+            elif k == "v":
+                cycle_view()
             elif k == "?":
                 self.help = True
                 return "help"
@@ -2460,6 +2562,8 @@ class Renderer:
         sfg, sbg = self.fg, self.bg
         out = ["\x1b[?2026h\x1b[H"]
         q = None if self.true else self.pal256
+        view = view_mode()                     # pixels, or the ASCII views (V)
+        asc, mono, black = view != "pixels", view == "mono", VIEW_BG
         for j in range(prow):
             top, bot = buf[2 * j], buf[2 * j + 1]
             if q is not None:  # snap to the palette first, so equal-looking neighbours share one code
@@ -2472,14 +2576,28 @@ class Renderer:
                 tx = text.get((i, j)) if text else None
                 if tx:
                     ch, f, bg = tx
-                    if bg is None:
-                        bg = mix(t, b, 0.5)
+                    if mono:
+                        f, bg = mono_text(f, bg)
+                    elif bg is None:
+                        bg = black if asc else mix(t, b, 0.5)
                     if f != lt:
                         line.append(sfg(f))
                         lt = f
                     if bg != lb:
                         line.append(sbg(bg))
                         lb = bg
+                    line.append(ch)
+                    continue
+                if asc:
+                    ch, f = ascii_cell(t, b)
+                    if mono:
+                        f = MONO_FG
+                    if lb != black:
+                        line.append(sbg(black))
+                        lb = black
+                    if ch != " " and f != lt:
+                        line.append(sfg(f))
+                        lt = f
                     line.append(ch)
                     continue
                 if SOLID_PIXELS and t != b:
@@ -2653,6 +2771,7 @@ HELP = [
     "Left / Right  (J / L)    turn",
     "Space / F / Enter        fire",
     "M                        minimap on / off",
+    "V                        view: pixels / ASCII / mono",
     "",
     "Esc / P                  pause menu (Q there: quit, M: sound on / off)",
     "?                        this help",
@@ -2660,7 +2779,7 @@ HELP = [
     "Auto mode: the game plays itself (Space pause, +/- speed, Esc stop)",
 ]
 PAUSE = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "M                 sound on / off",
-         "Q                 quit"]
+         "V                 view: pixels / ASCII / mono", "Q                 quit"]
 
 
 # The ASCII ARCADE title layout (same look as arcadekit.title_screen in the collection)
@@ -2838,6 +2957,9 @@ def run(term):
             elif k in ("down", "s", "j", "tab"):
                 sel = (sel + 1) % len(TITLE_ITEMS)
                 SND.play("select")
+            elif k == "v":
+                cycle_view()
+                SND.play("select")
             elif k in (" ", "enter"):
                 start = True
         term.releases.clear()
@@ -2901,11 +3023,16 @@ def run(term):
                 elif k == "m":     # M is the minimap during play, sound on / off in the pause menu
                     if SND.toggle():
                         SND.play("select")
+                elif k == "v":
+                    cycle_view()
                 continue
             if k in ("esc", "p", "q", "?"):
                 g.paused, r.help = True, k == "?"
                 for h in g.hold:
                     g.hold[h] = g.bridge[h] = 0.0
+                continue
+            if k == "v":           # the view: pixels / ASCII / mono
+                cycle_view()
                 continue
             a = KEYMAP.get(k)
             if a in ("tl", "tr") and not term.kitty:
@@ -3078,9 +3205,10 @@ def screenshot(cols=100, rows=32, seed=SHOT_SEED, at=SHOT_T):
     """README picture: the auto-mode AutoPilot plays a round with a fixed seed; the frame at `at` seconds of
     game time, HUD and all (no AUTO bar, no best score read or written)."""
     global BEST_FILE, SOLID_PIXELS
-    saved = (random.getstate(), SND.enabled, BEST_FILE, SOLID_PIXELS)
+    saved = (random.getstate(), SND.enabled, BEST_FILE, SOLID_PIXELS, view_mode())
     random.seed(seed)
     SND.enabled, BEST_FILE, SOLID_PIXELS = False, os.devnull, False
+    _set_view("pixels")
     try:
         g = Game(seed=seed)
         g.auto = True                             # never saves a best score
@@ -3094,7 +3222,8 @@ def screenshot(cols=100, rows=32, seed=SHOT_SEED, at=SHOT_T):
         return ansi_canvas(r.frame(cols, rows), cols, rows)
     finally:
         random.setstate(saved[0])
-        SND.enabled, BEST_FILE, SOLID_PIXELS = saved[1:]
+        SND.enabled, BEST_FILE, SOLID_PIXELS = saved[1:4]
+        _set_view(saved[4])
 
 
 def bench(cols=160, rows=45, frames=40):

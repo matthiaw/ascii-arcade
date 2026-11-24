@@ -1606,13 +1606,14 @@ HELP = [
     "Keep the NOISE bar low: loud dives wake what lives down there.",
     "The gauge on the right edge shows your depth and the Source at the bottom.",
     "",
-    "Esc / P                  pause menu (Q there: quit, M: sound on / off)",
+    "Esc / P                  pause menu (Q there: quit, M: sound on / off, V: view)",
     "?                        this help",
     "",
     "Auto mode: the game plays itself (Space pause, +/- speed, Esc stop).",
     "Its pilot only knows what its own pings have shown.",
 ]
 PAUSE = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "M                 sound on / off",
+         "V                 view: pixels / ASCII / mono",
          "Q                 quit to the menu"]
 
 

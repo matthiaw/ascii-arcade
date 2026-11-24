@@ -179,11 +179,14 @@ HELP = [
     "M                    sound on / off",
     "G                    pixels: fine / smart / solid",
     "                     (smart and solid avoid streaks in macOS Terminal)",
+    "A                    view: pixels / ASCII / mono (in a game: V)",
     "Esc / Q              quit",
     "",
     "The same in every game:",
     "Esc / P              pause / game menu (Q there: quit,",
-    "                     M there: sound on / off)",
+    "                     M there: sound on / off, V: view)",
+    "V                    view: pixels / ASCII art / mono ASCII",
+    "                     (HOVERDRIFT, FENMARK panes: in the pause menu)",
     "?                    help with all of the game's keys",
     "Enter / Space        confirm",
     "Arrows / WASD        move, choose",
@@ -620,9 +623,13 @@ def render(cols, rows, sel, t, note, help_=False, all_=False):
         cv.center(rows - 3, " %s " % note, (14, 14, 20), (255, 150, 100))
     snd = SND.label().lower()
     pix = arcadekit.PIXEL_MODE
+    view = arcadekit.VIEW_NAMES[arcadekit.VIEW_MODE]
     hide = "X %s" % ("show" if g["file"] in HIDDEN else "hide")
     vall = "V %s" % ("hide hidden" if all_ else "all (%d hidden)" % len(HIDDEN) if HIDDEN else "all")
-    if cols >= 130:
+    if cols >= 142:
+        footer(cv, "Up/Down choose   Enter play   %s   %s   M %s   G pixels: %s   A view: %s   ? help   Esc quit"
+               % (hide, vall, snd, pix, view))
+    elif cols >= 130:
         footer(cv, "Up/Down choose   Enter play   %s   %s   M %s   G pixels: %s   ? help   Esc quit" % (hide, vall, snd, pix))
     elif cols >= 96:
         footer(cv, "Up/Down choose   Enter play   %s   %s   M %s   ? help   Esc quit" % (hide, vall, snd))
@@ -780,6 +787,9 @@ def menu(sel, note):
                 elif k == "g":
                     set_pixels({"fine": "smart", "smart": "solid"}.get(arcadekit.PIXEL_MODE, "fine"))
                     SND.play("move")
+                elif k == "a":
+                    arcadekit.cycle_view()
+                    SND.play("move")
                 elif k == "x":
                     g = GAMES[sel]
                     if toggle_hidden(g):
@@ -821,7 +831,7 @@ def menu(sel, note):
                     return sel
 
 
-USAGE = """usage: arcade [GAME | --list | --version | --help | --pixels fine|smart|solid]
+USAGE = """usage: arcade [GAME | --list | --version | --help | --pixels fine|smart|solid | --view pixels|ascii|mono]
 
 Without arguments the ASCII ARCADE menu opens. With a game name that game starts straight away,
 for example:  arcade stackfall
@@ -831,6 +841,12 @@ for example:  arcade stackfall
                  colour per cell: far fewer streaks in macOS Terminal.app, almost the full detail
 --pixels solid   one pixel per cell, background colour only: no streaks at all, but coarse
 The choice is remembered for every game (also: G in the menu; ARCADE_PIXELS=... for one run).
+
+--view pixels    the pictures as half-block pixels (the default)
+--view ascii     real ASCII art: every pixel pair becomes a coloured character ( .:-=+*#%@ and edges)
+--view mono      the same in one colour, plain ASCII
+The choice is remembered for every game (also: A in the menu, V in any game and its pause menu;
+ARCADE_VIEW=... for one run).
 """
 
 # in macOS Terminal.app, until the player has chosen a pixel style once, the menu suggests solid pixels
@@ -848,7 +864,9 @@ def set_pixels(mode):
 
 
 def run_game(g):
-    return subprocess.call([sys.executable, os.path.join(HERE, g["file"])], cwd=HERE)
+    code = subprocess.call([sys.executable, os.path.join(HERE, g["file"])], cwd=HERE)
+    arcadekit.VIEW_MODE = arcadekit._view_mode()      # the game may have switched the view (V)
+    return code
 
 
 def cli(args):
@@ -867,6 +885,13 @@ def cli(args):
         else:
             set_pixels(mode)
             print("pixels: %s (remembered for every game)" % mode)
+    elif a in ("--view", "view"):
+        mode = args[1].lower() if len(args) > 1 else ""
+        if mode not in arcadekit.VIEWS:
+            print("view: %s   (arcade --view pixels | ascii | mono)" % arcadekit.VIEW_MODE)
+        else:
+            arcadekit.set_view(mode)
+            print("view: %s (remembered for every game)" % mode)
     elif a in ("--list", "list"):
         for g in GAMES:
             print("%-12s %s" % (g["name"].lower(), g["tag"]))

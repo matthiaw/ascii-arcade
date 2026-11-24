@@ -2791,7 +2791,7 @@ def play(term, make):
         for name, kind in term.events():
             a = None
             if kind == "press":
-                a = shared_key(name, g.paused)
+                a = shared_key(name, g.paused, view_key=g.kind != "pane")   # in the panes V is the brush lock
             elif g.paused:
                 continue
             if a == "pause":

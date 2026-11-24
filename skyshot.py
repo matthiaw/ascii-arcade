@@ -1220,6 +1220,7 @@ HELP = [
     "Esc stop) - two computers at the chosen difficulty duel.",
 ]
 PAUSE = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "M                 sound on / off",
+         "V                 view: pixels / ASCII / mono",
          "Q                 quit to the menu"]
 
 
