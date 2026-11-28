@@ -32,6 +32,8 @@ import time
 from collections import deque
 
 import arcadekit
+import arcadenet
+from arcadenet import Link, clean_name
 from arcadekit import (AUTO_LABEL, PAUSE_LINES, TITLE_DIM, AutoMode, Canvas, KeyTerminal, footer, load_scores, mix,
                        overlay, shade, shared_key, submit, title_screen)
 from arcadesound import Sound
@@ -1060,201 +1062,18 @@ def apply_actions(g, actions, slots):
 # The LAN: one player hosts (a TCP server that runs the game), the others join; the host shouts a small UDP
 # beacon once a second so the join screen finds it. JSON lines both ways; nothing received is ever run.
 # =============================================================================================
-def clean_name(s, default="PLAYER"):
-    s = "".join(c for c in str(s or "").upper() if c.isalnum() or c in " -_")[:8].strip()
-    return s or default
-
-
-def local_ip():
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        s.connect(("10.255.255.255", 1))           # UDP connect sends nothing; it only picks the way out
-        return s.getsockname()[0]
-    except OSError:
-        return "127.0.0.1"
-    finally:
-        s.close()
-
-
-class Link:
-    """A TCP connection that sends and receives JSON lines without ever blocking the game."""
-    LIMIT = 1 << 20
-
-    def __init__(self, sock):
-        sock.setblocking(False)
-        try:
-            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        except OSError:
-            pass
-        self.sock, self.inb, self.out, self.closed = sock, b"", b"", False
-
-    def send(self, obj):
-        self.send_raw((json.dumps(obj, separators=(",", ":")) + "\n").encode())
-
-    def send_raw(self, data):
-        if self.closed:
-            return
-        self.out += data
-        self.flush()
-
-    def flush(self):
-        while self.out and not self.closed:
-            try:
-                n = self.sock.send(self.out)
-            except (BlockingIOError, InterruptedError):
-                break
-            except OSError:
-                self.closed = True
-                break
-            self.out = self.out[n:]
-        if len(self.out) > self.LIMIT:
-            self.closed = True
-
-    def recv(self):
-        msgs = []
-        while not self.closed:
-            try:
-                data = self.sock.recv(65536)
-            except (BlockingIOError, InterruptedError):
-                break
-            except OSError:
-                self.closed = True
-                break
-            if not data:
-                self.closed = True
-                break
-            self.inb += data
-            if len(self.inb) > self.LIMIT:
-                self.closed = True
-        while b"\n" in self.inb:
-            line, self.inb = self.inb.split(b"\n", 1)
-            try:
-                m = json.loads(line.decode("utf-8", "ignore"))
-            except ValueError:
-                continue
-            if isinstance(m, dict):
-                msgs.append(m)
-        return msgs
-
-    def close(self):
-        self.flush()
-        self.closed = True
-        try:
-            self.sock.close()
-        except OSError:
-            pass
-
-
-class Host:
-    """The listening socket and the beacon."""
+class Host(arcadenet.Host):
+    """The listening socket and the beacon (see arcadenet)."""
 
     def __init__(self, port=PORT, beacon=True):
-        self.srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        for p in ([0] if port == 0 else range(port, port + 10)):
-            try:
-                self.srv.bind(("", p))
-                break
-            except OSError:
-                continue
-        else:
-            self.srv.close()
-            raise OSError("no free port from %d on" % port)
-        self.port = self.srv.getsockname()[1]
-        self.srv.listen(8)
-        self.srv.setblocking(False)
-        self.links = []
-        self.ip = local_ip()
-        self.udp = None
-        if beacon:
-            try:
-                self.udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                self.udp.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-                self.udp.setblocking(False)
-            except OSError:
-                self.udp = None
-        self.beacon_at = 0.0
-
-    def accept(self):
-        while True:
-            try:
-                s, addr = self.srv.accept()
-            except (BlockingIOError, InterruptedError):
-                break
-            except OSError:
-                break
-            ln = Link(s)
-            ln.addr, ln.hello, ln.since = addr[0], False, time.time()
-            self.links.append(ln)
-
-    def beacon(self, now, info):
-        if not self.udp or now < self.beacon_at:
-            return
-        self.beacon_at = now + 1.0
-        data = json.dumps(dict(info, g=GAME, p=PROTO, port=self.port)).encode()
-        for to in ("<broadcast>", "255.255.255.255"):
-            try:
-                self.udp.sendto(data, (to, BEACON_PORT))
-                break
-            except OSError:
-                continue
-
-    def close(self):
-        for ln in self.links:
-            ln.close()
-        self.links = []
-        for s in (self.srv, self.udp):
-            if s:
-                try:
-                    s.close()
-                except OSError:
-                    pass
+        super().__init__(GAME, PROTO, port, beacon)
 
 
-class Finder:
-    """Listens for beacons: hosts[(ip, port)] = dict(name, n, open, seen)."""
+class Finder(arcadenet.Finder):
+    """Listens for FUSEYARD beacons: hosts[(ip, port)] = dict(name, n, m, open, seen)."""
 
     def __init__(self, port=BEACON_PORT):
-        self.hosts = {}
-        try:
-            self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            if hasattr(socket, "SO_REUSEPORT"):
-                try:
-                    self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-                except OSError:
-                    pass
-            self.sock.bind(("", port))
-            self.sock.setblocking(False)
-        except OSError:
-            self.sock = None
-
-    def poll(self, now):
-        while self.sock:
-            try:
-                data, addr = self.sock.recvfrom(4096)
-            except (BlockingIOError, InterruptedError):
-                break
-            except OSError:
-                break
-            try:
-                m = json.loads(data.decode("utf-8", "ignore"))
-                if m.get("g") != GAME or m.get("p") != PROTO:
-                    continue
-                port = int(m["port"])
-                self.hosts[(addr[0], port)] = dict(name=clean_name(m.get("name"), "HOST"),
-                                                   n=max(0, min(4, int(m.get("n", 1)))), open=bool(m.get("open")),
-                                                   seen=now)
-            except (ValueError, KeyError, TypeError, AttributeError):
-                continue
-        for k in [k for k, v in self.hosts.items() if now - v["seen"] > 4.0]:
-            del self.hosts[k]
-        return sorted(self.hosts.items(), key=lambda kv: (not kv[1]["open"], kv[1]["name"], kv[0]))
-
-    def close(self):
-        if self.sock:
-            self.sock.close()
-            self.sock = None
+        super().__init__(GAME, PROTO, port)
 
 
 class LanServer:

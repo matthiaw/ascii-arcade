@@ -7,8 +7,8 @@ On the Night Loom the dye riders steer shuttles of light, and every cell they cr
 with a burning weft thread. Touch a thread - a rival's or your own - or the loom's frame, and your shuttle
 bursts. The last rider weaving takes the round; first to the set number of rounds takes the match.
 
-Two riders at one keyboard (Saffron on W A S D, Woad on the arrows), or one rider against one to three
-computer riders (Easy, Normal, Hard) who read the loom with a real look-ahead: flood fills of the free cloth,
+Two riders at one keyboard (Saffron on W A S D, Woad on the arrows), two to four riders at their own computers
+over the LAN / WLAN (one hosts, the others join), or one rider against one to three computer riders (Easy, Normal, Hard) who read the loom with a real look-ahead: flood fills of the free cloth,
 who reaches which cell first, and how long a closed-off pocket can still be filled. Seven looms - open cloth,
 bobbin posts, a cross, heddle gates, an oval ring, an hourglass and a teasel field. A limited Spur meter for
 bursts of speed, and four optional charms on the cloth: Spur (refills the meter), Skip (the shuttle lifts and
@@ -27,6 +27,7 @@ import time
 from arcadekit import (ACCENTS, AUTO_LABEL, PAUSE_LINES, AutoMode, Canvas, HeldKeys, KeyTerminal, block_title,
                        clamp, load_scores, mix, overlay, scale_art, shade, shared_key, submit, title_screen)
 from arcadesound import Sound, load_settings, save_settings
+import arcadenet
 
 GAME = "weftwar"
 NAME = "WEFTWAR"
@@ -207,6 +208,8 @@ def help_lines(kitty=True):
             "W A S D    Saffron (player 1) steers   Space / E  Spur",
             "arrows     Woad (player 2) steers      Enter / 0  Spur",
             "           alone against the computer: either set",
+            "           LAN game: every rider at their own computer,",
+            "           with either set",
             "Esc / P    pause menu (Q there: quit, M sound)",
             "?          this help", ""] + mode + [
             "",
@@ -241,7 +244,7 @@ class Rider:
 
     @property
     def human(self):
-        return self.ctl in ("p1", "p2")
+        return self.ctl != "cpu"
 
     def place(self, cell, d):
         self.cell = self.vfrom = cell
@@ -1272,9 +1275,6 @@ class Painter:
             for c in ch[self.seen:]:
                 self.cell(g, geo, c)
             self.seen = len(ch)
-            if len(ch) > 4000 and self.seen == len(ch):
-                del ch[:]
-                self.seen = 0
         return geo, self.px
 
     def cell(self, g, geo, c):
@@ -1423,8 +1423,24 @@ def big_digit(cv, ch, cx, cy, k, col):
 
 
 def render(g, cols, rows, hud=True):
-    painter = g.__dict__.setdefault("_painter", Painter())
+    painters = g.__dict__.setdefault("_painters", {})      # one per window size (a LAN game draws several)
+    painter = painters.get((cols, rows, hud))
+    if painter is None:
+        if len(painters) > 6:
+            painters.clear()
+        painter = painters[(cols, rows, hud)] = Painter()
     geo, layer = painter.layer(g, cols, rows, hud)
+    ch = g.changes
+    if len(ch) > 4000:                      # every painter has caught up: the list starts again
+        behind = [k for k, p in painters.items() if p.seen != len(ch)]
+        if len(ch) > 16000:
+            for k in behind:
+                del painters[k]
+            behind = []
+        if not behind:
+            del ch[:]
+            for p in painters.values():
+                p.seen = 0
     cv = Canvas(cols, 1)
     cv.rows, cv.H = rows, rows * 2
     s = geo.s
@@ -1616,7 +1632,7 @@ def draw_hud(cv, g, geo):
             cv.put(x, r_, tg, c, HUD_BG)
             x += len(tg) + 1
         x += 1
-    if g.mode == "duel" or not g.humans():
+    if g.mode in ("duel", "lan") or not g.humans():
         tag = "first to %d" % g.target
     else:
         tag = "first to %d  %s" % (g.target, "/".join(sorted({r.skill.capitalize() for r in g.riders if r.brain})))
@@ -1691,13 +1707,13 @@ def draw_banners(cv, g, geo):
         cv.center(cv.rows - 3, " your shuttle burst - the rivals settle the round ", HUD_DIM, (18, 16, 34))
 
 
-def render_over(g, cv, auto=False, extra=()):
+def render_over(g, cv, auto=False, extra=(), hint=None):
     w = g.winner
     lines = ["%s WINS THE MATCH" % w.name, ""]
     lines += ["%-9s %s  rounds %d  cuts %d  woven %d" % (r.name, pips(r, g.target), r.rounds, r.cuts, r.cells)
               for r in g.standings()]
     lines += list(extra)
-    lines += ["", "auto mode: a new match starts" if auto else "Enter: rematch   Esc / Q: menu"]
+    lines += ["", hint or ("auto mode: a new match starts" if auto else "Enter: rematch   Esc / Q: menu")]
     wd = max(len(l) for l in lines) + 4
     x, y = max(0, (cv.cols - wd) // 2), max(0, cv.rows // 2 - len(lines) // 2 - 1)
     cv.frame(x - 1, y * 2 - 1, wd + 2, (len(lines) + 2) * 2 + 2, w.col)
@@ -1908,6 +1924,7 @@ def menu_items(st):
             "Match     < first to %d >" % st["target"],
             "Loom      < %s >" % ("rotate" if st["arena"] < 0 else ARENAS[st["arena"]]["name"].title()),
             "Charms    < %s >" % ("on" if st["pickups"] else "off"),
+            "LAN game  2 to 4 computers",
             AUTO_LABEL]
 
 
@@ -2055,6 +2072,138 @@ def play(term, ctl, mode, st, ses):
         time.sleep(max(0.0, 1 / 30 - (time.time() - now)))
 
 
+# =============================================================================================
+# The LAN game: two to four riders, each at their own computer (see arcadenet)
+# =============================================================================================
+LAN_PAUSE = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "M                 sound on / off",
+             "V                 view", "Q                 end the match for everyone", "", "(the others wait)"]
+
+
+def lan_spec(demo, st):
+    def info():
+        return "first to %d   loom: %s   charms %s" % (
+            st["target"], "rotate" if st["arena"] < 0 else ARENAS[st["arena"]]["name"].title(),
+            "on" if st["pickups"] else "off")
+    return arcadenet.LanGame(GAME, NAME, match=lambda term, srv: lan_match(term, srv, st),
+                             backdrop=lambda cols, rows, dt: demo.scene(cols, rows, dt), help=help_lines, info=info,
+                             players=(2, 4), size=(MIN_COLS, MIN_ROWS), sound=SND)
+
+
+class LanControls:
+    """Game.step asks for turns and Spur by rider: each rider's own Controls (alone, so either set of keys)."""
+
+    def __init__(self):
+        self.of = {}
+
+    def turns(self, who):
+        c = self.of.get(who)
+        return c.turns("p1") if c else []
+
+    def boost(self, who):
+        c = self.of.get(who)
+        return c.boost("p1") if c else False
+
+
+def lan_frame(g, cols, rows):
+    cv = render(g, cols, rows)
+    if g.paused:
+        overlay(cv, ["P A U S E D", "", "the host paused the game"])
+    elif g.over:
+        render_over(g, cv, hint="the host starts the next match")
+    return cv
+
+
+def lan_match(term, srv, st):
+    """The host's match. Returns 'lobby' (Enter after the match) or 'quit'."""
+    kitty = getattr(term, "kitty", False)
+    seats = srv.seats[:4]
+    g = Game([(i, "p%d" % (i + 1), "normal") for i in range(len(seats))], target=st["target"], arena=st["arena"],
+             pickups=st["pickups"], mode="lan")
+    for r, seat in zip(g.riders, seats):
+        r.name = seat["name"]
+    srv.game = g
+    mine = Controls(kitty, solo=True)
+    lc = LanControls()
+    lc.of["p1"] = mine
+    far = {}
+    last = time.time()
+    while True:
+        now = time.time()
+        dt = min(0.1, now - last)
+        last = now
+        srv.poll(now)
+        arcadenet.play_sound(srv.spec, srv.sounds)
+        srv.sounds = []
+        for name, kind in arcadenet.term_events(term):
+            if kind != "press":
+                mine.feed(name, kind, now)
+                continue
+            if g.over:
+                if name in ("q", "esc"):
+                    return "quit"
+                if name in ("enter", " ") and g.state_t > 0.6:
+                    SND.play("start")
+                    return "lobby"
+                continue
+            a = shared_key(name, g.paused)
+            if a == "pause":
+                g.paused = True
+                mine.reset()
+                SND.play("pause")
+            elif a == "resume":
+                g.paused = g.help = False
+                mine.reset()
+            elif a == "quit":
+                return "quit"
+            elif a == "help":
+                g.help = not g.help
+                g.paused = True
+                mine.reset()
+            elif a == "sound":
+                if SND.toggle():
+                    SND.play("sound_on")
+            elif a is None:
+                mine.feed(name, kind, now)
+        mine.tick(now)
+        for r, idx, events, cleared in srv.inputs():
+            c = far.get(r)
+            if c is None:
+                c = far[r] = Controls(r.kitty, solo=True)
+                for i in idx:
+                    lc.of["p%d" % (i + 1)] = c
+            if cleared:
+                c.reset()
+            for name, kind in events:
+                if not g.paused:
+                    c.feed(name, kind, now)
+            c.tick(now)
+        for i in srv.take_left():
+            if i < len(g.riders):
+                rd = g.riders[i]
+                lc.of.pop(rd.ctl, None)
+                rd.ctl, rd.skill = "cpu", "normal"
+                rd.brain = Brain("normal", g.rnd.random())
+        if not g.paused:
+            g.update(dt, lc)
+            if g.over:
+                g.state_t += dt
+        srv.send_frames(now, lambda cols, rows, seats_: lan_frame(g, cols, rows))
+        cols, rows = term.size()
+        if cols < MIN_COLS or rows < MIN_ROWS:
+            too_small(term)
+            time.sleep(0.2)
+            continue
+        cv = render(g, cols, rows)
+        if g.paused:
+            overlay(cv, help_lines(kitty) if g.help else LAN_PAUSE)
+        elif g.over:
+            render_over(g, cv, hint="Enter: back to the lobby   Esc / Q: end")
+        elif srv.recent():
+            cv.put(0, 0, " %s " % srv.recent(), (230, 230, 240), (30, 30, 50))
+        term.write(cv.emit())
+        time.sleep(max(0.0, 1 / 30 - (time.time() - now)))
+
+
 def main():
     with KeyTerminal() as term:
         ctl = Controls(term.kitty)
@@ -2109,6 +2258,9 @@ def main():
             save_settings(weftwar_setup=dict(st))
             if sel == n_items - 1:
                 run_auto(term, st)
+            elif sel == n_items - 2:
+                arcadenet.lan_menu(term, lan_spec(demo, st))
+                ctl.reset()
             else:
                 mode = "duel" if sel == 0 else "versus"
                 while play(term, ctl, mode, st, ses) == "again":
@@ -2468,6 +2620,24 @@ def selftest():
         g.step()
         steps += 1
     print("simulation: %.0f us per step with two computer riders" % ((time.time() - a) / max(1, steps) * 1e6))
+    # 9. the LAN game: the guest turns its own shuttle; one who leaves becomes a computer rider; pictures for
+    # several window sizes keep their own painters
+    spec = lan_spec(TitleDemo(), dict(DEFAULT_SETUP, arena=0))
+    res, frames, sounds, srv = arcadenet.try_match(spec, [(3.6, "esc"), (3.7, "q")], [(3.0, "left", "press")],
+                                                   seconds=4)
+    g = srv.game
+    assert res == "quit" and frames >= 5 and g.mode == "lan" and g.riders[1].human, (res, frames)
+    assert [r.name for r in g.riders] == ["HOST", "GUEST"] and len(g._painters) == 2, list(g._painters)
+    lc = LanControls()
+    lc.of["p2"] = c = Controls(False, solo=True)
+    c.feed("up", "press", 0.0)
+    c.feed(" ", "press", 0.0)
+    assert lc.turns("p2") == [0] and lc.turns("p1") == [] and lc.boost("p2") and not lc.boost("p3")
+    res, frames, sounds, srv = arcadenet.try_match(spec, [(1.0, "esc"), (1.1, "q")], [(0.1, "x", "press")],
+                                                   leave=True)
+    assert srv.game.riders[1].ctl == "cpu" and srv.game.riders[1].brain is not None
+    lan_frame(srv.game, 120, 40).emit(True)
+    print("LAN: own keys per rider, computer for one who left, a painter per window size")
     print("Self-test ok (%.1f s)" % (time.time() - t0))
 
 

@@ -8,8 +8,8 @@ for the harbour - each with only a small lantern. Your beam is the only light on
 steers clear of the reefs; a ship left in the dark sails on blindly. Turn the beam, focus it, sound the horn in
 the fog, refill the oil, and send the rescue boat when someone runs aground.
 
-Alone you do it all; with a second player at the keyboard, one keeps the light and the other steers the
-rescue boat.
+Alone you do it all; with a second player at the keyboard (or at a second computer over the LAN / WLAN), one
+keeps the light and the other steers the rescue boat.
 
 Part of the ASCII ARCADE. Pure Python 3, no dependencies (macOS / Linux, truecolor terminal recommended).
 Run:        python3 lightkeeper.py
@@ -26,6 +26,7 @@ from collections import deque
 from arcadekit import (AUTO_LABEL, AutoMode, Canvas, Terminal, clamp, load_scores, mix, overlay, shade, shared_key,
                        submit, title_screen)
 from arcadesound import Sound
+import arcadenet
 
 GAME = "lightkeeper"
 WATER, ROCK, LAND, HARBOUR = 0, 1, 2, 3
@@ -932,9 +933,12 @@ def draw_fine(n, painter, cv, PW, PH, z, title_mode):
     beam, ships, boat and lighthouse drawn at screen resolution."""
     c = n.c
     W, H = c.W, c.H
-    fv = getattr(painter, "fine", None)
-    if fv is None or fv.key != (PW, PH, z, id(painter)):
-        fv = painter.fine = FineView(n, painter, PW, PH, z)
+    fines = painter.__dict__.setdefault("fines", {})      # one per window size (a LAN game draws several)
+    fv = fines.get((PW, PH, z))
+    if fv is None:
+        if len(fines) > 4:
+            fines.clear()
+        fv = fines[(PW, PH, z)] = FineView(n, painter, PW, PH, z)
     ox, oy = fv.ox, fv.oy
     px = cv.px
     t = n.t
@@ -1454,6 +1458,20 @@ HELP_COOP = [
     "",
     "Auto mode: the game plays itself (Space pause, +/- speed, Esc stop)",
 ]
+HELP_LAN = [
+    "LIGHTKEEPER - keys (co-op over the LAN)",
+    "",
+    "The host keeps the light:   arrows or W A S D turn the beam (Left /",
+    "                            Right) and focus it (Up / Down),",
+    "                            Space horn, R refill the oil",
+    "The one who joins steers    arrows or W A S D: out to a wreck, wait",
+    "the rescue boat:            beside it, bring the crew home.",
+    "",
+    "The boat is slower in the dark - the keeper should light its way.",
+    "The host chooses the improvement at dawn and can pause the game.",
+    "",
+    "Esc                         menu (the host: pause), ?  this help",
+]
 PAUSE = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "M                 sound on / off",
          "V                 view: pixels / ASCII / mono",
          "Q                 quit to the menu"]
@@ -1492,7 +1510,7 @@ class Campaign:
         self.next_night()
 
 
-def render_dawn(cv, camp):
+def render_dawn(cv, camp, hint=None):
     """The dawn screen: the night's tally, then three improvements - the chosen one clearly highlighted."""
     n = camp.n
     bg, fg, dim, gold = (36, 26, 30), (240, 236, 224), (176, 160, 156), (255, 214, 120)
@@ -1522,17 +1540,18 @@ def render_dawn(cv, camp):
         else:
             cv.put(x0 + 2, y, ("   " + o).ljust(w - 4), dim, bg)
         y += 1
-    cv.put(x0 + 4, y + 1, "Up / Down choose   Enter take it", (150, 140, 136), bg)
+    cv.put(x0 + 4, y + 1, hint or "Up / Down choose   Enter take it", (150, 140, 136), bg)
 
 
-def render_over(cv, camp, record, auto=False):
+def render_over(cv, camp, record, auto=False, hint=None):
     n = camp.n
     lines = ["T H E   L I G H T   G O E S   O U T", "", "You kept the light for %d night%s." % (
         n.night - 1, "" if n.night == 2 else "s") if n.night > 1 else "The first night was too much.", "",
         "final score  %d" % n.score]
     if record:
         lines += ["", "** NEW RECORD **"]
-    lines += ["", "a new watch begins in a moment   Esc: menu" if auto else "Enter: a new watch   Esc / Q: menu"]
+    lines += ["", hint or ("a new watch begins in a moment   Esc: menu" if auto else
+                           "Enter: a new watch   Esc / Q: menu")]
     w = max(len(l) for l in lines) + 4
     cv.box(max(0, (cv.cols - w) // 2), max(0, cv.rows // 2 - len(lines) // 2 - 1), [l.center(w - 4) for l in lines],
            (240, 240, 246), (30, 16, 24))
@@ -1566,8 +1585,10 @@ class TitleDemo:
         best = load_scores().get(GAME, {})
         rec = " / ".join("%s %d" % (m, v) for m, v in sorted(best.items()))
         title_screen(cv, "LIGHTKEEPER", "one beam, many ships, a long night",
-                     ["One keeper (solo)", "Two keepers (co-op: the second steers the rescue boat)", AUTO_LABEL], sel,
-                     "best: " + rec if rec else None, help_lines=HELP_COOP if sel == 1 else HELP_SOLO,
+                     ["One keeper (solo)", "Two keepers (co-op: the second steers the rescue boat)",
+                      "LAN co-op (two computers)", AUTO_LABEL], sel,
+                     "best: " + rec if rec else None,
+                     help_lines=HELP_COOP if sel == 1 else HELP_LAN if sel == 2 else HELP_SOLO,
                      show_help=help_, dim=0.4)
         return cv
 
@@ -1711,15 +1732,18 @@ def main():
                     elif k in ("q", "esc"):
                         return
                     elif k in ("up", "w"):
-                        sel = (sel - 1) % 3
+                        sel = (sel - 1) % 4
                     elif k in ("down", "s"):
-                        sel = (sel + 1) % 3
-                    elif k in ("1", "2", "3"):
+                        sel = (sel + 1) % 4
+                    elif k in ("1", "2", "3", "4"):
                         sel = int(k) - 1
                     elif k in ("enter", " "):
                         go = True
-            if sel == 2:
+            if sel == 3:
                 run_auto(term)
+                continue
+            if sel == 2:
+                arcadenet.lan_menu(term, lan_spec(demo))
                 continue
             keepers = sel + 1
             mode = "solo" if keepers == 1 else "co-op"
@@ -1787,6 +1811,121 @@ def main():
                     time.sleep(max(0.0, 1 / 30 - (time.time() - now)))
                 if back:
                     break
+
+
+# =============================================================================================
+# The LAN co-op: the host keeps the light, the one who joins steers the rescue boat (see arcadenet)
+# =============================================================================================
+LAN_PAUSE = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "M                 sound on / off",
+             "V                 view", "Q                 end the watch for both", "", "(the boat waits too)"]
+TO_LIGHT = {"w": "up", "a": "left", "s": "down", "d": "right"}
+TO_BOAT = {"up": "w", "left": "a", "down": "s", "right": "d", "w": "w", "a": "a", "s": "s", "d": "d"}
+
+
+def lan_spec(demo):
+    def backdrop(cols, rows, dt):
+        if (cols, rows) != demo.size:
+            demo.__init__(cols, rows)
+        n = demo.n
+        n.spin, n.oil, n.lives = 0.55, 100, 3
+        n.update(dt)
+        n.msgs = []
+        n.over = n.dawn = False
+        if n.t > n.length * 0.6:
+            n.t = 10
+            n.ships = [s for s in n.ships if s.state == "sailing"]
+        return render(n, demo.p, cols, rows, title_mode=True)
+    return arcadenet.LanGame(GAME, "LIGHTKEEPER", match=lan_match, backdrop=backdrop,
+                             help=lambda kitty=True: HELP_LAN, info=lambda: "the host keeps the light, the guest the boat",
+                             players=(2, 2), size=(70, 22), sound=SND)
+
+
+def lan_frame(camp, cols, rows):
+    n = camp.n
+    cv = render(n, camp.p, cols, rows)
+    if n.paused:
+        overlay(cv, ["P A U S E D", "", "the keeper paused the game"])
+    if n.dawn:
+        render_dawn(cv, camp, hint="the keeper at the light chooses")
+    if n.over:
+        render_over(cv, camp, None, hint="the host starts the next watch")
+    return cv
+
+
+def lan_match(term, srv):
+    """The host's watch. Returns 'lobby' (Enter after the watch) or 'quit'."""
+    camp = Campaign(2, *map_size(*srv.min_size(*term.size())))
+    srv.game = camp
+    last = time.time()
+    while True:
+        now = time.time()
+        srv.poll(now)
+        arcadenet.play_sound(srv.spec, srv.sounds)
+        srv.sounds = []
+        n = camp.n
+        coop = camp.keepers == 2
+        for k in term.keys(0):
+            if n.over:
+                if k in ("q", "esc"):
+                    return "quit"
+                if k in ("enter", " "):
+                    return "lobby"
+                continue
+            if n.dawn:
+                if k in ("up", "w"):
+                    camp.pick = (camp.pick - 1) % 3
+                    SND.play("pick")
+                elif k in ("down", "s"):
+                    camp.pick = (camp.pick + 1) % 3
+                    SND.play("pick")
+                elif k in ("enter", " "):
+                    SND.play("upgrade")
+                    camp.take_upgrade()
+                    camp.n.keepers = camp.keepers
+                    n = camp.n
+                elif k in ("q", "esc"):
+                    return "quit"
+                continue
+            a = shared_key(k, n.paused, pause_keys=("esc", "p", "q"))
+            if a == "pause":
+                n.paused = True
+            elif a == "resume":
+                n.paused = n.help = False
+            elif a == "quit":
+                return "quit"
+            elif a == "sound":
+                if SND.toggle():
+                    SND.play("sound_on")
+            elif a == "help":
+                n.help = not n.help
+                n.paused = True
+            elif a is None:
+                n.key(TO_LIGHT.get(k, k) if coop else k)
+        for r, seats, events, cleared in srv.inputs():
+            for k, kind in events:
+                if kind != "release" and coop and not (n.paused or n.dawn or n.over) and k in TO_BOAT:
+                    n.key(TO_BOAT[k])
+        if srv.take_left():
+            camp.keepers = n.keepers = 1            # the host now does it all (B sends the boat)
+        n.update(min(0.1, now - last))
+        last = now
+        srv.send_frames(now, lambda c, r, seats: lan_frame(camp, c, r))
+        cols, rows = term.size()
+        if cols < 70 or rows < 22:
+            term.write("\x1b[0m\x1b[2J\x1b[HPlease make the window larger (70x22).")
+            time.sleep(0.2)
+            continue
+        cv = render(n, camp.p, cols, rows)
+        if n.paused:
+            overlay(cv, (HELP_LAN if camp.keepers == 2 else HELP_SOLO) if n.help else LAN_PAUSE)
+        elif srv.recent():
+            cv.put(0, 0, " %s " % srv.recent(), (230, 230, 240), (30, 30, 50))
+        if n.dawn:
+            render_dawn(cv, camp)
+        if n.over:
+            render_over(cv, camp, None, hint="Enter: back to the lobby   Esc / Q: end")
+        term.write(cv.emit())
+        time.sleep(max(0.0, 1 / 30 - (time.time() - now)))
 
 
 # =============================================================================================
@@ -1919,6 +2058,18 @@ def selftest():
     ak.camp.n.over = True
     auto.key("?")
     auto_frame(ak, auto, 70, 22).emit(True)
+    # the LAN co-op: the guest steers the boat (with the arrows too), the host's W A S D turn the light
+    spec = lan_spec(TitleDemo(100, 32))
+    res, frames, sounds, srv = arcadenet.try_match(
+        spec, [(0.1 + i * 0.05, "a") for i in range(4)] + [(1.6, "esc"), (1.7, "q")],
+        [(0.2 + i * 0.05, "right", "press") for i in range(8)], seconds=2)
+    camp = srv.game
+    assert res == "quit" and frames >= 5 and camp.n.boat.state != "docked" and camp.n.spin < 0, \
+        (res, frames, camp.n.boat.state, camp.n.spin)
+    lan_frame(camp, 120, 40).emit(True)
+    res, frames, sounds, srv = arcadenet.try_match(spec, [(1.2, "esc"), (1.3, "q")], [(0.1, "x", "press")],
+                                                   leave=True)
+    assert srv.game.keepers == 1 and srv.game.n.keepers == 1
     print("Self-test ok: 60 coasts navigable, the attentive keeper got through 3 nights %d of 8 times,"
           " a sleeping keeper did worse %d of 8 times, co-op boat steers, auto mode ran 6 s at x8 (%d nights,"
           " %d watches over), no score submitted (%.1fs)" % (wins, sleepy_losses, nights, watches, time.time() - t0))

@@ -9,7 +9,8 @@ mallet in motion hands its speed to the puck - a hard swing makes a hard shot. E
 First to 7 (or 5, or 11) wins.
 
 Left player: W A S D. Right player: the arrow keys. Against the computer you play left with either set, or with
-the mouse. In terminals with the kitty keyboard protocol (kitty, WezTerm, Ghostty, recent iTerm2) held keys are
+the mouse. Over the LAN (or WLAN) one player hosts and plays left, the other joins from their own computer and
+plays right, with either set of keys. In terminals with the kitty keyboard protocol (kitty, WezTerm, Ghostty, recent iTerm2) held keys are
 exact; elsewhere every tap gives the mallet a shove and it glides, so two players can still play at once.
 
 Part of the ASCII ARCADE. Pure Python 3, no dependencies (macOS / Linux, truecolor terminal recommended).
@@ -25,6 +26,7 @@ from collections import deque
 from arcadekit import (AUTO_LABEL, MOUSE_RE, PAUSE_LINES, AutoMode, Canvas, HeldKeys, KeyTerminal, clamp, draw_title,
                        load_scores, mix, overlay, shade, shared_key, submit, title_screen, title_width)
 from arcadesound import Sound
+import arcadenet
 
 GAME = "puckslide"
 TL, TW = 2.0, 1.0          # table length (x) and width (y), in table units
@@ -80,6 +82,8 @@ def help_lines(kitty=True):
         "" if kitty else "and it glides. Tap often; both players at once work.",
         "Hit the puck while moving: your speed goes into the shot.",
         "Against the computer W A S D and the arrows both steer you.",
+        "LAN game: the host plays left, the one who joins plays right;",
+        "both steer with either set of keys.",
     ]
 
 
@@ -541,7 +545,7 @@ def draw_things(cv, g, v):
         disc(cv, x, y, MR * s * 0.42, mix(COLS[side], (255, 255, 255), 0.55))
 
 
-def render(g, cols, rows, hud=True, kitty=True):
+def render(g, cols, rows, hud=True, kitty=True, remote=False):
     play = rows - 1 if hud else rows
     if cols < 40 or play * 2 < 22:
         raise ValueError("too small for the table")
@@ -557,13 +561,17 @@ def render(g, cols, rows, hud=True, kitty=True):
     if hud:
         draw_hud(cv, g)
         if g.state == "over":
-            draw_over(cv, g)
+            draw_over(cv, g, remote)
         if g.paused:
-            overlay(cv, help_lines(kitty) if g.help else PAUSE_LINES + ["", SND.label()])
+            overlay(cv, ["P A U S E D", "", "the host paused the game"] if remote else
+                    help_lines(kitty) if g.help else getattr(g, "pause_lines", None) or PAUSE_LINES + ["", SND.label()])
     return cv
 
 
 def who(g, s):
+    names = getattr(g, "names", None)
+    if names and not g.ai[s]:
+        return names[s]
     return ("COMPUTER %s" % g.ai[s]) if g.ai[s] else ("YOU" if g.ai[1 - s] else NAMES[s] + (" WASD" if s == 0 else
                                                                                                " arrows"))
 
@@ -581,11 +589,12 @@ def draw_hud(cv, g):
         cv.put(len(left) + 2, r, t, (150, 154, 184), HUD_BG)
 
 
-def draw_over(cv, g):
+def draw_over(cv, g, remote=False):
     w = g.winner
     name = who(g, w)
-    lines = ["YOU WIN!" if name == "YOU" else "%s WINS!" % name, "", "%d : %d" % tuple(g.score), "",
-             "Enter: again   Esc / Q: menu"]
+    hint = ("the host starts the next match" if remote else
+            "Enter: back to the lobby   Esc / Q: end" if getattr(g, "names", None) else "Enter: again   Esc / Q: menu")
+    lines = ["YOU WIN!" if name == "YOU" else "%s WINS!" % name, "", "%d : %d" % tuple(g.score), "", hint]
     if g.ai[1 - w] and not g.ai[w]:
         lines.insert(3, "you beat the %s computer" % g.ai[1 - w])
     bw = max(len(l) for l in lines) + 4
@@ -614,13 +623,15 @@ class TitleDemo:
 
 
 ITEMS = [("2 Players", "left W A S D, right arrows")] + [("vs Computer", d) for d in DIFFS]
+LAN_ITEM = len(ITEMS)            # then the LAN game, then auto mode
 
 
 def render_menu(demo, cols, rows, sel, dt, help_, kitty, target):
     cv = demo.scene(cols, rows, dt)
     rec = load_scores().get(GAME, {})
     best = ("wins vs computer: " + ", ".join("%s %d" % (d, rec[d]) for d in DIFFS if d in rec)) if rec else None
-    items = ["%-12s %s" % it for it in ITEMS] + ["%-12s computer against computer" % AUTO_LABEL]
+    items = ["%-12s %s" % it for it in ITEMS] + ["%-12s host or join, two computers" % "LAN game",
+                                                 "%-12s computer against computer" % AUTO_LABEL]
     title_screen(cv, "PUCKSLIDE", "air hockey on a glowing table", items, sel, best,
                  extra=["", "first to   < %d >" % target,
                         "keys: %s" % ("held keys exact (kitty protocol)" if kitty else "classic terminal - tap to shove")],
@@ -754,11 +765,98 @@ def play(term, sel, target):
             time.sleep(max(0, 1 / 60 - (time.time() - now)))
 
 
+# =============================================================================================
+# The LAN game: the host plays left, the one who joins plays right (see arcadenet)
+# =============================================================================================
+LAN_PAUSE = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "M                 sound on / off",
+             "V                 view", "Q                 end the game for both", "", "(the other one waits)"]
+
+
+def lan_spec(demo, target):
+    return arcadenet.LanGame(GAME, "PUCKSLIDE", match=lambda term, srv: lan_match(term, srv, target),
+                             backdrop=lambda cols, rows, dt: demo.scene(cols, rows, dt), help=help_lines,
+                             info=lambda: "first to %d" % target, players=(2, 2), size=(60, 22), sound=SND)
+
+
+def lan_match(term, srv, target):
+    """The host's match. Returns 'lobby' (Enter after the match) or 'quit'."""
+    kitty = getattr(term, "kitty", False)
+    g = Match(ai=(None, None), target=target)
+    g.names = [s["name"] for s in srv.seats[:2]]
+    g.pause_lines = LAN_PAUSE
+    srv.game = g
+    ctl = Controls(kitty, solo=True)
+    far = {}                                        # the other computer's keys: its own controls, solo
+    last = time.time()
+    while True:
+        now = time.time()
+        dt = min(0.1, now - last)
+        last = now
+        srv.poll(now)
+        arcadenet.play_sound(srv.spec, srv.sounds)
+        srv.sounds = []
+        for name, kind in arcadenet.term_events(term):
+            if kind != "press":
+                ctl.feed(name, kind, now)
+                continue
+            if g.state == "over":
+                if name in ("q", "esc"):
+                    return "quit"
+                if name in ("enter", " ") and g.state_t < -0.6:
+                    return "lobby"
+                continue
+            a = shared_key(name, g.paused, pause_keys=("esc", "p"))
+            if a == "pause":
+                g.paused = True
+                SND.play("pause")
+            elif a == "resume":
+                g.paused = g.help = False
+            elif a == "quit":
+                return "quit"
+            elif a == "help":
+                g.help = not g.help
+                g.paused = True
+            elif a == "sound":
+                if SND.toggle():
+                    SND.play("sound_on")
+            elif a is None:
+                ctl.feed(name, kind, now)
+                g.mouse[0] = None
+        apply_mouse(term, g, 0)
+        for r, seats, events, cleared in srv.inputs():
+            c = far.setdefault(r, Controls(r.kitty, solo=True))
+            if cleared:
+                c.held.clear()
+            for name, kind in events:
+                c.feed(name, kind, now)
+            if 1 in seats and not g.ai[1]:
+                g.inp[1] = c.direction(0, now, dt)
+        for i in srv.take_left():
+            if i == 1:
+                g.ai[1] = "normal"
+                g.brains[1] = Brain(g, 1, "normal", g.rnd)
+        g.inp[0] = ctl.direction(0, now, dt)
+        if g.inp[0] != (0.0, 0.0):
+            g.mouse[0] = None
+        g.update(dt)
+        srv.send_frames(now, lambda cols, rows, seats: render(g, cols, rows, remote=True))
+        cols, rows = term.size()
+        if cols < 60 or rows < 22:
+            too_small(term)
+            time.sleep(0.2)
+            continue
+        cv = render(g, cols, rows, kitty=kitty)
+        if srv.recent() and not g.paused and g.state != "over":
+            cv.put(0, 0, " %s " % srv.recent(), (230, 230, 240), (30, 30, 50))
+        term.write(cv.emit())
+        time.sleep(max(0, 1 / 60 - (time.time() - now)))
+
+
 def main():
     with PuckTerminal() as term:
         demo = TitleDemo()
         sel, help_, ti = 1, False, 1
-        n = len(ITEMS) + 1
+        n = len(ITEMS) + 2
         last = time.time()
         while True:
             now = time.time()
@@ -797,8 +895,10 @@ def main():
                     SND.play("start")
                     go = True
             if go:
-                if sel == len(ITEMS):
+                if sel == len(ITEMS) + 1:
                     run_auto(term, TARGETS[ti])
+                elif sel == LAN_ITEM:
+                    arcadenet.lan_menu(term, lan_spec(demo, TARGETS[ti]))
                 else:
                     play(term, sel, TARGETS[ti])
                 last = time.time()
@@ -976,6 +1076,16 @@ def selftest():
     term = FakeTerm([(0.1, "d"), (0.2, "right"), (0.3, "w"), (0.5, "esc"), (0.7, "q")])
     play(term, 0, 7)
     assert term.frames > 5
+    # the LAN game: the guest steers the right mallet with W A S D, the host ends it; a guest who leaves is
+    # replaced by the computer
+    spec = lan_spec(TitleDemo(), 5)
+    res, frames, sounds, srv = arcadenet.try_match(spec, [(1.4, "esc"), (1.5, "q")],
+                                                   [(0.2, "w", "press"), (0.3, "w", "press"), (0.4, "w", "press")])
+    assert res == "quit" and frames >= 5, (res, frames)
+    assert srv.game.mallets[1].y < TW / 2 - 0.05 and srv.game.ai == [None, None], srv.game.mallets[1].y
+    res, frames, sounds, srv = arcadenet.try_match(spec, [(1.6, "esc"), (1.7, "q")], [(0.1, "a", "press")],
+                                                   leave=True)
+    assert res == "quit" and any("left" in n for n in srv.notes) and srv.game.ai[1] == "normal", list(srv.notes)
     assert not os.path.exists(tmp), "a score was written without a win"
     print("Self-test ok: momentum and energy in hits, hard swings, wall restitution, no tunnelling in 300 fast "
           "shots, goals and posts, half confinement, hard beats easy %d/3, tap and held controls, titles at three "

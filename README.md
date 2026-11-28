@@ -66,6 +66,28 @@ Auto runs never enter the high-score list.
 
 The pause menu always reads: Esc / P / Enter continue, ? help, M sound on / off, V view, Q quit. No game ends on a single stray key.
 
+## LAN games
+
+Every game for more than one person can also be played at several computers in the same network (LAN or WLAN):
+SKYSHOT, LIGHTKEEPER (co-op), WEFTWAR (2 to 4), PEBBLEPUTT (2 to 4), PUCKSLIDE and FUSEYARD (1 to 4, see
+[its section](#fuseyard-keys), it has Host and Join right on its title). On the title screen pick `LAN game`, type
+your name once (it is kept for every game), then:
+
+* `Host a LAN game`: this computer runs the game. The lobby shows its address and who has joined; Enter starts as
+  soon as there are enough players.
+* `Join a LAN game`: games in the same network show up by themselves; or type the host's address (`192.168.1.20`,
+  or `192.168.1.20:47290`).
+
+The host's computer runs the whole game. Everyone who joined plays with the same keys as at one keyboard (either
+set, where a game has two) and sees the host's picture, drawn for the size of their own window, with the sounds
+too. `V` (view) and `M` (sound) work on each computer for itself. Esc on the host pauses the game for everyone;
+Esc at a joined computer opens a small menu of its own (`Q` there leaves) while the game goes on. Someone who
+leaves mid-game is taken over by the computer (in LIGHTKEEPER the keeper gets the boat back, `B`). After a match
+Enter takes everyone back to the lobby. These LAN games record no scores.
+
+The games use TCP port 47290 (the next free one up to 47299) and UDP port 47291 for finding games; if the macOS
+firewall asks whether Python may accept incoming connections, allow it on the host.
+
 ## Pixels: fine, smart or solid
 
 A bigger window gives finer pictures, not bigger blocks: every game keeps the same view of its world and
@@ -133,8 +155,8 @@ No dependencies: Python 3 on macOS or Linux (on Windows use WSL). Best in WezTer
 | **EMBERFALL** | A party role-playing adventure: create a hero, recruit companions, fight turn by turn with d20 rules, descend beneath the Ashpeaks. | 70x22+ |
 | **BLOCKFIRE** | A first-person arena shooter: raycast 3D with textured walls, lit floors and pixel-art robots that come in waves. | 60x18+ |
 | **DEEPCALL** | A submarine alone in the dark: only the sonar shows the trench, and every ping can be heard. Find air vents and salvage, keep the noise down, reach the Source at the bottom. | 60x20+ |
-| **LIGHTKEEPER** | Keep the lighthouse through stormy nights: light ships past the reefs, sound the horn in the fog, refill the oil and send the rescue boat. Alone, or two keepers at one keyboard. | 70x22+ |
-| **SKYSHOT** | An artillery duel on ground that breaks apart: set angle and power, read the wind, carve craters under the other tank. Four shells, best of three rounds. Two players at one keyboard or one against the computer (easy / normal / hard). | 70x22+ |
+| **LIGHTKEEPER** | Keep the lighthouse through stormy nights: light ships past the reefs, sound the horn in the fog, refill the oil and send the rescue boat. Alone, or two keepers at one keyboard or over the LAN. | 70x22+ |
+| **SKYSHOT** | An artillery duel on ground that breaks apart: set angle and power, read the wind, carve craters under the other tank. Four shells, best of three rounds. Two players at one keyboard or over the LAN, or one against the computer (easy / normal / hard). | 70x22+ |
 | **NIGHTDRIVE** | Race through the night against the clock: winding hilly roads, headlights and street lamps, traffic and oncoming cars, six stages from neon city to a rainstorm. | 70x22+ |
 | **ORBITAL** | A calm gravity puzzle: launch a probe past planets, moons, asteroid belts and wormholes to the dock ring. Fewer launches, more stars. | 70x22+ |
 | **LEAFLING** | A jump'n'run with a leaf for a hat: run, jump, glide and wall-jump through twelve levels in four worlds (sunlit forest canopy, crystal caves, wind-swept sky ruins, an autumn storm at night), with light motes, hidden seeds, lanterns, beetles, bats, spitting plants, two chases and two bosses. | 70x22+ |
@@ -149,15 +171,15 @@ No dependencies: Python 3 on macOS or Linux (on Windows use WSL). Best in WezTer
 | **CLATTERBELL** | Pinball with three original tables (a moonlit belfry, a lantern reef, a comet forge with a third flipper): real ball physics, a plunger you pull, bumpers, slingshots, ramps, orbits, drop targets, a spinner and a kickback; lock two balls for multiball, timed missions, a wizard mode, nudge and tilt. | 60x22+ |
 | **CAIRNWARD** | A box-pushing puzzle: push the scattered waystones back onto their rune sockets. 42 hand-made cairns in seven regions with black ice, one-way wind tiles, plates and gates and coloured stones; unlimited undo, par from the game's own solver. | 60x22+ |
 | **GEMBURROW** | A cave digger: Pell the badger digs for sunstones while rocks fall and roll, beetles and glassmoths creep along the walls, creepmoss spreads and rune seams turn rock to gems. Twenty caves in five worlds plus five intermissions, easy / normal / hard. | 60x22+ |
-| **WEFTWAR** | None | 60x22+ |
-| **PEBBLEPUTT** | Top-down minigolf: three courses of nine holes (a willow meadow, ice caverns, a copper foundry at night) with slopes, ramps, portals, ice, belts and moving gear arms. Solo or two to four players at one keyboard, scorecard with par. | 60x22+ |
+| **WEFTWAR** | Light-thread duels on a night loom: every cell your shuttle crosses is woven shut behind it, touch a thread and you burst, the last rider weaving takes the round. Two riders at one keyboard, two to four over the LAN, or one against one to three computer riders (easy / normal / hard). Seven looms, a Spur meter, four charms, a rating. | 60x22+ |
+| **PEBBLEPUTT** | Top-down minigolf: three courses of nine holes (a willow meadow, ice caverns, a copper foundry at night) with slopes, ramps, portals, ice, belts and moving gear arms. Solo or two to four players at one keyboard or over the LAN, scorecard with par. | 60x22+ |
 | **THATCHWOLD** | A turn-based settlement game: every turn is a season. Place cottages, farms, fisheries, woodcutters, quarries, mines, mills and markets where the land and the neighbours pay most, lay up stores for winter, answer droughts, fevers, floods, wolves and raiders. Five scenarios with goals plus an endless mode. | 70x22+ |
 | **FENMARK** | Logic puzzles: sound a peat fen for hidden bog-eyes (every fen is proved solvable without guessing) and mend leadlight windows from row and column clues (22 hand-made pictures plus random ones, each with exactly one solution). Hints that explain the next deduction, best times. | 70x22+ |
 | **HEATHSHOT** | A shooting gallery on the heath, for letting off steam: round, fluffy puffwings cross three layers of a panning landscape (the far ones are tiny and score most), peek over the stone wall, dart past in gold or drift over in a balloon. Eight shells, reload with a right click, combos up to x4. Leave the sheep alone. 90 Seconds or Zen (no clock, no record). Mouse or keys. | 60x22+ |
 | **BREAKROOM** | A rage room in four rooms (an office, a kitchen, a living room, a china shop): smash plates, mugs, vases, bottles, the monitor, the microwave, the big TV, figurines, urns, mirrors and the motivational poster with a hammer, a bat (it knocks things off the shelves) or a firecracker. Every shard falls and piles up, stacks collapse, the next room is delivered when one is rubble. Free Smash with a stress bar, or One Minute for the biggest damage bill. Mouse or keys. | 60x22+ |
 | **SOLACE** | Patience on a green felt table: Klondike (draw one or three), Spider (one, two or four suits) and FreeCell with the classic numbered deals. Drag cards with the mouse or click one to send it where it fits; unlimited undo, hints, auto-complete, a bouncing finale, best times and wins per game. In auto mode a solver plays. | 60x22+ |
 | **UNDERHOLD** | A roguelike for a quick run: one hero, ten new floors (halls and doors or caves with water and lava), field of view and a remembered map, seventeen kinds of foes (fast gnawers, slingers that keep their distance, splitting jellies, unseen lurkers, chanters that call for help) and the Mawkeeper at the bottom. Warden, Hexer or Skulker, a perk choice at every level, unidentified potions, scrolls and wands, food, permadeath. Mouse or keys. | 60x22+ |
-| **PUCKSLIDE** | Air hockey with real physics on a glowing table: puck and mallets with mass, elastic hits and rebounds, and a moving mallet's speed goes into the shot. Two players at one keyboard (W A S D against the arrow keys) or one against the computer (easy / normal / hard, also with the mouse). First to 5, 7 or 11. | 60x22+ |
+| **PUCKSLIDE** | Air hockey with real physics on a glowing table: puck and mallets with mass, elastic hits and rebounds, and a moving mallet's speed goes into the shot. Two players at one keyboard (W A S D against the arrow keys) or over the LAN, or one against the computer (easy / normal / hard, also with the mouse). First to 5, 7 or 11. | 60x22+ |
 | **SPANWORK** | A bridge builder with real physics: join the anchors with road, wood, steel and cable on a one-metre grid within a budget, then send the traffic across. Every joint has mass, every beam the stiffness, weight, strength and price of its material; loads show from green to red and beams snap past their limit in tension or compression. Eight crossings: wider gaps, a stepping stone, a van, a convoy, cable towers, a truck, a long haul. | 60x22+ |
 | **PROPWASH** | A vertical-scrolling shooter with propeller planes: fly the Kestrel over six stages (a strait full of islands, a harbour town, the top of the cloud deck, a desert, snowy mountains, a night storm at sea) against diving fighter formations, bombers, gunboats, tanks and flak. Five gun levels, wingmen, medals that climb in value, red squadrons, a roll and bombs; a midboss and a boss of several parts in every stage. Easy / normal / hard, stage select. | 70x22+ |
 | **FUSEYARD** | Fuse-pot duels in a walled yard for 1 to 4 people: drop clay pots that burst in a cross, burn the crates and grab what they hid (more pots, longer blasts, boots, kick, a ward, the curse that jumps from tinker to tinker); the last one standing wins the round, and late in a round the walls close in. One or two players at one keyboard with the computer filling the other places (easy / normal / hard), or a LAN party: one player hosts, the others join over the LAN or WLAN. Four yards, first to 1, 2, 3 or 5. | 70x22+ |
@@ -223,6 +245,7 @@ to wake the leviathan, tops up at vents and dives for the Source.
 | `R` | refill the oil (the light is off for a moment) | keeper: refill |
 | `B` | send the rescue boat to the nearest wreck | - |
 | `W` `A` `S` `D` | same as the arrows | second player: steer the rescue boat |
+| | | over the LAN: the host keeps the light, the one who joins steers the boat (arrows or W A S D both) |
 | Esc / `P` | pause menu (`Q` there: back to the menu) | |
 | `?` | help | |
 
@@ -242,7 +265,8 @@ lighthouse gets one improvement of your choice.
 | Esc / `P` | pause menu (`Q` there: back to the menu) |
 | `?` | help |
 
-Players take turns at the same keys; the coloured banner at the top says whose turn it is, and the dotted line
+Players take turns at the same keys (over the LAN each at their own computer, the host has the blue tank and the
+land fits the smaller window); the coloured banner at the top says whose turn it is, and the dotted line
 at the barrel shows the aim (longer means more power). The wind changes every turn and pushes the shells. Craters
 swallow tanks and falling hurts. The splitter bursts in three at the top of its arc, and the dirt ball buries the
 other tank in fresh earth.
@@ -536,7 +560,8 @@ grow finer with the window.
 On the Night Loom the dye riders steer shuttles of light, and every cell they cross is woven shut behind them with a
 burning weft thread. Touch a thread, a rival's or your own, or the loom's frame, and your shuttle bursts; its thread
 burns away and frees the cloth. The last rider weaving takes the round, first to two to five rounds takes the match.
-Two riders share one keyboard, or you take on one to three computer riders (Easy, Normal, Hard) that read the loom
+Two riders share one keyboard, two to four ride at their own computers over the LAN (each with either set of keys),
+or you take on one to three computer riders (Easy, Normal, Hard) that read the loom
 with flood fills, a who-gets-there-first split of the cloth and a fill estimate for closed pockets. Seven looms
 (Open Loom, Bobbin Court, Spindle Cross, Heddle Gates, Selvage Ring, Shuttle Run, Teasel Field), a Spur meter for
 bursts of speed and four charms: Spur, Skip (cross threads), Thimble (tear one) and Unravel (shed your oldest
@@ -563,7 +588,8 @@ ponds, mill sails, toadstool bumpers and rabbit burrows. Rimewater has ice that 
 crevasses, sliding ice gates, frost portals and ice ramps. The Copperworks at night has steel plates, conveyor
 belts, gear arms, pistons, pipes, springs and pools of glowing slag. Hills and slopes are shaded and marked with
 downhill arrows. Water and slag cost a stroke and put the pebble back, and the pebble only drops when it is slow
-over the cup. Play solo or with two to four players at one keyboard, with a scorecard showing par, birdies and
+over the cup. Play solo or with two to four players at one keyboard or over the LAN (only the keys of the player
+whose turn it is count), with a scorecard showing par, birdies and
 bogeys, and a best round for every course and the 27-hole Grand Tour.
 
 ## THATCHWOLD keys
@@ -736,6 +762,7 @@ drinks potions when low and heads down.
 | W A S D | left mallet |
 | Arrow keys | right mallet |
 | Mouse | left mallet against the computer |
+| | over the LAN: the host plays left, the one who joins right, both with either set of keys |
 | Left / Right (title) | goals to win: 5, 7 or 11 |
 | Esc / `P` | pause (`Q` there: back), `?` help |
 
@@ -835,6 +862,7 @@ change and share the games freely, as long as the copyright notice stays in.
 | `arcade.py` | the launcher |
 | `arcadekit.py` | shared toolkit: raw terminal input (with held keys via the kitty keyboard protocol, and the mouse), half-block pixel canvas with the ASCII views, block font, high scores |
 | `arcadesound.py` | the sound engine: synthesized effects, played without waiting |
+| `arcadenet.py` | LAN play: the host's server, the beacon that finds games, the lobby and join screens, pictures and keys over the wire |
 | `stackfall.py`, `depthwell.py`, `deepcall.py`, `lightkeeper.py`, `skyshot.py`, `nightdrive.py`, `orbital.py`, `leafling.py`, `glimmer.py`, `sporefield.py`, `scaffold.py`, `voidlance.py`, `heathshot.py`, `breakroom.py`, `spanwork.py`, `solace.py`, `underhold.py`, `puckslide.py`, `propwash.py`, `fuseyard.py` | the games written for the arcade (use `arcadekit.py`) |
 | `hoverdrift.py`, `emberfall.py`, `blockfire.py` | HOVERDRIFT, EMBERFALL and BLOCKFIRE (they run on their own and do not need `arcadekit.py`) |
 | `extras/emberfall-art/` | the source images and tools behind EMBERFALL's pictures (not in the Homebrew package) |

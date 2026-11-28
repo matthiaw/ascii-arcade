@@ -8,7 +8,8 @@ Shells carve craters, the ground gives way, tanks slide into the holes. Four she
 the plain shell, the heavy shell, the splitter that bursts in three at the top of its flight, and the
 dirt ball that buries the other side under fresh earth. Best of three rounds, new land every round.
 
-Two players at one keyboard (turns alternate), or one player against the computer (easy, normal, hard).
+Two players at one keyboard (turns alternate), one player against the computer (easy, normal, hard), or two
+computers over the LAN / WLAN: one hosts, the other joins.
 
 Part of the ASCII ARCADE. Pure Python 3, no dependencies (macOS / Linux, truecolor terminal recommended).
 Run:        python3 skyshot.py
@@ -24,6 +25,7 @@ from collections import deque
 from arcadekit import (AUTO_LABEL, AutoMode, Canvas, Terminal, clamp, load_scores, mix, overlay, shade, shared_key,
                        submit, title_screen)
 from arcadesound import Sound
+import arcadenet
 
 GAME = "skyshot"
 G = 50.0                 # gravity, pixels / s^2
@@ -1177,7 +1179,7 @@ def hud(cv, m):
         cv.put(cols - len(right), r, right, dim, HUD_BG)
 
 
-def render_over(cv, m, record, streak):
+def render_over(cv, m, record, streak, hint=None):
     wn = m.winner
     if m.mode == "cpu":
         head = "YOU WIN THE MATCH!" if wn == 0 else "THE COMPUTER WINS THE MATCH"
@@ -1186,7 +1188,9 @@ def render_over(cv, m, record, streak):
     lines = [head, "", "rounds   %d : %d" % tuple(m.wins)]
     if m.mode == "cpu":
         lines.append("win streak vs computer (%s): %d%s" % (DIFFS[m.diff], streak, "   new record!" if record else ""))
-    if m.mode == "auto":
+    if hint:
+        lines += ["", hint]
+    elif m.mode == "auto":
         lines += ["", "the next duel starts in a moment      Esc  back to the title"]
     else:
         lines += ["", "Enter  play again      Esc / Q  back to the title"]
@@ -1254,7 +1258,7 @@ class TitleDemo:
         cv = render(m, cols, rows, title_mode=True)
         best = load_scores().get(GAME, {})
         rec = "  ".join("%s %d" % (d, best["streak " + d]) for d in DIFFS if ("streak " + d) in best)
-        items = ["One player vs computer", "Two players (one keyboard)", AUTO_LABEL,
+        items = ["One player vs computer", "Two players (one keyboard)", "LAN game (two computers)", AUTO_LABEL,
                  "Computer:  < %s >" % DIFFS[self.diff]]
         title_screen(cv, "SKYSHOT", "an artillery duel on crumbling hills", items, sel,
                      "best win streak vs computer:  " + rec if rec else None,
@@ -1385,10 +1389,10 @@ def main():
                     elif k in ("q", "esc"):
                         return
                     elif k in ("up", "w"):
-                        sel = (sel - 1) % 4
+                        sel = (sel - 1) % 5
                         SND.play("menu")
                     elif k in ("down", "s"):
-                        sel = (sel + 1) % 4
+                        sel = (sel + 1) % 5
                         SND.play("menu")
                     elif k in ("left", "a", "right", "d"):
                         demo.diff = (demo.diff + (1 if k in ("right", "d") else -1)) % 3
@@ -1396,15 +1400,18 @@ def main():
                     elif k == "m":
                         if SND.toggle():
                             SND.play("sound_on")
-                    elif k in ("1", "2", "3"):
+                    elif k in ("1", "2", "3", "4"):
                         sel = int(k) - 1
                         go = True
                         SND.play("start")
                     elif k in ("enter", " "):
                         go = True
                         SND.play("start")
-            if sel == 2:
+            if sel == 3:
                 run_auto(term, demo.diff)
+                continue
+            if sel == 2:
+                arcadenet.lan_menu(term, lan_spec(demo))
                 continue
             mode = "two" if sel == 1 else "cpu"
             diff = demo.diff
@@ -1466,6 +1473,102 @@ def main():
                     time.sleep(max(0.0, 1 / 30 - (time.time() - now)))
                 if back:
                     break
+
+
+# =============================================================================================
+# The LAN game: the host has the blue tank, the one who joins the red one (see arcadenet)
+# =============================================================================================
+LAN_PAUSE = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "M                 sound on / off",
+             "V                 view", "Q                 end the game for both", "", "(the other one waits)"]
+
+
+def lan_spec(demo):
+    def backdrop(cols, rows, dt):
+        return render(demo.step(cols, rows, dt), cols, rows, title_mode=True)
+    return arcadenet.LanGame(GAME, "SKYSHOT", match=lan_match, backdrop=backdrop, help=lambda kitty=True: HELP,
+                             info=lambda: "best of three rounds, new land every round", players=(2, 2),
+                             size=(70, 22), sound=SND)
+
+
+def lan_frame(m, cols, rows):
+    """A guest's picture: the land as big as everyone's smallest window (the guest's window frames it)."""
+    cols, rows = min(cols, m.W), min(rows, m.H // 2 + 1)
+    cv = render(m, cols, rows)
+    if m.paused:
+        overlay(cv, ["P A U S E D", "", "the host paused the game"])
+    if m.phase == "matchover":
+        render_over(cv, m, None, 0, hint="the host starts the next match")
+    return cv
+
+
+def lan_match(term, srv):
+    """The host's match. Returns 'lobby' (Enter after the match) or 'quit'."""
+    cols, rows = srv.min_size(*term.size())
+    m = Match(*world_size(cols, rows), mode="two", diff=1, names=[s["name"] for s in srv.seats[:2]])
+    srv.game = m
+    last = time.time()
+    while True:
+        now = time.time()
+        srv.poll(now)
+        arcadenet.play_sound(srv.spec, srv.sounds)
+        srv.sounds = []
+        for k in term.keys(0):
+            if m.phase == "matchover":
+                if k in ("q", "esc"):
+                    return "quit"
+                if k in ("enter", " ") and m.phase_t > 0.5:
+                    return "lobby"
+                continue
+            a = shared_key(k, m.paused, pause_keys=("esc", "p", "q"))
+            if a == "pause":
+                m.paused = True
+                SND.play("pause")
+            elif a == "resume":
+                m.paused = m.help = False
+            elif a == "quit":
+                return "quit"
+            elif a == "help":
+                m.help = not m.help
+                m.paused = True
+            elif a == "sound":
+                if SND.toggle():
+                    SND.play("sound_on")
+            elif a is None:
+                if m.phase == "roundover" and k in ("enter", " "):
+                    m.skip()
+                elif m.turn == 0:
+                    m.key(k)
+        for r, seats, events, cleared in srv.inputs():
+            for k, kind in events:
+                if kind == "release" or m.paused or m.phase == "matchover":
+                    continue
+                if m.phase == "roundover" and k in ("enter", " "):
+                    m.skip()
+                elif m.turn in seats:
+                    m.key(k)
+        for i in srv.take_left():
+            if i == 1:
+                m.cpu[1] = True
+                m.names[1] = "COMPUTER"
+                if m.turn == 1 and m.phase == "aim":
+                    m.begin_turn()
+        m.update(min(0.1, now - last), budget=0.012)
+        last = now
+        srv.send_frames(now, lambda c, r, seats: lan_frame(m, c, r))
+        cols, rows = term.size()
+        if cols < 70 or rows < 22:
+            too_small(term)
+            time.sleep(0.2)
+            continue
+        cv = render(m, cols, rows)
+        if m.paused:
+            overlay(cv, HELP if m.help else LAN_PAUSE)
+        elif srv.recent():
+            cv.put(0, 0, " %s " % srv.recent(), (230, 230, 240), (30, 30, 50))
+        if m.phase == "matchover":
+            render_over(cv, m, None, 0, hint="Enter  back to the lobby      Esc / Q  end")
+        term.write(cv.emit())
+        time.sleep(max(0.0, 1 / 30 - (time.time() - now)))
 
 
 # =============================================================================================
@@ -1631,6 +1734,18 @@ def selftest():
     am.phase, am.winner, am.wins = "matchover", 1, [1, 2]
     auto.key("?")
     auto_frame(am, auto, 70, 22).emit(True)
+    # the LAN game: the guest aims and fires only on its own turn; the world fits the smaller window
+    demo = TitleDemo(100, 32)
+    spec = lan_spec(demo)
+    res, frames, sounds, srv = arcadenet.try_match(
+        spec, [(0.2, "left"), (0.3, "left"), (0.5, " "), (5.0, "esc"), (5.1, "q")],
+        [(0.1, "up", "press"), (0.15, "up", "press")] + [(4.0 + i * 0.02, "up", "press") for i in range(5)],
+        seconds=6, size=(100, 32), guest_size=(80, 26))
+    ms = srv.game
+    assert res == "quit" and frames >= 5 and (ms.W, ms.H) == world_size(80, 26), (res, frames, ms.W, ms.H)
+    assert ms.shots[0] == 1 and ms.tanks[0].angle == 54 and ms.turn == 1 and ms.tanks[1].power == 65, \
+        (ms.shots, ms.tanks[0].angle, ms.turn, ms.tanks[1].power)
+    lan_frame(ms, 200, 60).emit(True)
     print("Self-test ok: %d lands with both tanks on solid ground; craters dig, earth settles, tanks fall; "
           "splitter bursts in 3; stationary target hit by hard %d/40, normal %d/40, easy %d/40; "
           "7 computer matches finished in %s turns; frames at 70x22 and 160x45 render; auto mode ran 6s at x8 "

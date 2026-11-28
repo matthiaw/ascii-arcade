@@ -176,6 +176,7 @@ def write_wav(path, samples, rate=RATE):
 # ------------------------------------------------------------------------------------------------
 class Sound:
     """A bank of named sounds for one game."""
+    tap = None      # a list while a LAN game is hosted: every sound played is noted there for the players who joined
 
     def __init__(self, game, bank, volume=0.55):
         self.game = game
@@ -238,6 +239,8 @@ class Sound:
     def play(self, name, vol=1.0, gap=0.04):
         """Play a sound without waiting. The same sound is not restarted within `gap` seconds.
         Starting the player takes some milliseconds, so it happens on a background thread."""
+        if Sound.tap is not None and name in self.bank and len(Sound.tap) < 64:
+            Sound.tap.append(name)
         if not self.enabled or name not in self.bank:
             return
         now = time.time()

@@ -8,8 +8,8 @@ sails, toadstool bumpers, rabbit burrows), Rimewater (ice that never lets go, sn
 sliding ice gates, frost portals, ice ramps) and the Copperworks at night (steel plates, conveyor belts, gear
 arms, pistons, pipes, spring bumpers and pools of glowing slag). Hills and slopes bend every putt; water costs a
 stroke and puts the pebble back. Aim finely, set the power with the swing meter (or a preset), and sink the pebble
-- it only drops when it is slow enough over the cup. Solo, or two to four players at one keyboard; scorecard with
-par, birdies and bogeys; a best round for every course. The auto-mode caddie plans each putt by playing it through
+- it only drops when it is slow enough over the cup. Solo, two to four players at one keyboard or at two to four
+computers over the LAN / WLAN; scorecard with par, birdies and bogeys; a best round for every course. The auto-mode caddie plans each putt by playing it through
 the game's own physics.
 
 Part of the ASCII ARCADE. Pure Python 3, no dependencies (macOS / Linux, truecolor terminal recommended).
@@ -28,6 +28,7 @@ import time
 from arcadekit import (ACCENTS, AUTO_LABEL, PAUSE_LINES, AutoMode, Canvas, HeldKeys, KeyTerminal, clamp, load_scores,
                        mix, overlay, shade, shared_key, submit, title_screen)
 from arcadesound import Sound
+import arcadenet
 
 GAME = "pebbleputt"
 NAME = "PEBBLEPUTT"
@@ -2346,7 +2347,7 @@ def draw_card(cv, g):
     draw_runs(cv, card_lines(g), "SCORECARD", foot)
 
 
-def render_over(g, cv, records=(), auto=False):
+def render_over(g, cv, records=(), auto=False, hint=None):
     st = g.standings()
     par = g.par_so_far(len(g.holes))
     if g.solo:
@@ -2363,7 +2364,7 @@ def render_over(g, cv, records=(), auto=False):
     foot = ["%d birdie%s or better, %d hole%s in one" % (birdies, "" if birdies == 1 else "s", aces, "" if aces == 1 else "s")]
     for name in records:
         foot.append("** NEW COURSE RECORD: %s **" % name)
-    foot.append("auto mode: a new round starts" if auto else "Enter: again   Esc / Q: menu")
+    foot.append(hint or ("auto mode: a new round starts" if auto else "Enter: again   Esc / Q: menu"))
     draw_runs(cv, card_lines(g, final=True), head, foot, GOLD if records else (120, 200, 140))
 
 
@@ -2570,7 +2571,8 @@ def course_key(c):
 
 
 def menu_items(course, party):
-    return ["Play solo", "Party        < %d players >" % party, "Course       < %s >" % course_label(course), AUTO_LABEL]
+    return ["Play solo", "Party        < %d players >" % party, "Course       < %s >" % course_label(course),
+            "LAN game     2 to 4 computers", AUTO_LABEL]
 
 
 def render_menu(demo, cols, rows, sel, course, party, dt, help_, kitty):
@@ -2661,6 +2663,125 @@ def play(term, ctl, course, n):
         time.sleep(max(0.0, 1 / 30 - (time.time() - now)))
 
 
+# =============================================================================================
+# The LAN game: two to four computers, every player at their own (see arcadenet)
+# =============================================================================================
+LAN_PAUSE = ["P A U S E D", "", "Esc / P / Enter   continue", "?                 help", "M                 sound on / off",
+             "V                 view", "Q                 end the round for everyone", "", "(the others wait)"]
+
+
+def lan_spec(demo, course):
+    return arcadenet.LanGame(GAME, NAME, match=lambda term, srv: lan_match(term, srv, course),
+                             backdrop=lambda cols, rows, dt: demo.scene(cols, rows, dt), help=help_lines,
+                             info=lambda: "course: %s" % course_label(course), players=(2, 4), size=(60, 22),
+                             sound=SND)
+
+
+def lan_frame(g, cols, rows):
+    cv = render(g, cols, rows)
+    if g.paused:
+        overlay(cv, ["P A U S E D", "", "the host paused the game"])
+    elif g.over:
+        render_over(g, cv, hint="the host starts the next round")
+    return cv
+
+
+def lan_match(term, srv, course, setup=None):
+    """The host's round. Every seat is one player; only the keys of the player whose turn it is count.
+    Returns 'lobby' (Enter after the round) or 'quit'. setup(game) is for the self-test."""
+    kitty = getattr(term, "kitty", False)
+    g = Game(course, min(4, len(srv.seats)))
+    for p, seat in zip(g.players, srv.seats):
+        p.name = seat["name"]
+    if setup:
+        setup(g)
+    srv.game = g
+    ctl = Controls(kitty)
+    far = {}
+    last = time.time()
+    while True:
+        now = time.time()
+        dt = min(0.1, now - last)
+        last = now
+        srv.poll(now)
+        arcadenet.play_sound(srv.spec, srv.sounds)
+        srv.sounds = []
+        for name, kind in arcadenet.term_events(term):
+            if kind != "press":
+                ctl.feed(name, kind, now)
+                continue
+            if g.over:
+                if name in ("q", "esc"):
+                    return "quit"
+                if name in ("enter", " "):
+                    SND.play("start")
+                    return "lobby"
+                continue
+            if g.show_card and name in ("esc", "tab"):
+                g.show_card = False
+                continue
+            a = shared_key(name, g.paused)
+            if a == "pause":
+                g.paused = True
+                g.swing = None
+                ctl.reset()
+                SND.play("pause")
+            elif a == "resume":
+                g.paused = g.help = False
+                ctl.reset()
+            elif a == "quit":
+                return "quit"
+            elif a == "help":
+                g.help = not g.help
+                g.paused = True
+                ctl.reset()
+            elif a == "sound":
+                if SND.toggle():
+                    SND.play("sound_on")
+            elif a is None:
+                ctl.feed(name, kind, now)
+        turn = g.cur.i
+        inp = ctl.sample(now, dt)
+        if turn not in srv.here():
+            inp = None
+        for r, seats, events, cleared in srv.inputs():
+            c = far.setdefault(r, Controls(r.kitty))
+            if cleared:
+                c.reset()
+            for name, kind in events:
+                c.feed(name, kind, now)
+            mine = c.sample(now, dt)
+            if turn in seats:
+                inp = mine
+        for i in srv.take_left():
+            if i < len(g.players):
+                g.players[i].bot = True
+                g.players[i].name = "CADDIE"
+                if g.bot is None:
+                    g.bot = Bot(g, g.seed)
+                g.realtime = True
+                if g.cur.i == i:
+                    g.plan = None
+        if not g.paused:
+            g.think(0.012)
+            g.update(dt, inp)
+        srv.send_frames(now, lambda cols, rows, seats: lan_frame(g, cols, rows))
+        cols, rows = term.size()
+        if cols < 60 or rows < 22:
+            too_small(term)
+            time.sleep(0.2)
+            continue
+        cv = render(g, cols, rows)
+        if g.paused:
+            overlay(cv, help_lines(kitty) if g.help else LAN_PAUSE)
+        elif g.over:
+            render_over(g, cv, hint="Enter: back to the lobby   Esc / Q: end")
+        elif srv.recent():
+            cv.put(0, 0, " %s " % srv.recent(), (230, 230, 240), (30, 30, 50))
+        term.write(cv.emit())
+        time.sleep(max(0.0, 1 / 30 - (time.time() - now)))
+
+
 def main():
     with KeyTerminal() as term:
         ctl = Controls(term.kitty)
@@ -2689,10 +2810,10 @@ def main():
                 elif k in ("q", "esc"):
                     return
                 elif k in ("down", "s", "tab"):
-                    sel = (sel + 1) % 4
+                    sel = (sel + 1) % 5
                     SND.play("menu")
                 elif k in ("up", "w"):
-                    sel = (sel - 1) % 4
+                    sel = (sel - 1) % 5
                     SND.play("menu")
                 elif k in ("left", "a", "right", "d"):
                     step = 1 if k in ("right", "d") else -1
@@ -2709,8 +2830,13 @@ def main():
                     go = True
             if not go:
                 continue
-            if sel == 3:
+            if sel == 4:
                 run_auto(term, course, 1)
+                last = time.time()
+                continue
+            if sel == 3:
+                arcadenet.lan_menu(term, lan_spec(demo, course))
+                ctl.reset()
                 last = time.time()
                 continue
             n = party if sel == 1 else 1
@@ -2970,6 +3096,24 @@ def selftest():
     a, b = screenshot(80, 24), screenshot(80, 24)
     assert a.px == b.px and a.text == b.text, "the screenshot is not deterministic"
     print("screenshot: deterministic")
+    # 9. the LAN game: only the player whose turn it is steers; a player who leaves gets the caddie
+    def guest_first(g):
+        g.order = [1, 0]
+    spec = lan_spec(TitleDemo(), 0)
+    spec.match = lambda term, srv: lan_match(term, srv, 0, setup=guest_first)
+    res, frames, sounds, srv = arcadenet.try_match(
+        spec, [(0.7, "up"), (2.2, "esc"), (2.3, "q")],
+        [(0.3, "enter", "press")] + [(0.6 + i * 0.1, "up", "press") for i in range(3)] + [(1.3, "enter", "press")],
+        seconds=3)
+    g = srv.game
+    assert res == "quit" and frames >= 5, (res, frames)
+    assert g.players[0].preset == 0.45, [p.preset for p in g.players]          # the host's Up was not its turn
+    assert g.strokes == 1 and g.cur.i == 1 and abs(g.last_power - g.players[1].preset) < 1e-9, (g.strokes, g.cur.i)
+    res, frames, sounds, srv = arcadenet.try_match(spec, [(1.5, "esc"), (1.6, "q")], [(0.1, "x", "press")],
+                                                   leave=True)
+    assert srv.game.players[1].bot and srv.game.bot is not None
+    lan_frame(srv.game, 80, 24).emit(True)
+    print("LAN: turns, the caddie for a player who left")
     print("Self-test ok (%.1f s)" % (time.time() - t0))
 
 
