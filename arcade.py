@@ -9,6 +9,7 @@ Pure Python 3, no dependencies (macOS / Linux, truecolor terminal recommended).
 import math
 import os
 import random
+import signal
 import subprocess
 import sys
 import textwrap
@@ -17,6 +18,7 @@ import time
 import depthwell
 from arcadesound import Sound
 import arcadekit
+import arcadezoom
 from arcadesound import load_settings, save_settings
 from arcadekit import (ACCENTS, COPYRIGHT, VERSION, Canvas, Terminal, clamp, draw_title, footer, load_scores, mix, overlay, shade,
                        title_width)
@@ -189,6 +191,8 @@ HELP = [
     "G                    pixels: fine / smart / solid",
     "                     (smart and solid avoid streaks in macOS Terminal)",
     "A                    view: pixels / ASCII / mono (in a game: V)",
+    "R                    finer pixels: a smaller font while the arcade runs",
+    "                     (normal / fine / finer; undone when you quit)",
     "Esc / Q              quit",
     "",
     "The same in every game:",
@@ -636,7 +640,10 @@ def render(cols, rows, sel, t, note, help_=False, all_=False):
     view = arcadekit.VIEW_NAMES[arcadekit.VIEW_MODE]
     hide = "X %s" % ("show" if g["file"] in HIDDEN else "hide")
     vall = "V %s" % ("hide hidden" if all_ else "all (%d hidden)" % len(HIDDEN) if HIDDEN else "all")
-    if cols >= 142:
+    if cols >= 160:
+        footer(cv, "Up/Down choose   Enter play   %s   %s   M %s   G pixels: %s   A view: %s   R font: %s   ? help   Esc quit"
+               % (hide, vall, snd, pix, view, arcadezoom.ZOOM.level))
+    elif cols >= 142:
         footer(cv, "Up/Down choose   Enter play   %s   %s   M %s   G pixels: %s   A view: %s   ? help   Esc quit"
                % (hide, vall, snd, pix, view))
     elif cols >= 130:
@@ -800,6 +807,10 @@ def menu(sel, note):
                 elif k == "a":
                     arcadekit.cycle_view()
                     SND.play("move")
+                elif k == "r":
+                    note = arcadezoom.cycle() or "font: %s - R again for %s" % (
+                        arcadezoom.ZOOM.level, arcadezoom.LEVELS[(arcadezoom.LEVELS.index(arcadezoom.ZOOM.level) + 1) % 3])
+                    SND.play("move")
                 elif k == "x":
                     g = GAMES[sel]
                     if toggle_hidden(g):
@@ -841,7 +852,8 @@ def menu(sel, note):
                     return sel
 
 
-USAGE = """usage: arcade [GAME | --list | --version | --help | --pixels fine|smart|solid | --view pixels|ascii|mono]
+USAGE = """usage: arcade [GAME | --list | --version | --help | --pixels fine|smart|solid | --view pixels|ascii|mono
+              | --zoom normal|fine|finer|setup]
 
 Without arguments the ASCII ARCADE menu opens. With a game name that game starts straight away,
 for example:  arcade stackfall
@@ -857,6 +869,12 @@ The choice is remembered for every game (also: G in the menu; ARCADE_PIXELS=... 
 --view mono      the same in one colour, plain ASCII
 The choice is remembered for every game (also: A in the menu, V in any game and its pause menu;
 ARCADE_VIEW=... for one run).
+
+--zoom fine      finer pixels: the arcade makes the terminal's font smaller while it runs (fine 75 %, finer
+--zoom finer     55 %) and puts it back when you quit; also R in the menu. Works in WezTerm (after
+--zoom normal    `arcade --zoom setup`), macOS Terminal.app, kitty (allow_remote_control yes) and iTerm2
+                 (with a profile named "ASCII Arcade" that has a small font). Elsewhere: Cmd - / Ctrl -.
+--zoom setup     prints the lines WezTerm needs in ~/.wezterm.lua
 """
 
 # in macOS Terminal.app, until the player has chosen a pixel style once, the menu suggests solid pixels
@@ -902,6 +920,16 @@ def cli(args):
         else:
             arcadekit.set_view(mode)
             print("view: %s (remembered for every game)" % mode)
+    elif a in ("--zoom", "zoom"):
+        mode = args[1].lower() if len(args) > 1 else ""
+        if mode == "setup":
+            print(arcadezoom.WEZTERM_SNIPPET)
+            print("WezTerm config: %s" % ("contains it already" if arcadezoom.wezterm_ready() else "not set up yet"))
+        elif mode not in arcadezoom.LEVELS:
+            print("zoom: %s   (arcade --zoom normal | fine | finer | setup)" % load_settings().get("zoom", "normal"))
+        else:
+            save_settings(zoom=mode)
+            print("zoom: %s (used from the next start of the menu)" % mode)
     elif a in ("--list", "list"):
         for g in GAMES:
             print("%-12s %s" % (g["name"].lower(), g["tag"]))
@@ -939,7 +967,12 @@ if __name__ == "__main__":
     rc = cli(sys.argv[1:])
     if rc is not None:
         sys.exit(rc)
+    signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))
+    signal.signal(signal.SIGHUP, lambda *a: sys.exit(0))
     try:
+        arcadezoom.startup()
         main()
     except KeyboardInterrupt:
         pass
+    finally:
+        arcadezoom.ZOOM.restore()

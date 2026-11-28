@@ -52,6 +52,7 @@ Homebrew brings its own Python (3.14); the games need nothing else.
 | P | pause (real-time games; in EMBERFALL P drinks a potion, Esc opens its game menu: M sound, Q save and quit) |
 | M | in the pause menu and in the launcher: sound on / off (remembered for every game) |
 | G | in the launcher: pixels fine / smart / solid (smart and solid avoid streaks in macOS Terminal) |
+| R | in the launcher: finer pixels - a smaller font while the arcade runs (normal / fine / finer, see [Finer pixels](#finer-pixels-from-the-launcher)); remembered, undone when you quit |
 | X / V | in the launcher: take the highlighted game off the list and the start screen / show all games (X there puts a hidden one back); remembered |
 | V | in a game and in its pause menu: the view - pixels, ASCII art or mono ASCII (see [Views](#views-pixels-ascii-art-or-mono)); remembered. FENMARK's window panes use V for the brush lock, there it is in the pause menu; EMBERFALL keeps its own map views on v |
 | A | in the launcher: the same view switch |
@@ -112,6 +113,21 @@ Press **G** in the launcher to cycle through three pixel styles; the choice is k
 
 Also `arcade --pixels fine|smart|solid`, or `ARCADE_PIXELS=smart arcade` for a single run. In Terminal.app the
 launcher suggests it until you have chosen once.
+
+## Finer pixels from the launcher
+
+Press **R** in the launcher to make the terminal's font smaller while the arcade runs: **fine** (75 % of your
+font size), **finer** (55 %), back to **normal**. The window keeps its size on screen and gets more character
+cells, so every game draws with more detail. When you quit the arcade the font and window are put back. The
+level is remembered and used again at the next start (also: `arcade --zoom normal|fine|finer`).
+
+| Terminal | What it needs |
+|---|---|
+| **WezTerm** | a few lines in `~/.wezterm.lua` (above `return config`): `arcade --zoom setup` prints them. They set a font override for this one window only. |
+| **macOS Terminal.app** | nothing; the first time macOS asks whether the terminal may control Terminal.app (AppleScript). It changes the font of the tab's profile and keeps the old size in `~/.ascii_arcade_settings.json`, so even after a crash the next start puts it back. |
+| **kitty** | `allow_remote_control yes` in `kitty.conf` |
+| **iTerm2** | a profile named `ASCII Arcade` with a small font; the arcade switches to it and back to your profile |
+| others (Ghostty, ...) | not possible from inside; press Cmd - (or Ctrl -) yourself |
 
 ## Views: pixels, ASCII art or mono
 
