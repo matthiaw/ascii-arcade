@@ -1,10 +1,10 @@
 # ASCII ARCADE
 
-![The ASCII ARCADE start screen: all thirty games playing at once](docs/screenshots/start.gif)
+![The ASCII ARCADE start screen: all thirty-two games playing at once](docs/screenshots/start.gif)
 
 A little collection of games for the terminal. Start the launcher: the start screen shows all games playing at once
 (Enter starts the highlighted one, any other key opens the menu). Pick a game with the arrow keys (or its number:
-1-30, two digits typed quickly one after the other), press Enter. When the game ends you are back in the menu.
+1-32, two digits typed quickly one after the other), press Enter. When the game ends you are back in the menu.
 
 ```sh
 python3 arcade.py
@@ -159,6 +159,8 @@ No dependencies: Python 3 on macOS or Linux (on Windows use WSL). Best in WezTer
 | **UNDERHOLD** | A roguelike for a quick run: one hero, ten new floors (halls and doors or caves with water and lava), field of view and a remembered map, seventeen kinds of foes (fast gnawers, slingers that keep their distance, splitting jellies, unseen lurkers, chanters that call for help) and the Mawkeeper at the bottom. Warden, Hexer or Skulker, a perk choice at every level, unidentified potions, scrolls and wands, food, permadeath. Mouse or keys. | 60x22+ |
 | **PUCKSLIDE** | Air hockey with real physics on a glowing table: puck and mallets with mass, elastic hits and rebounds, and a moving mallet's speed goes into the shot. Two players at one keyboard (W A S D against the arrow keys) or one against the computer (easy / normal / hard, also with the mouse). First to 5, 7 or 11. | 60x22+ |
 | **SPANWORK** | A bridge builder with real physics: join the anchors with road, wood, steel and cable on a one-metre grid within a budget, then send the traffic across. Every joint has mass, every beam the stiffness, weight, strength and price of its material; loads show from green to red and beams snap past their limit in tension or compression. Eight crossings: wider gaps, a stepping stone, a van, a convoy, cable towers, a truck, a long haul. | 60x22+ |
+| **PROPWASH** | A vertical-scrolling shooter with propeller planes: fly the Kestrel over six stages (a strait full of islands, a harbour town, the top of the cloud deck, a desert, snowy mountains, a night storm at sea) against diving fighter formations, bombers, gunboats, tanks and flak. Five gun levels, wingmen, medals that climb in value, red squadrons, a roll and bombs; a midboss and a boss of several parts in every stage. Easy / normal / hard, stage select. | 70x22+ |
+| **FUSEYARD** | Fuse-pot duels in a walled yard for 1 to 4 people: drop clay pots that burst in a cross, burn the crates and grab what they hid (more pots, longer blasts, boots, kick, a ward, the curse that jumps from tinker to tinker); the last one standing wins the round, and late in a round the walls close in. One or two players at one keyboard with the computer filling the other places (easy / normal / hard), or a LAN party: one player hosts, the others join over the LAN or WLAN. Four yards, first to 1, 2, 3 or 5. | 70x22+ |
 
 ## Screenshots
 
@@ -186,6 +188,8 @@ No dependencies: Python 3 on macOS or Linux (on Windows use WSL). Best in WezTer
 | **HEATHSHOT** | **BREAKROOM** | **SPANWORK** |
 | <img src="docs/screenshots/solace.png" alt="SOLACE" width="260"> | <img src="docs/screenshots/underhold.png" alt="UNDERHOLD" width="260"> | <img src="docs/screenshots/puckslide.png" alt="PUCKSLIDE" width="260"> |
 | **SOLACE** | **UNDERHOLD** | **PUCKSLIDE** |
+| <img src="docs/screenshots/propwash.png" alt="PROPWASH" width="260"> | <img src="docs/screenshots/fuseyard.png" alt="FUSEYARD" width="260"> | |
+| **PROPWASH** | **FUSEYARD** | |
 
 The pictures come straight from the games' own canvases: `python3 scripts/screenshots.py` renders them again
 (needs Pillow).
@@ -745,6 +749,63 @@ computer W A S D, the arrows and the mouse all steer you. The computer reacts a 
 the walls, guards its goal and attacks with straight or banked shots. Wins against each difficulty are counted.
 Auto mode lets the computer play both sides.
 
+## PROPWASH keys
+
+| Key | |
+|---|---|
+| Arrows / WASD | fly (8 directions) |
+| Space / `Z` | fire (hold it) |
+| `F` | auto-fire on / off (on at the start) |
+| `X` / `B` | bomb: wipes out every bullet and hits everything on screen |
+| `C` | roll: a moment untouchable, then it recharges (the ROLL gauge) |
+| Esc / `P` | pause menu (`Q` there: back to the menu, `M`: sound on / off) |
+| `?` | help |
+
+Only the little glass cockpit in the middle of the Kestrel can be hit. `P` items raise the guns through five
+levels (twin guns, then outer guns, two spreads and homing rockets), `B` adds a bomb, `W` brings two wingmen who
+fire with you and each take one bullet, `1` is an extra life (and so is every 200,000 points after the first
+100,000). Ground targets leave gold medals: each one caught is worth more than the last (200 up to 5,000), and one
+that falls past starts the ladder again. Shoot down every plane of a red squadron for a `P`. Losing a plane costs
+one gun level (it drops as a `P` you can catch again) and the wingmen.
+
+Every stage has a midboss halfway and a boss at the end, built from parts: engines and turrets first, then the
+core opens (the last boss has three phases). Shots only hit the parts that are open; the bar at the top shows what
+is left. A stage clear pays for the share of planes downed and the bombs still in stock. Stages unlock as you reach
+them and can be picked on the title; a continue after the game over keeps you where you are but resets the score.
+In terminals without the kitty keyboard protocol held keys follow the key repeat, which is why auto-fire is on from
+the start.
+
+## FUSEYARD keys
+
+| Key | |
+|---|---|
+| `W` `A` `S` `D` / arrows | walk (playing alone, either set works) |
+| Space / `E` | drop a fuse pot |
+| arrows + Enter / `0` | the second player, when two share one keyboard (the first one has W A S D + Space) |
+| Esc / `P` | pause menu (`Q` there: back to the menu, `M`: sound on / off); in a LAN game a menu, the game goes on |
+| `?` | help |
+
+A pot bursts after 2.6 seconds in a cross along the lanes; pillars stop the blast, the first crate in its way
+burns, and a pot the blast reaches goes off too. Burnt crates leave items: `P` one pot more, `F` a longer blast,
+`S` quicker boots, `K` kick (walk into a pot and it slides until something stops it), `W` a ward that takes one
+hit, and `?` the curse (slow feet, short fuses, dripping pots or tiny blasts for twelve seconds; it jumps to
+whoever you touch). A tinker who is out drops some of what they carried. The last one standing wins the round; at
+0:45 the walls start to close in from the outside, ring by ring. A tap walks exactly one tile, a held key keeps
+walking; in classic terminals (without the kitty keyboard protocol) every key repeat walks one tile on.
+
+On the title: `Players here` (one or two at this keyboard), `Tinkers` (2 to 4; the computer fills the places
+nobody takes), `Computer` (easy / normal / hard), `Yard` (Courtyard, Mill Yard, Frost Yard, Foundry or changing
+every round), `Wins needed` and `Your name` (just type it).
+
+**LAN party.** One player picks `Host a LAN game`: that computer becomes the server and runs the game, and the
+lobby shows its address. The others pick `Join a LAN game`: games in the same network (LAN or WLAN) show up there
+by themselves, or the host's address can be typed (`192.168.1.20`, or `192.168.1.20:47290`). Two people may share
+each keyboard, up to four players in all; the host starts with Enter and empty places go to the computer. Someone
+who leaves mid-game is taken over by the computer; after a match Enter takes everyone back to the lobby. The game
+uses TCP port 47290 (the next free one up to 47299) and UDP port 47291 for finding games; if the macOS firewall
+asks whether Python may accept incoming connections, allow it on the host. Wins of whole matches against the
+computer are counted per difficulty.
+
 ## Versions and releases
 
 Versioning is automatic: every push to `main` that changes the games becomes a release
@@ -774,7 +835,7 @@ change and share the games freely, as long as the copyright notice stays in.
 | `arcade.py` | the launcher |
 | `arcadekit.py` | shared toolkit: raw terminal input (with held keys via the kitty keyboard protocol, and the mouse), half-block pixel canvas with the ASCII views, block font, high scores |
 | `arcadesound.py` | the sound engine: synthesized effects, played without waiting |
-| `stackfall.py`, `depthwell.py`, `deepcall.py`, `lightkeeper.py`, `skyshot.py`, `nightdrive.py`, `orbital.py`, `leafling.py`, `glimmer.py`, `sporefield.py`, `scaffold.py`, `voidlance.py`, `heathshot.py`, `breakroom.py`, `spanwork.py`, `solace.py`, `underhold.py`, `puckslide.py` | the games written for the arcade (use `arcadekit.py`) |
+| `stackfall.py`, `depthwell.py`, `deepcall.py`, `lightkeeper.py`, `skyshot.py`, `nightdrive.py`, `orbital.py`, `leafling.py`, `glimmer.py`, `sporefield.py`, `scaffold.py`, `voidlance.py`, `heathshot.py`, `breakroom.py`, `spanwork.py`, `solace.py`, `underhold.py`, `puckslide.py`, `propwash.py`, `fuseyard.py` | the games written for the arcade (use `arcadekit.py`) |
 | `hoverdrift.py`, `emberfall.py`, `blockfire.py` | HOVERDRIFT, EMBERFALL and BLOCKFIRE (they run on their own and do not need `arcadekit.py`) |
 | `extras/emberfall-art/` | the source images and tools behind EMBERFALL's pictures (not in the Homebrew package) |
 | `VERSION` | the current version (written by the release workflow) |

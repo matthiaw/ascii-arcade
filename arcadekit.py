@@ -973,6 +973,8 @@ ACCENTS = {  # (top, bottom) of each game's title gradient
     "SOLACE": ((250, 236, 190), (60, 160, 100)),
     "UNDERHOLD": ((230, 200, 140), (150, 70, 60)),
     "PUCKSLIDE": ((120, 230, 255), (255, 110, 80)),
+    "PROPWASH": ((255, 224, 130), (90, 160, 230)),
+    "FUSEYARD": ((255, 214, 120), (232, 92, 52)),
 }
 
 

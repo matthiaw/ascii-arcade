@@ -138,6 +138,14 @@ GAMES = [
     dict(file="puckslide.py", name="PUCKSLIDE", tag="air hockey on a glowing table",
          info=["Real puck physics: mass, rebounds, hard swings", "make hard shots. Two players at one keyboard", "or you against the computer (easy/normal/hard)."],
          keys="W A S D left   arrows right   mouse vs computer", size=(60, 22), score="puckslide"),
+    dict(file="propwash.py", name="PROPWASH", tag="a propeller fighter against a whole air fleet",
+         info=["A vertical shooter over islands, a harbour,", "clouds, desert, mountains and a night storm.",
+               "Medals, wingmen, rolls, bombs, six bosses."],
+         keys="arrows fly   Space fire   X bomb   C roll", size=(70, 22), score="propwash"),
+    dict(file="fuseyard.py", name="FUSEYARD", tag="fuse-pot duels for 1 to 4, also over the LAN",
+         info=["Drop fuse pots, burn crates, grab what they hid;", "last tinker standing wins. One or two at a",
+               "keyboard, or host / join over the LAN (WLAN)."],
+         keys="WASD / arrows walk   Space drop   Esc pause", size=(70, 22), score="fuseyard"),
 ]
 GENRE = {"hoverdrift.py": "flight", "emberfall.py": "role-playing", "blockfire.py": "shooter", "deepcall.py": "exploration",
          "lightkeeper.py": "action", "skyshot.py": "artillery", "nightdrive.py": "racing", "orbital.py": "puzzle",
@@ -147,7 +155,8 @@ GENRE = {"hoverdrift.py": "flight", "emberfall.py": "role-playing", "blockfire.p
          "wardstone.py": "tower defense", "clatterbell.py": "pinball", "cairnward.py": "box-pushing", "gemburrow.py": "cave digger", "weftwar.py": "trail duel", "pebbleputt.py": "minigolf",
          "thatchwold.py": "settlement", "fenmark.py": "logic puzzles", "heathshot.py": "shooting gallery",
          "breakroom.py": "rage room", "spanwork.py": "bridge builder",
-         "solace.py": "patience", "underhold.py": "roguelike", "puckslide.py": "air hockey"}
+         "solace.py": "patience", "underhold.py": "roguelike", "puckslide.py": "air hockey",
+         "propwash.py": "vertical shooter", "fuseyard.py": "maze duel"}
 HIDDEN = set(load_settings().get("hidden", []))     # files of games the player took off the list
 
 
@@ -429,7 +438,8 @@ THUMBS = {"nightdrive.py": thumb_night, "orbital.py": thumb_orbital, "leafling.p
           "thatchwold.py": thumb_demo("thatchwold"), "fenmark.py": thumb_demo("fenmark"),
           "heathshot.py": thumb_demo("heathshot"), "breakroom.py": thumb_demo("breakroom"),
           "spanwork.py": thumb_demo("spanwork"), "solace.py": thumb_demo("solace"),
-          "underhold.py": thumb_demo("underhold"), "puckslide.py": thumb_demo("puckslide")}
+          "underhold.py": thumb_demo("underhold"), "puckslide.py": thumb_demo("puckslide"),
+          "propwash.py": thumb_demo("propwash"), "fuseyard.py": thumb_demo("fuseyard")}
 
 
 
